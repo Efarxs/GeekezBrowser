@@ -1,17 +1,17 @@
 const os = require('os');
-const CHROME_VERSION_FULL = '129.0.6668.58'; 
+const CHROME_VERSION_FULL = '129.0.6668.58';
 const CHROME_MAJOR = '129';
 
-const RESOLUTIONS = [{w:1920,h:1080}, {w:2560,h:1440}, {w:1366,h:768}, {w:1536,h:864}, {w:1440,h:900}];
+const RESOLUTIONS = [{ w: 1920, h: 1080 }, { w: 2560, h: 1440 }, { w: 1366, h: 768 }, { w: 1536, h: 864 }, { w: 1440, h: 900 }];
 
 function getRandom(arr) { return arr[Math.floor(Math.random() * arr.length)]; }
 
 function generateFingerprint() {
     // 1. 强制匹配宿主机系统
-    const platform = os.platform(); 
-    
+    const platform = os.platform();
+
     let osData = {};
-    
+
     if (platform === 'win32') {
         osData = {
             userAgentStr: `Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/${CHROME_VERSION_FULL} Safari/537.36`,
@@ -36,10 +36,10 @@ function generateFingerprint() {
     }
 
     const res = getRandom(RESOLUTIONS);
-    const languages = ['en-US', 'en']; 
+    const languages = ['en-US', 'en'];
 
     // 显卡透传
-    const gpu = { vendor: 'Google Inc. (NVIDIA)', renderer: 'ANGLE (NVIDIA)' }; 
+    const gpu = { vendor: 'Google Inc. (NVIDIA)', renderer: 'ANGLE (NVIDIA)' };
 
     const canvasNoise = {
         r: Math.floor(Math.random() * 10) - 5,
@@ -76,8 +76,8 @@ function generateFingerprint() {
         window: { width: res.w, height: res.h },
         webgl: gpu,
         languages: languages,
-        hardwareConcurrency: 8,
-        deviceMemory: 8,
+        hardwareConcurrency: [4, 8, 12, 16][Math.floor(Math.random() * 4)],
+        deviceMemory: [4, 8, 16][Math.floor(Math.random() * 3)],
         canvasNoise: canvasNoise,
         audioNoise: Math.random() * 0.000001,
         noiseSeed: Math.floor(Math.random() * 9999999),

@@ -338,7 +338,8 @@ ipcMain.handle('launch-profile', async (event, profileId) => {
         const logFd = fs.openSync(xrayLogPath, 'a');
         const xrayProcess = spawn(BIN_PATH, ['-c', xrayConfigPath], { cwd: BIN_DIR, env: { ...process.env, 'XRAY_LOCATION_ASSET': BIN_DIR }, stdio: ['ignore', logFd, logFd], windowsHide: true });
 
-        await new Promise(resolve => setTimeout(resolve, 1000));
+        // 优化：减少等待时间，Xray 通常 300ms 内就能启动
+        await new Promise(resolve => setTimeout(resolve, 300));
 
         // 1. 生成 GeekEZ Guard 扩展
         const extPath = await generateExtension(profileDir, profile.fingerprint);
@@ -352,7 +353,7 @@ ipcMain.handle('launch-profile', async (event, profileId) => {
             extPaths += ',' + userExts.join(',');
         }
 
-        // 4. 构建启动参数
+        // 4. 构建启动参数（性能优化）
         const launchArgs = [
             `--proxy-server=socks5://127.0.0.1:${localPort}`,
             `--user-data-dir=${userDataDir}`,
@@ -365,7 +366,16 @@ ipcMain.handle('launch-profile', async (event, profileId) => {
             '--force-webrtc-ip-handling-policy=disable_non_proxied_udp',
             `--lang=${profile.fingerprint.languages[0]}`,
             `--disable-extensions-except=${extPaths}`,
-            `--load-extension=${extPaths}`
+            `--load-extension=${extPaths}`,
+            // 性能优化参数
+            '--no-first-run',                    // 跳过首次运行向导
+            '--no-default-browser-check',        // 跳过默认浏览器检查
+            '--disable-background-timer-throttling', // 防止后台标签页被限速
+            '--disable-backgrounding-occluded-windows',
+            '--disable-renderer-backgrounding',
+            '--disable-dev-shm-usage',           // 减少共享内存使用
+            '--disk-cache-size=52428800',        // 限制磁盘缓存为 50MB
+            '--media-cache-size=52428800'        // 限制媒体缓存为 50MB
         ];
 
         // 5. 启动浏览器
@@ -394,6 +404,17 @@ ipcMain.handle('launch-profile', async (event, profileId) => {
                 const pid = activeProcesses[profileId].xrayPid;
                 delete activeProcesses[profileId];
                 await forceKill(pid);
+
+                // 性能优化：清理缓存文件，节省磁盘空间
+                try {
+                    const cacheDir = path.join(userDataDir, 'Default', 'Cache');
+                    const codeCacheDir = path.join(userDataDir, 'Default', 'Code Cache');
+                    if (fs.existsSync(cacheDir)) await fs.emptyDir(cacheDir);
+                    if (fs.existsSync(codeCacheDir)) await fs.emptyDir(codeCacheDir);
+                } catch (e) {
+                    // 忽略清理错误
+                }
+
                 if (!sender.isDestroyed()) sender.send('profile-status', { id: profileId, status: 'stopped' });
             }
         });
