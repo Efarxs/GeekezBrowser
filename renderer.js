@@ -549,9 +549,11 @@ async function openEditModal(id) {
 }
 function closeEditModal() { document.getElementById('editModal').style.display = 'none'; currentEditId = null; }
 async function saveEditProfile() {
+    console.log('[saveEditProfile] Called, currentEditId:', currentEditId);
     if (!currentEditId) return;
     const profiles = await window.electronAPI.getProfiles();
     let p = profiles.find(x => x.id === currentEditId);
+    console.log('[saveEditProfile] Found profile:', p);
     if (p) {
         p.name = document.getElementById('editName').value;
         p.proxyStr = document.getElementById('editProxy').value;
@@ -565,12 +567,16 @@ async function saveEditProfile() {
         p.fingerprint.screen = { width: parseInt(document.getElementById('editResW').value), height: parseInt(document.getElementById('editResH').value) };
         p.fingerprint.window = p.fingerprint.screen;
         const timezoneValue = document.getElementById('editTimezone').value;
+        console.log('[saveEditProfile] Timezone value:', timezoneValue);
         // 将 "Auto (No Change)" 转换为 "Auto" 存储
         p.fingerprint.timezone = timezoneValue === 'Auto (No Change)' ? 'Auto' : timezoneValue;
+        console.log('[saveEditProfile] Converted timezone:', p.fingerprint.timezone);
         p.fingerprint.userAgent = document.getElementById('editUA').value;
         p.fingerprint.webgl = { vendor: document.getElementById('editGpuVendor').value, renderer: document.getElementById('editGpuRenderer').value };
         p.fingerprint.noiseSeed = parseInt(document.getElementById('editSeed').value);
+        console.log('[saveEditProfile] Calling updateProfile...');
         await window.electronAPI.updateProfile(p);
+        console.log('[saveEditProfile] Profile updated successfully');
         closeEditModal(); loadProfiles();
     }
 }
