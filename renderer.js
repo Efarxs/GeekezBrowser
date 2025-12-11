@@ -562,8 +562,6 @@ async function saveEditProfile() {
         p.preProxyOverride = document.getElementById('editPreProxyOverride').value;
 
         if (!p.fingerprint) p.fingerprint = {};
-        // 保存时区
-        p.fingerprint.platform = document.getElementById('editPlatform').value;
         p.fingerprint.screen = { width: parseInt(document.getElementById('editResW').value), height: parseInt(document.getElementById('editResH').value) };
         p.fingerprint.window = p.fingerprint.screen;
         const timezoneValue = document.getElementById('editTimezone').value;
