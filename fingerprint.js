@@ -38,8 +38,21 @@ function generateFingerprint() {
     const res = getRandom(RESOLUTIONS);
     const languages = ['en-US', 'en'];
 
-    // 显卡透传
-    const gpu = { vendor: 'Google Inc. (NVIDIA)', renderer: 'ANGLE (NVIDIA)' };
+    // 显卡透传 (OS Aware)
+    // Mac 上出现 NVIDIA 是必死项。必须根据平台调整。
+    let gpu = { vendor: 'Google Inc. (NVIDIA)', renderer: 'ANGLE (NVIDIA GeForce GTX 1050 Ti Direct3D11 vs_5_0 ps_5_0)' };
+
+    if (platform === 'darwin') {
+        // macOS: 通常是 Apple M1/M2/M3 或 Intel Iris
+        // 模拟 M1 芯片特征
+        gpu = { vendor: 'Google Inc. (Apple)', renderer: 'ANGLE (Apple, Apple M1 Pro, OpenGL 4.1)' };
+    } else if (platform === 'win32') {
+        // Windows: NVIDIA 是安全的
+        gpu = { vendor: 'Google Inc. (NVIDIA)', renderer: 'ANGLE (NVIDIA GeForce RTX 3060 Direct3D11 vs_5_0 ps_5_0)' };
+    } else {
+        // Linux: 通常是 Mesa / Intel
+        gpu = { vendor: 'Google Inc. (Intel)', renderer: 'ANGLE (Intel, Mesa Intel(R) UHD Graphics 630 (CFL GT2), OpenGL 4.6)' };
+    }
 
     const canvasNoise = {
         r: Math.floor(Math.random() * 10) - 5,
@@ -96,93 +109,95 @@ function getInjectScript(fp, profileName, watermarkStyle) {
             const fp = ${fpJson};
             const targetTimezone = fp.timezone || "America/Los_Angeles";
 
-            // --- 1. 移除 WebDriver ---
+            // --- 1. 移除 WebDriver 及 Puppeteer 特征 ---
             if (navigator.webdriver) {
                 Object.defineProperty(navigator, 'webdriver', { get: () => false });
             }
-
-            // --- 2. 时区伪装 (仅在设置了时区时生效，Auto 则跳过) ---
-            // 如果用户选择 "Auto (No Change)"，则不修改时区
-            if (targetTimezone && targetTimezone !== 'Auto') {
-            try {
-                // 2.1 Hook Intl.DateTimeFormat
-                const OriginalDateTimeFormat = Intl.DateTimeFormat;
-                
-                // 代理构造函数
-                Intl.DateTimeFormat = function(locales, options) {
-                    if (!options) options = {};
-                    // 强制修改时区
-                    if (!options.timeZone) {
-                        options.timeZone = targetTimezone;
-                    }
-                    return new OriginalDateTimeFormat(locales, options);
-                };
-                // 修复原型链，防止被检测
-                Intl.DateTimeFormat.prototype = OriginalDateTimeFormat.prototype;
-                Intl.DateTimeFormat.supportedLocalesOf = OriginalDateTimeFormat.supportedLocalesOf;
-                
-                // 2.2 Hook Date.prototype.getTimezoneOffset
-                // 利用 Intl 计算目标时区的 offset
-                const originalGetTimezoneOffset = Date.prototype.getTimezoneOffset;
-                Date.prototype.getTimezoneOffset = function() {
-                    // 使用目标时区格式化当前时间，算出与 UTC 的差值
-                    const dateString = this.toLocaleString('en-US', { timeZone: targetTimezone, timeZoneName: 'longOffset' });
-                    const match = dateString.match(/GMT([+-]\\d{2}):(\d{2})/);
-                    if (match) {
-                        const hours = parseInt(match[1], 10);
-                        const minutes = parseInt(match[2], 10);
-                        // offset 是反的：UTC+8 返回 -480
-                        return -(hours * 60 + (hours > 0 ? minutes : -minutes));
-                    }
-                    // 兜底：如果正则失败，返回默认 offset (例如 LA 是 420 或 480)
-                    return 420; 
-                };
-                
-                // 2.3 Hook Date.prototype.toString 等方法
-                // 解决 "Time From Javascript" 显示中国时间的问题
-                // 将 Date.toString 代理到 Intl 的格式化结果上
-                const originalToString = Date.prototype.toString;
-                
-                // 自定义格式化函数，模拟原生 toString 格式: "Wed Nov 26 2025 01:00:11 GMT-0800 (Pacific Standard Time)"
-                function getSpoofedString(dateObj) {
-                    try {
-                        const str = dateObj.toLocaleString('en-US', {
-                            timeZone: targetTimezone,
-                            weekday: 'short',
-                            month: 'short',
-                            day: '2-digit',
-                            year: 'numeric',
-                            hour: '2-digit',
-                            minute: '2-digit',
-                            second: '2-digit',
-                            hour12: false,
-                            timeZoneName: 'longOffset' // GMT-0800
-                        });
-                        // Intl 出来的格式和 toString 不太一样，需要微调。
-                        // 简单方案：直接返回 toLocaleString 的结果，虽然格式略有不同，但时间是对的。
-                        // 完美方案太复杂，容易出错。这里采用 "语义正确" 优先。
-                        return str + " (" + targetTimezone + ")"; 
-                    } catch(e) {
-                        return originalToString.call(dateObj);
-                    }
+            // 移除 cdc_ 变量 (Puppeteer 特征)
+            const cdcRegex = /cdc_[a-zA-Z0-9]+/;
+            for (const key in window) {
+                if (cdcRegex.test(key)) {
+                    delete window[key];
                 }
-                
-                // 覆盖 toString
-                // 注意：某些严格检测可能会检查 toString.toString()，这里不做过度防御以免被识别为 Bot
-                // 仅覆盖最常用的显示方法
-                Object.defineProperty(Date.prototype, 'toString', {
-                    value: function() {
-                        return new Intl.DateTimeFormat('en-US', {
-                            dateStyle: 'full',
-                            timeStyle: 'long',
-                            timeZone: targetTimezone
-                        }).format(this);
-                    }
+            }
+            // 防御性移除常见自动化变量
+            ['$cdc_asdjflasutopfhvcZLmcfl_', '$chrome_asyncScriptInfo', 'callPhantom', 'webdriver'].forEach(k => {
+                 if (window[k]) delete window[k];
+            });
+            Object.defineProperty(window, 'chrome', {
+                writable: true,
+                enumerable: true,
+                configurable: false,
+                value: { app: { isInstalled: false, InstallState: { DISABLED: 'disabled', INSTALLED: 'installed', NOT_INSTALLED: 'not_installed' }, RunningState: { CANNOT_RUN: 'cannot_run', READY_TO_RUN: 'ready_to_run', RUNNING: 'running' } }, runtime: { OnInstalledReason: { CHROME_UPDATE: 'chrome_update', INSTALL: 'install', SHARED_MODULE_UPDATE: 'shared_module_update', UPDATE: 'update' }, OnRestartRequiredReason: { APP_UPDATE: 'app_update', OS_UPDATE: 'os_update', PERIODIC: 'periodic' }, PlatformArch: { ARM: 'arm', ARM64: 'arm64', MIPS: 'mips', MIPS64: 'mips64', X86_32: 'x86-32', X86_64: 'x86-64' }, PlatformNaclArch: { ARM: 'arm', MIPS: 'mips', X86_32: 'x86-32', X86_64: 'x86-64' }, PlatformOs: { ANDROID: 'android', CROS: 'cros', LINUX: 'linux', MAC: 'mac', OPENBSD: 'openbsd', WIN: 'win' }, RequestUpdateCheckStatus: { NO_UPDATE: 'no_update', THROTTLED: 'throttled', UPDATE_AVAILABLE: 'update_available' } } }
+            });
+
+
+            // --- 2. Stealth Geolocation Hook (Native Mock Pattern) ---
+            // 避免使用 Proxy (会被 Pixelscan 识别为 Masking detected)
+            // 直接修改 Geolocation.prototype 并确保存根函数通过 native code 检查
+            if (fp.geolocation) {
+                const { latitude, longitude } = fp.geolocation;
+                // 精度提升到 500m - 1500m
+                const accuracy = 500 + Math.floor(Math.random() * 1000);
+
+                const makeNative = (func, name) => {
+                    Object.defineProperty(func, 'toString', {
+                        value: function() { return "function " + name + "() { [native code] }"; },
+                        configurable: true,
+                        writable: true
+                    });
+                    // 隐藏 toString 自身的 toString
+                    Object.defineProperty(func.toString, 'toString', {
+                        value: function() { return "function toString() { [native code] }"; },
+                        configurable: true,
+                        writable: true
+                    });
+                    return func;
+                };
+
+                // 保存原始引用 (虽然我们不打算用它，但为了保险)
+                const originalGetCurrentPosition = Geolocation.prototype.getCurrentPosition;
+
+                // 创建伪造函数
+                const fakeGetCurrentPosition = function getCurrentPosition(success, error, options) {
+                    const position = {
+                        coords: {
+                            latitude: latitude + (Math.random() - 0.5) * 0.005,
+                            longitude: longitude + (Math.random() - 0.5) * 0.005,
+                            accuracy: accuracy,
+                            altitude: null,
+                            altitudeAccuracy: null,
+                            heading: null,
+                            speed: null
+                        },
+                        timestamp: Date.now()
+                    };
+                    // 异步回调
+                    setTimeout(() => success(position), 10);
+                };
+
+                const fakeWatchPosition = function watchPosition(success, error, options) {
+                    fakeGetCurrentPosition(success, error, options);
+                    return Math.floor(Math.random() * 10000) + 1;
+                };
+
+                // 应用 Native Mock
+                Object.defineProperty(Geolocation.prototype, 'getCurrentPosition', {
+                    value: makeNative(fakeGetCurrentPosition, 'getCurrentPosition'),
+                    configurable: true,
+                    writable: true
                 });
 
-            } catch(e) { console.error("TZ Error", e); }
-            } // 结束 isLoginPage 检查
+                Object.defineProperty(Geolocation.prototype, 'watchPosition', {
+                    value: makeNative(fakeWatchPosition, 'watchPosition'),
+                    configurable: true,
+                    writable: true
+                });
+            }
 
+            // --- 2. 时区伪装 (已迁移至 CDP 底层实现，此处不再注入 JS) ---
+            // JS Hook 容易被检测，现在使用 Emulation.setTimezoneOverride
+            
             // --- 3. Canvas Noise ---
             const originalGetImageData = CanvasRenderingContext2D.prototype.getImageData;
             CanvasRenderingContext2D.prototype.getImageData = function(x, y, w, h) {

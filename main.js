@@ -449,6 +449,12 @@ ipcMain.handle('launch-profile', async (event, profileId, watermarkStyle) => {
             throw new Error("Chrome binary not found.");
         }
 
+        // 准备环境变量：使用 TZ 变量进行原生无痕时区修改 (Mac/Linux 完美支持)
+        const env = { ...process.env };
+        if (profile.fingerprint?.timezone && profile.fingerprint.timezone !== 'Auto') {
+            env.TZ = profile.fingerprint.timezone;
+        }
+
         const browser = await puppeteer.launch({
             headless: false,
             executablePath: chromePath,
@@ -457,7 +463,8 @@ ipcMain.handle('launch-profile', async (event, profileId, watermarkStyle) => {
             defaultViewport: null,
             ignoreDefaultArgs: ['--enable-automation'],
             pipe: false,
-            dumpio: false
+            dumpio: false,
+            env: env  // 注入环境变量
         });
 
         activeProcesses[profileId] = {
@@ -466,6 +473,10 @@ ipcMain.handle('launch-profile', async (event, profileId, watermarkStyle) => {
             logFd: logFd  // 存储日志文件描述符，用于后续关闭
         };
         sender.send('profile-status', { id: profileId, status: 'running' });
+
+        // CDP Geolocation Removed in favor of Stealth JS Hook
+        // 由于 CDP 本身会被检测，我们移除所有 Emulation.Overrides
+        // 地理位置将由 fingerprint.js 中的 Stealth Hook 接管
 
         browser.on('disconnected', async () => {
             if (activeProcesses[profileId]) {

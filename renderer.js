@@ -8,6 +8,31 @@ let inputCallback = null;
 let searchText = '';
 let viewMode = localStorage.getItem('geekez_view') || 'list';
 
+const GEO_CITIES = {
+    'new_york': { name: 'New York (US)', lat: 40.7128, lng: -74.0060 },
+    'los_angeles': { name: 'Los Angeles (US)', lat: 34.0522, lng: -118.2437 },
+    'san_francisco': { name: 'San Francisco (US)', lat: 37.7749, lng: -122.4194 },
+    'london': { name: 'London (UK)', lat: 51.5074, lng: -0.1278 },
+    'tokyo': { name: 'Tokyo (JP)', lat: 35.6762, lng: 139.6503 },
+    'singapore': { name: 'Singapore (SG)', lat: 1.3521, lng: 103.8198 },
+    'hong_kong': { name: 'Hong Kong (CN)', lat: 22.3193, lng: 114.1694 },
+    'taipei': { name: 'Taipei (TW)', lat: 25.0330, lng: 121.5654 },
+    'paris': { name: 'Paris (FR)', lat: 48.8566, lng: 2.3522 },
+    'berlin': { name: 'Berlin (DE)', lat: 52.5200, lng: 13.4050 },
+    'sydney': { name: 'Sydney (AU)', lat: -33.8688, lng: 151.2093 }
+};
+
+function populateCitySelect() {
+    const sel = document.getElementById('editCity');
+    if (!sel || sel.options.length > 1) return;
+    Object.keys(GEO_CITIES).forEach(k => {
+        const opt = document.createElement('option');
+        opt.value = k;
+        opt.innerText = GEO_CITIES[k].name;
+        sel.appendChild(opt);
+    });
+}
+
 function decodeBase64Content(str) {
     try {
         str = str.replace(/-/g, '+').replace(/_/g, '/');
@@ -340,6 +365,9 @@ async function openEditModal(id) {
     const displayTimezone = savedTimezone === 'Auto' ? 'Auto (No Change)' : savedTimezone;
     document.getElementById('editTimezone').value = displayTimezone;
 
+    populateCitySelect();
+    document.getElementById('editCity').value = fp.city || 'auto';
+
     const sel = document.getElementById('editPreProxyOverride');
     sel.options[0].text = t('optDefault'); sel.options[1].text = t('optOn'); sel.options[2].text = t('optOff');
     sel.value = p.preProxyOverride || 'default';
@@ -370,9 +398,17 @@ async function saveEditProfile() {
         p.fingerprint.window = p.fingerprint.screen;
         const timezoneValue = document.getElementById('editTimezone').value;
         console.log('[saveEditProfile] Timezone value:', timezoneValue);
-        // 将 "Auto (No Change)" 转换为 "Auto" 存储
         p.fingerprint.timezone = timezoneValue === 'Auto (No Change)' ? 'Auto' : timezoneValue;
         console.log('[saveEditProfile] Converted timezone:', p.fingerprint.timezone);
+
+        const cityKey = document.getElementById('editCity').value;
+        p.fingerprint.city = cityKey;
+        if (cityKey !== 'auto' && GEO_CITIES[cityKey]) {
+            const c = GEO_CITIES[cityKey];
+            p.fingerprint.geolocation = { latitude: c.lat, longitude: c.lng, accuracy: 100 };
+        } else {
+            delete p.fingerprint.geolocation;
+        }
         p.fingerprint.userAgent = document.getElementById('editUA').value;
         p.fingerprint.webgl = { vendor: document.getElementById('editGpuVendor').value, renderer: document.getElementById('editGpuRenderer').value };
         p.fingerprint.noiseSeed = parseInt(document.getElementById('editSeed').value);
