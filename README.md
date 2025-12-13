@@ -65,7 +65,7 @@ It is designed to help e-commerce operators (Amazon, TikTok, Facebook, Shopee, e
 ### 🧩 Workflow & Management
 *   **Extension Support**: Import unpacked Chrome extensions (e.g., MetaMask, AdBlock) into isolated environments.
 *   **Tag System**: Organize profiles with custom color tags (e.g., "TikTok", "USA", "Main Account").
-*   **Safe Identification**: Uses **Bookmarks Bar** to display profile names (e.g., `🔍 Profile-1`), avoiding dangerous `document.title` injection.
+*   **Safe Identification**: Uses **Dynamic Watermark** to display profile names (e.g., `Profile-1`) at the top of the page. Replaces bookmarks bar (avoids overwriting user bookmarks) and title bar injection (avoids detection). Supports multiple styles (Standard/Minimal/Enhanced).
 *   **Multi-Opening**: Running multiple profiles simultaneously with independent ports and processes.
 *   **Remote Debugging Port** (Advanced): Optional external Puppeteer/DevTools connection for automation.
 
