@@ -25,17 +25,11 @@ It is designed to help e-commerce operators (Amazon, TikTok, Facebook, Shopee, e
 
 <div align="center">
 
-<img src="docs/Screenshot1.png" alt="Main Interface" width="800">
+<img src="docs/Main Interface1.png" alt="Main Interface1" width="800">
+
+<img src="docs/Main Interface2.png" alt="Main Interface2" width="800">
 
 *Main Interface - Profile Management*
-
-<img src="docs/Screenshot2.png" alt="Profile Editor" width="800">
-
-*Profile Editor - Fingerprint Configuration*
-
-<img src="docs/Screenshot3.png" alt="Advanced Settings" width="800">
-
-*Advanced Settings - Remote Debugging & Extensions*
 
 </div>
 
