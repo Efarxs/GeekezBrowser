@@ -418,6 +418,10 @@ ipcMain.handle('launch-profile', async (event, profileId, watermarkStyle) => {
         }
 
         // 4. 构建启动参数（性能优化）
+        const targetLang = profile.fingerprint?.language && profile.fingerprint.language !== 'auto'
+            ? profile.fingerprint.language
+            : (profile.fingerprint.languages?.[0] || 'en-US');
+
         const launchArgs = [
             `--proxy-server=socks5://127.0.0.1:${localPort}`,
             `--user-data-dir=${userDataDir}`,
@@ -428,7 +432,8 @@ ipcMain.handle('launch-profile', async (event, profileId, watermarkStyle) => {
             '--disable-blink-features=AutomationControlled',
             '--disable-features=IsolateOrigins,site-per-process',
             '--force-webrtc-ip-handling-policy=disable_non_proxied_udp',
-            `--lang=${profile.fingerprint.languages[0]}`,
+            `--lang=${targetLang}`,
+            `--accept-lang=${targetLang}`,
             `--disable-extensions-except=${extPaths}`,
             `--load-extension=${extPaths}`,
             // 性能优化参数

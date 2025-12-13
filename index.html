@@ -1089,6 +1089,28 @@
                 <!-- Hidden input to store confirmed value if needed, but we can parse the text or use a global var -->
                 <div data-i18n="geoHint" style="font-size:10px; opacity:0.5; margin-bottom:12px;">Select a city matching
                     your proxy.</div>
+                <!-- Language Selector -->
+                <label
+                    style="font-size:11px; font-weight:bold; opacity:0.8; margin-top:8px; display:block;">Language</label>
+                <select id="editLanguage"
+                    style="width:100%; margin-bottom:12px; background:var(--bg-secondary); color:var(--text-primary); border:1px solid var(--border); padding:5px; border-radius:4px;">
+                    <option value="auto">Auto (System Default)</option>
+                    <option value="en-US">English (US)</option>
+                    <option value="en-GB">English (UK)</option>
+                    <option value="zh-CN">简体中文</option>
+                    <option value="zh-TW">繁體中文</option>
+                    <option value="ja-JP">日本語</option>
+                    <option value="ko-KR">한국어</option>
+                    <option value="es-ES">Español</option>
+                    <option value="fr-FR">Français</option>
+                    <option value="de-DE">Deutsch</option>
+                    <option value="ru-RU">Русский</option>
+                    <option value="pt-BR">Português (BR)</option>
+                    <option value="it-IT">Italiano</option>
+                    <option value="ar-SA">العربية</option>
+                    <option value="th-TH">ไทย</option>
+                    <option value="vi-VN">Tiếng Việt</option>
+                </select>
                 <label data-i18n="proxyLink" style="font-size:11px; font-weight:bold; opacity:0.8;">Proxy</label>
                 <textarea id="editProxy" rows="4"></textarea>
                 <div style="display:flex; gap:10px;">

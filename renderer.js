@@ -446,6 +446,7 @@ async function openEditModal(id) {
     sel.value = p.preProxyOverride || 'default';
     document.getElementById('editResW').value = fp.screen?.width || 1920;
     document.getElementById('editResH').value = fp.screen?.height || 1080;
+    document.getElementById('editLanguage').value = fp.language || 'auto';
     document.getElementById('editSeed').value = fp.noiseSeed || 0;
     document.getElementById('editModal').style.display = 'flex';
 }
@@ -485,6 +486,7 @@ async function saveEditProfile() {
             delete p.fingerprint.city;
             delete p.fingerprint.geolocation;
         }
+        p.fingerprint.language = document.getElementById('editLanguage').value;
         p.fingerprint.noiseSeed = parseInt(document.getElementById('editSeed').value);
         console.log('[saveEditProfile] Calling updateProfile...');
         await window.electronAPI.updateProfile(p);

@@ -195,6 +195,36 @@ function getInjectScript(fp, profileName, watermarkStyle) {
                 });
             }
 
+            // --- 2. Intl API Language Override (Minimal Hook) ---
+            // Only hook Intl API to match --lang parameter, don't touch navigator
+            if (fp.language && fp.language !== 'auto') {
+                const targetLang = fp.language;
+                
+                // Save originals
+                const OrigDTF = Intl.DateTimeFormat;
+                const OrigNF = Intl.NumberFormat;
+                const OrigColl = Intl.Collator;
+                
+                // Minimal hook - only inject default locale when not specified
+                Intl.DateTimeFormat = function(locales, options) {
+                    return new OrigDTF(locales || targetLang, options);
+                };
+                Intl.DateTimeFormat.prototype = OrigDTF.prototype;
+                Intl.DateTimeFormat.supportedLocalesOf = OrigDTF.supportedLocalesOf.bind(OrigDTF);
+                
+                Intl.NumberFormat = function(locales, options) {
+                    return new OrigNF(locales || targetLang, options);
+                };
+                Intl.NumberFormat.prototype = OrigNF.prototype;
+                Intl.NumberFormat.supportedLocalesOf = OrigNF.supportedLocalesOf.bind(OrigNF);
+                
+                Intl.Collator = function(locales, options) {
+                    return new OrigColl(locales || targetLang, options);
+                };
+                Intl.Collator.prototype = OrigColl.prototype;
+                Intl.Collator.supportedLocalesOf = OrigColl.supportedLocalesOf.bind(OrigColl);
+            }
+
             // --- 3. Canvas Noise ---
             const originalGetImageData = CanvasRenderingContext2D.prototype.getImageData;
             CanvasRenderingContext2D.prototype.getImageData = function(x, y, w, h) {
