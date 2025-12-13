@@ -247,6 +247,9 @@ async function init() {
         initCustomTimezoneDropdown('addTimezone', 'addTimezoneDropdown');
         initCustomTimezoneDropdown('editTimezone', 'editTimezoneDropdown');
     }
+
+    // Check for updates silently on startup
+    checkUpdatesSilent();
 }
 
 
@@ -271,7 +274,10 @@ async function checkUpdates() {
     showAlert(t('checkingUpdate'));
     try {
         const appRes = await window.electronAPI.invoke('check-app-update');
-        if (appRes.update) { showAlert(`${t('appUpdateFound')} (v${appRes.remote})`); return; }
+        if (appRes.update) {
+            showAlert(`${t('appUpdateFound')} (v${appRes.remote})`);
+            return;
+        }
         const xrayRes = await window.electronAPI.invoke('check-xray-update');
         if (xrayRes.update) {
             showAlert(`${t('xrayUpdateFound')} (v${xrayRes.remote})`);
@@ -281,8 +287,28 @@ async function checkUpdates() {
             return;
         }
         showAlert(t('noUpdate'));
+        // Clear badge if no update found after manual check
+        btn.classList.remove('has-update');
     } catch (e) { showAlert(t('updateError') + " " + e.message); }
     finally { setTimeout(() => { btn.style.transform = 'none'; }, 1000); }
+}
+
+async function checkUpdatesSilent() {
+    try {
+        const appRes = await window.electronAPI.invoke('check-app-update');
+        if (appRes.update) {
+            const btn = document.getElementById('btnUpdate');
+            if (btn) btn.classList.add('has-update');
+            return;
+        }
+        const xrayRes = await window.electronAPI.invoke('check-xray-update');
+        if (xrayRes.update) {
+            const btn = document.getElementById('btnUpdate');
+            if (btn) btn.classList.add('has-update');
+        }
+    } catch (e) {
+        console.error('Silent update check failed:', e);
+    }
 }
 
 function openGithub() { window.electronAPI.invoke('open-url', 'https://github.com/EchoHS/GeekezBrowser'); }

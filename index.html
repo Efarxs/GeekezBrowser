@@ -685,6 +685,27 @@
             color: var(--text-primary);
         }
 
+        .icon-btn:hover {
+            color: var(--text-primary);
+            background: rgba(255, 255, 255, 0.1);
+        }
+        
+        /* Update notification badge */
+        .has-update {
+            position: relative;
+        }
+        .has-update::after {
+            content: '';
+            position: absolute;
+            top: 2px;
+            right: 2px;
+            width: 8px;
+            height: 8px;
+            background-color: var(--danger);
+            border-radius: 50%;
+            border: 2px solid var(--card-bg);
+        }
+        
         .tab-btn.active {
             color: var(--accent);
             border-bottom: 2px solid var(--accent);
