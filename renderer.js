@@ -195,7 +195,13 @@ function setTheme(themeName) {
     window.electronAPI.invoke('set-title-bar-color', colors);
 }
 
-function showAlert(msg) { document.getElementById('alertMsg').innerText = msg; document.getElementById('alertModal').style.display = 'flex'; }
+// Show Alert (supports loading state)
+function showAlert(msg, showBtn = true) {
+    document.getElementById('alertMsg').innerText = msg;
+    const btn = document.getElementById('alertBtn');
+    if (btn) btn.style.display = showBtn ? 'block' : 'none';
+    document.getElementById('alertModal').style.display = 'flex';
+}
 function showConfirm(msg, callback) { document.getElementById('confirmMsg').innerText = msg; document.getElementById('confirmModal').style.display = 'flex'; confirmCallback = callback; }
 function closeConfirm(result) {
     document.getElementById('confirmModal').style.display = 'none';
@@ -271,11 +277,18 @@ async function checkUpdates() {
     const btn = document.getElementById('btnUpdate');
     btn.style.transition = 'transform 1s';
     btn.style.transform = 'rotate(360deg)';
-    showAlert(t('checkingUpdate'));
+
+    // Show "Checking..." without button
+    showAlert(t('checkingUpdate'), false);
+
     try {
         const appRes = await window.electronAPI.invoke('check-app-update');
+
+        // Hide alert modal first to avoid conflict with showConfirm or to refresh state
+        document.getElementById('alertModal').style.display = 'none';
+
         if (appRes.update) {
-            // Ask user for confirmation
+            // Found App Update -> Show Confirm
             showConfirm(`${t('appUpdateFound')} (v${appRes.remote}). ${t('btnSaveUpdate')}?`, () => {
                 if (appRes.url) {
                     window.electronAPI.invoke('open-url', appRes.url);
@@ -283,19 +296,26 @@ async function checkUpdates() {
             });
             return;
         }
+
         const xrayRes = await window.electronAPI.invoke('check-xray-update');
         if (xrayRes.update) {
-            showAlert(`${t('xrayUpdateFound')} (v${xrayRes.remote})`);
+            showAlert(`${t('xrayUpdateFound')} (v${xrayRes.remote})`); // Shows OK button
             const success = await window.electronAPI.invoke('download-xray-update', xrayRes.downloadUrl);
             if (success) showAlert(t('updateDownloaded'));
             else showAlert(t('updateError'));
             return;
         }
+
+        // No Update -> Show Alert with OK button
         showAlert(t('noUpdate'));
+
         // Clear badge if no update found after manual check
         btn.classList.remove('has-update');
-    } catch (e) { showAlert(t('updateError') + " " + e.message); }
-    finally { setTimeout(() => { btn.style.transform = 'none'; }, 1000); }
+    } catch (e) {
+        showAlert(t('updateError') + " " + e.message);
+    } finally {
+        setTimeout(() => { btn.style.transform = 'none'; }, 1000);
+    }
 }
 
 async function checkUpdatesSilent() {
