@@ -24,7 +24,7 @@ function showProgress(received, total, startTime, prefix = 'Downloading') {
     const percent = total > 0 ? ((received / total) * 100).toFixed(1) : 0;
     const elapsedTime = (Date.now() - startTime) / 1000; // seconds
     const speed = elapsedTime > 0 ? (received / elapsedTime) : 0; // bytes/sec
-    
+
     // 进度条视觉效果 [==========----------]
     const barLength = 30; // 稍微加长一点
     const filledLength = total > 0 ? Math.round((barLength * received) / total) : 0;
@@ -115,13 +115,13 @@ function downloadFile(url, dest, label = 'Downloading') {
             });
 
             file.on('error', (err) => {
-                fs.unlink(dest, () => {});
+                fs.unlink(dest, () => { });
                 reject(err);
             });
         });
 
         req.on('error', (err) => {
-            fs.unlink(dest, () => {});
+            fs.unlink(dest, () => { });
             reject(err);
         });
     });
@@ -150,25 +150,25 @@ async function main() {
         const { xrayAsset, exeName } = getPlatformInfo();
         const zipPath = path.join(BIN_DIR, 'xray.zip');
         const isGlobal = await checkNetwork();
-        
+
         console.log(`🌍 Network: ${isGlobal ? 'Global' : 'CN (Mirror)'}`);
 
         const baseUrl = `https://github.com/XTLS/Xray-core/releases/download/${XRAY_VERSION}/${xrayAsset}`;
         const downloadUrl = isGlobal ? baseUrl : (GH_PROXY + baseUrl);
 
-        console.log(`⬇️  Initializing Xray download (${XRAY_VERSION})...`);
-        
+        process.stdout.write(`⬇️  Downloading Xray (${XRAY_VERSION})...\n`);
+
         // 这里的 Label 用于进度条前缀
         await downloadFile(downloadUrl, zipPath, 'Xray Core');
-        
+
         await extractZip(zipPath, BIN_DIR);
         fs.unlinkSync(zipPath);
-        
+
         if (os.platform() !== 'win32') fs.chmodSync(path.join(BIN_DIR, exeName), '755');
         console.log('✅ Xray Updated Successfully!');
 
         // 2. 准备 Chrome
-        console.log('⬇️  Initializing Chrome download...');
+        process.stdout.write('⬇️  Downloading Chrome...\n');
         const { install } = require('@puppeteer/browsers');
         const BUILD_ID = '129.0.6668.58';
         const DOWNLOAD_ROOT = path.join(__dirname, 'resources', 'puppeteer');
@@ -180,7 +180,7 @@ async function main() {
         }
 
         const baseUrlChrome = isGlobal ? undefined : MIRROR_URL;
-        
+
         const chromeStartTime = Date.now();
 
         const result = await install({
@@ -193,11 +193,11 @@ async function main() {
                 showProgress(downloadedBytes, totalBytes, chromeStartTime, 'Chrome   ');
             }
         });
-        
+
         process.stdout.write('\n'); // 换行，避免最后一行被吞
         console.log('✅ Chrome downloaded successfully!');
         console.log(`📂 Install Path: ${result.path}`);
-        
+
         console.log('✨ All Setup Completed! Exiting...');
         process.exit(0);
 
