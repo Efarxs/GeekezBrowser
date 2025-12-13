@@ -25,17 +25,11 @@
 
 <div align="center">
 
-<img src="Screenshot1.png" alt="主界面" width="800">
+<img src="Main Interface1.png" alt="主界面1" width="800">
+
+<img src="Main Interface2.png" alt="主界面2" width="800">
 
 *主界面 - 环境管理*
-
-<img src="Screenshot2.png" alt="环境编辑" width="800">
-
-*环境编辑 - 指纹配置*
-
-<img src="Screenshot3.png" alt="高级设置" width="800">
-
-*高级设置 - 远程调试与扩展*
 
 </div>
 
