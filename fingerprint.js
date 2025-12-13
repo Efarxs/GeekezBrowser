@@ -38,22 +38,6 @@ function generateFingerprint() {
     const res = getRandom(RESOLUTIONS);
     const languages = ['en-US', 'en'];
 
-    // 显卡透传 (OS Aware)
-    // Mac 上出现 NVIDIA 是必死项。必须根据平台调整。
-    let gpu = { vendor: 'Google Inc. (NVIDIA)', renderer: 'ANGLE (NVIDIA GeForce GTX 1050 Ti Direct3D11 vs_5_0 ps_5_0)' };
-
-    if (platform === 'darwin') {
-        // macOS: 通常是 Apple M1/M2/M3 或 Intel Iris
-        // 模拟 M1 芯片特征
-        gpu = { vendor: 'Google Inc. (Apple)', renderer: 'ANGLE (Apple, Apple M1 Pro, OpenGL 4.1)' };
-    } else if (platform === 'win32') {
-        // Windows: NVIDIA 是安全的
-        gpu = { vendor: 'Google Inc. (NVIDIA)', renderer: 'ANGLE (NVIDIA GeForce RTX 3060 Direct3D11 vs_5_0 ps_5_0)' };
-    } else {
-        // Linux: 通常是 Mesa / Intel
-        gpu = { vendor: 'Google Inc. (Intel)', renderer: 'ANGLE (Intel, Mesa Intel(R) UHD Graphics 630 (CFL GT2), OpenGL 4.6)' };
-    }
-
     const canvasNoise = {
         r: Math.floor(Math.random() * 10) - 5,
         g: Math.floor(Math.random() * 10) - 5,
@@ -87,7 +71,6 @@ function generateFingerprint() {
         platform: osData.platform,
         screen: { width: res.w, height: res.h },
         window: { width: res.w, height: res.h },
-        webgl: gpu,
         languages: languages,
         hardwareConcurrency: [4, 8, 12, 16][Math.floor(Math.random() * 4)],
         deviceMemory: [4, 8, 16][Math.floor(Math.random() * 3)],
