@@ -36,14 +36,10 @@ function showProgress(received, total, startTime, prefix = 'Downloading') {
     const receivedStr = formatBytes(received);
     const totalStr = formatBytes(total);
 
-    // 构造输出字符串
-    const output = `${prefix} [${bar}] ${percent}% | ${receivedStr}/${totalStr} | ${speedStr}`;
+    // 构造输出字符串，使用 \r 回到行首实现单行刷新
+    const output = `\r${prefix} [${bar}] ${percent}% | ${receivedStr}/${totalStr} | ${speedStr}`;
 
-    // 1. 清除当前行
-    readline.clearLine(process.stdout, 0);
-    // 2. 光标回到行首
-    readline.cursorTo(process.stdout, 0);
-    // 3. 写入新内容
+    // 直接使用 \r 回车符，更兼容各种终端
     process.stdout.write(output);
 }
 
