@@ -130,6 +130,19 @@ npm run build:linux
 - ✅ **TLS 指纹**: 真实 Chrome（与商业工具相同）
 - ✅ **语言欺骗**: 最小化 Hook，无检测异常
 
+## ❓ 常见问题 (FAQ)
+
+### macOS 提示 "安装包已损坏" 或 "无法打开"
+这是因为 GitHub 构建的安装包没有经过 Apple 开发者签名 (需 $99/年)，MacOS Gatekeeper 安全机制会默认拦截。
+
+**解决方案**:
+1. 将 `GeekEZ Browser` 拖入 **应用程序 (Applications)** 文件夹。
+2. 打开终端 (Terminal)，输入以下命令并回车（可能需要输入密码）：
+   ```bash
+   sudo xattr -rd com.apple.quarantine /Applications/GeekEZ\ Browser.app
+   ```
+3. 重新打开软件即可正常运行。
+
 ## ⚠️ 免责声明
 
 本软件仅供技术研究与教育使用。开发者不对因使用本软件导致的账号封禁、法律风险或经济损失承担任何责任。请用户严格遵守各平台的使用规则和当地法律法规。
