@@ -538,6 +538,16 @@ function openAddModal() {
     document.getElementById('addName').value = '';
     document.getElementById('addProxy').value = '';
     document.getElementById('addTags').value = ''; // Clear tags
+    document.getElementById('addTimezone').value = 'Auto (No Change)';
+
+    // Initialize location dropdown
+    initCustomCityDropdown('addCity', 'addCityDropdown');
+    document.getElementById('addCity').value = 'Auto (IP Based)';
+
+    // Initialize language dropdown
+    initCustomLanguageDropdown('addLanguage', 'addLanguageDropdown');
+    document.getElementById('addLanguage').value = 'Auto (System Default)';
+
     document.getElementById('addModal').style.display = 'flex';
 }
 function closeAddModal() { document.getElementById('addModal').style.display = 'none'; }
@@ -550,13 +560,29 @@ async function saveNewProfile() {
     // 将 "Auto (No Change)" 转换为 "Auto" 存储
     const timezone = timezoneInput === 'Auto (No Change)' ? 'Auto' : timezoneInput;
 
+    // Get city/location value
+    const cityInput = document.getElementById('addCity').value;
+    let city = null;
+    let geolocation = null;
+    if (cityInput && cityInput !== 'Auto (IP Based)') {
+        const cityData = window.CITY_DATA ? window.CITY_DATA.find(c => c.name === cityInput) : null;
+        if (cityData) {
+            city = cityData.name;
+            geolocation = { latitude: cityData.lat, longitude: cityData.lng, accuracy: 100 };
+        }
+    }
+
+    // Get language value
+    const languageInput = document.getElementById('addLanguage').value;
+    const language = getLanguageCode(languageInput);
+
     const tags = tagsStr.split(/[,，]/).map(s => s.trim()).filter(s => s);
 
     if (!name && proxyStr) { const autoName = getProxyRemark(proxyStr); if (autoName) name = autoName; }
     if (!name || !proxyStr) return showAlert(t('inputReq'));
 
-    // 传递 timezone
-    await window.electronAPI.saveProfile({ name, proxyStr, tags, timezone });
+    // 传递 timezone, city, geolocation, language
+    await window.electronAPI.saveProfile({ name, proxyStr, tags, timezone, city, geolocation, language });
     closeAddModal(); await loadProfiles();
 }
 
@@ -602,8 +628,6 @@ async function openEditModal(id) {
     // Init Language Dropdown
     initCustomLanguageDropdown('editLanguage', 'editLanguageDropdown');
     document.getElementById('editLanguage').value = getLanguageName(fp.language || 'auto');
-
-    document.getElementById('editSeed').value = fp.noiseSeed || 0;
 
     // Load debug port and show/hide based on global setting
     const settings = await window.electronAPI.getSettings();
@@ -654,7 +678,6 @@ async function saveEditProfile() {
             delete p.fingerprint.geolocation;
         }
         p.fingerprint.language = getLanguageCode(document.getElementById('editLanguage').value);
-        p.fingerprint.noiseSeed = parseInt(document.getElementById('editSeed').value);
 
         // Save debug port if enabled
         const debugPortInput = document.getElementById('editDebugPort');

@@ -1071,6 +1071,23 @@
                 <label data-i18n="proxyLink" style="font-size:11px; font-weight:bold; opacity:0.8;">Proxy</label>
                 <textarea id="addProxy" rows="4" placeholder="vmess://, ss://..." spellcheck="false"
                     autocomplete="off"></textarea>
+                <!-- Location Selector (Searchable) -->
+                <label data-i18n="locationLabel"
+                    style="font-size:11px; font-weight:bold; opacity:0.8; margin-top:8px; display:block;">Location
+                    (Geo)</label>
+                <div class="timezone-wrapper">
+                    <input type="text" id="addCity" placeholder="Type to search city..." autocomplete="off">
+                    <div class="timezone-dropdown" id="addCityDropdown"></div>
+                </div>
+                <div data-i18n="geoHint" style="font-size:10px; opacity:0.5; margin-bottom:12px;">Select a city matching
+                    your proxy.</div>
+                <!-- Language Selector -->
+                <label data-i18n="languageLabel"
+                    style="font-size:11px; font-weight:bold; opacity:0.8; margin-top:8px; display:block;">Language</label>
+                <div class="timezone-wrapper">
+                    <input type="text" id="addLanguage" placeholder="Type to search language..." autocomplete="off">
+                    <div class="timezone-dropdown" id="addLanguageDropdown"></div>
+                </div>
                 <div style="font-size: 11px; color: var(--text-secondary); margin-bottom: 10px;"
                     data-i18n="autoFingerprint">* Auto Fingerprint</div>
             </div>
@@ -1094,11 +1111,6 @@
                 <div class="timezone-wrapper">
                     <input type="text" id="editTimezone" placeholder="Type to search or select..." autocomplete="off">
                     <div class="timezone-dropdown" id="editTimezoneDropdown"></div>
-                </div>
-                <div data-i18n="timezoneWarning"
-                    style="font-size:10px; color:#f39c12; margin-top:-8px; margin-bottom:8px;">
-                    ⚠️ Modifying timezone may cause some login pages (AWS, Oracle) to fail. Use "Auto (No Change)" for
-                    login environments.
                 </div>
                 <!-- Location Selector (Searchable) -->
                 <label data-i18n="locationLabel"
@@ -1135,8 +1147,6 @@
                                 id="editResH"></div>
                     </div>
                 </div>
-                <label style="font-size:11px; font-weight:bold; opacity:0.8;">Seed</label>
-                <input type="number" id="editSeed">
                 <!-- Remote Debugging Port (conditional) -->
                 <div id="debugPortSection" style="display:none; margin-top:12px;">
                     <label style="font-size:11px; font-weight:bold; opacity:0.8;">Remote Debugging Port</label>

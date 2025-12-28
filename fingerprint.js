@@ -5,15 +5,19 @@ const RESOLUTIONS = [{ w: 1920, h: 1080 }, { w: 2560, h: 1440 }, { w: 1366, h: 7
 function getRandom(arr) { return arr[Math.floor(Math.random() * arr.length)]; }
 
 function generateFingerprint() {
-    // 1. 强制匹配宿主机系统
+    // 1. 强制匹配宿主机系统和架构
     const platform = os.platform();
+    const arch = os.arch(); // 'arm64' for Apple Silicon, 'x64' for Intel
 
     let osData = {};
 
     if (platform === 'win32') {
         osData = { platform: 'Win32' };
     } else if (platform === 'darwin') {
-        osData = { platform: 'MacIntel' };
+        // Apple Silicon (M1/M2/M3/M4) vs Intel Mac
+        // Note: Chrome on ARM Mac still reports 'MacIntel' for compatibility
+        // but we need to not fake other signals that would reveal ARM
+        osData = { platform: 'MacIntel', isArm: arch === 'arm64' };
     } else {
         osData = { platform: 'Linux x86_64' };
     }
@@ -34,7 +38,7 @@ function generateFingerprint() {
         window: { width: res.w, height: res.h },
         languages: languages,
         hardwareConcurrency: [4, 8, 12, 16][Math.floor(Math.random() * 4)],
-        deviceMemory: [4, 8, 16][Math.floor(Math.random() * 3)],
+        deviceMemory: [2, 4, 8][Math.floor(Math.random() * 3)],
         canvasNoise: canvasNoise,
         audioNoise: Math.random() * 0.000001,
         noiseSeed: Math.floor(Math.random() * 9999999),
@@ -52,6 +56,107 @@ function getInjectScript(fp, profileName, watermarkStyle) {
         try {
             const fp = ${fpJson};
             const targetTimezone = fp.timezone || "America/Los_Angeles";
+
+            // --- Global Helper: makeNative ---
+            // Makes hooked functions appear as native code to avoid detection
+            const makeNative = (func, name) => {
+                const nativeStr = 'function ' + name + '() { [native code] }';
+                Object.defineProperty(func, 'toString', {
+                    value: function() { return nativeStr; },
+                    configurable: true,
+                    writable: true
+                });
+                Object.defineProperty(func.toString, 'toString', {
+                    value: function() { return 'function toString() { [native code] }'; },
+                    configurable: true,
+                    writable: true
+                });
+                if (func.prototype) {
+                    Object.defineProperty(func.prototype.constructor, 'toString', {
+                        value: function() { return nativeStr; },
+                        configurable: true,
+                        writable: true
+                    });
+                }
+                return func;
+            };
+
+            // --- 0. Stealth Timezone Hook (Windows Only) ---
+            // On Windows, TZ env var doesn't work, so we use JS hooks
+            // On macOS/Linux, TZ env var works natively, no JS hook needed (avoids detection)
+            const isWindows = navigator.platform && navigator.platform.toLowerCase().includes('win');
+            if (isWindows && fp.timezone && fp.timezone !== 'Auto') {
+                // Helper to make functions appear native
+                const tzMakeNative = (func, name) => {
+                    const nativeStr = 'function ' + name + '() { [native code] }';
+                    func.toString = function() { return nativeStr; };
+                    func.toString.toString = function() { return 'function toString() { [native code] }'; };
+                    return func;
+                };
+
+                // Calculate timezone offset from timezone name
+                // This creates a date in the target timezone and compares to UTC
+                const getTimezoneOffsetForZone = (tz) => {
+                    try {
+                        const now = new Date();
+                        const utcDate = new Date(now.toLocaleString('en-US', { timeZone: 'UTC' }));
+                        const tzDate = new Date(now.toLocaleString('en-US', { timeZone: tz }));
+                        return Math.round((utcDate - tzDate) / 60000);
+                    } catch (e) {
+                        return new Date().getTimezoneOffset(); // Fallback to system
+                    }
+                };
+
+                const targetOffset = getTimezoneOffsetForZone(targetTimezone);
+
+                // Hook 1: Date.prototype.getTimezoneOffset
+                const origGetTimezoneOffset = Date.prototype.getTimezoneOffset;
+                Date.prototype.getTimezoneOffset = tzMakeNative(function getTimezoneOffset() {
+                    return targetOffset;
+                }, 'getTimezoneOffset');
+
+                // Hook 2: Intl.DateTimeFormat.prototype.resolvedOptions
+                const OrigDTFProto = Intl.DateTimeFormat.prototype;
+                const origResolvedOptions = OrigDTFProto.resolvedOptions;
+                OrigDTFProto.resolvedOptions = tzMakeNative(function resolvedOptions() {
+                    const result = origResolvedOptions.call(this);
+                    result.timeZone = targetTimezone;
+                    return result;
+                }, 'resolvedOptions');
+
+                // Hook 3: Date.prototype.toLocaleString family (with timeZone support)
+                const dateMethodsToHook = ['toLocaleString', 'toLocaleDateString', 'toLocaleTimeString'];
+                dateMethodsToHook.forEach(methodName => {
+                    const origMethod = Date.prototype[methodName];
+                    Date.prototype[methodName] = tzMakeNative(function(...args) {
+                        // If options provided without timeZone, inject target timeZone
+                        if (args.length === 0) {
+                            return origMethod.call(this, undefined, { timeZone: targetTimezone });
+                        } else if (args.length === 1) {
+                            return origMethod.call(this, args[0], { timeZone: targetTimezone });
+                        } else {
+                            const opts = args[1] || {};
+                            if (!opts.timeZone) {
+                                opts.timeZone = targetTimezone;
+                            }
+                            return origMethod.call(this, args[0], opts);
+                        }
+                    }, methodName);
+                });
+
+                // Hook 4: new Intl.DateTimeFormat() constructor - inject default timeZone
+                const OrigDateTimeFormat = Intl.DateTimeFormat;
+                Intl.DateTimeFormat = function(locales, options) {
+                    const opts = options ? { ...options } : {};
+                    if (!opts.timeZone) {
+                        opts.timeZone = targetTimezone;
+                    }
+                    return new OrigDateTimeFormat(locales, opts);
+                };
+                Intl.DateTimeFormat.prototype = OrigDateTimeFormat.prototype;
+                Intl.DateTimeFormat.supportedLocalesOf = OrigDateTimeFormat.supportedLocalesOf.bind(OrigDateTimeFormat);
+                tzMakeNative(Intl.DateTimeFormat, 'DateTimeFormat');
+            }
 
             // --- 1. 移除 WebDriver 及 Puppeteer 特征 ---
             if (navigator.webdriver) {
@@ -75,6 +180,69 @@ function getInjectScript(fp, profileName, watermarkStyle) {
                 value: { app: { isInstalled: false, InstallState: { DISABLED: 'disabled', INSTALLED: 'installed', NOT_INSTALLED: 'not_installed' }, RunningState: { CANNOT_RUN: 'cannot_run', READY_TO_RUN: 'ready_to_run', RUNNING: 'running' } }, runtime: { OnInstalledReason: { CHROME_UPDATE: 'chrome_update', INSTALL: 'install', SHARED_MODULE_UPDATE: 'shared_module_update', UPDATE: 'update' }, OnRestartRequiredReason: { APP_UPDATE: 'app_update', OS_UPDATE: 'os_update', PERIODIC: 'periodic' }, PlatformArch: { ARM: 'arm', ARM64: 'arm64', MIPS: 'mips', MIPS64: 'mips64', X86_32: 'x86-32', X86_64: 'x86-64' }, PlatformNaclArch: { ARM: 'arm', MIPS: 'mips', X86_32: 'x86-32', X86_64: 'x86-64' }, PlatformOs: { ANDROID: 'android', CROS: 'cros', LINUX: 'linux', MAC: 'mac', OPENBSD: 'openbsd', WIN: 'win' }, RequestUpdateCheckStatus: { NO_UPDATE: 'no_update', THROTTLED: 'throttled', UPDATE_AVAILABLE: 'update_available' } } }
             });
 
+            // --- 1.5 Screen Resolution Hook ---
+            // Override screen properties to match fingerprint values
+            if (fp.screen && fp.screen.width && fp.screen.height) {
+                const screenWidth = fp.screen.width;
+                const screenHeight = fp.screen.height;
+                
+                Object.defineProperty(screen, 'width', {
+                    get: makeNative(function width() { return screenWidth; }, 'width'),
+                    configurable: true
+                });
+                Object.defineProperty(screen, 'height', {
+                    get: makeNative(function height() { return screenHeight; }, 'height'),
+                    configurable: true
+                });
+                Object.defineProperty(screen, 'availWidth', {
+                    get: makeNative(function availWidth() { return screenWidth; }, 'availWidth'),
+                    configurable: true
+                });
+                Object.defineProperty(screen, 'availHeight', {
+                    get: makeNative(function availHeight() { return screenHeight - 40; }, 'availHeight'),
+                    configurable: true
+                });
+                // Also override window.outerWidth/outerHeight for consistency
+                Object.defineProperty(window, 'outerWidth', {
+                    get: makeNative(function outerWidth() { return screenWidth; }, 'outerWidth'),
+                    configurable: true
+                });
+                Object.defineProperty(window, 'outerHeight', {
+                    get: makeNative(function outerHeight() { return screenHeight; }, 'outerHeight'),
+                    configurable: true
+                });
+            }
+
+            // --- 1.6 Stealthy Hardware Fingerprint Hook (CPU Cores & Memory) ---
+            // Override navigator.hardwareConcurrency and navigator.deviceMemory on Navigator.prototype
+            // Using the same stealth pattern as timezone hooks to avoid Pixelscan detection
+            if (fp.hardwareConcurrency) {
+                const targetCores = fp.hardwareConcurrency;
+                // Create a getter that returns our value
+                const coresGetter = function() { return targetCores; };
+                // Apply makeNative to hide the hook
+                Object.defineProperty(coresGetter, 'toString', {
+                    value: function() { return 'function get hardwareConcurrency() { [native code] }'; },
+                    configurable: true, writable: true
+                });
+                Object.defineProperty(Navigator.prototype, 'hardwareConcurrency', {
+                    get: coresGetter,
+                    configurable: true
+                });
+            }
+            
+            if (fp.deviceMemory) {
+                const targetMemory = fp.deviceMemory;
+                const memoryGetter = function() { return targetMemory; };
+                Object.defineProperty(memoryGetter, 'toString', {
+                    value: function() { return 'function get deviceMemory() { [native code] }'; },
+                    configurable: true, writable: true
+                });
+                Object.defineProperty(Navigator.prototype, 'deviceMemory', {
+                    get: memoryGetter,
+                    configurable: true
+                });
+            }
 
             // --- 2. Stealth Geolocation Hook (Native Mock Pattern) ---
             // 避免使用 Proxy (会被 Pixelscan 识别为 Masking detected)
@@ -150,28 +318,31 @@ function getInjectScript(fp, profileName, watermarkStyle) {
                 const OrigColl = Intl.Collator;
                 
                 // Minimal hook - only inject default locale when not specified
-                Intl.DateTimeFormat = function(locales, options) {
+                const hookedDTF = function DateTimeFormat(locales, options) {
                     return new OrigDTF(locales || targetLang, options);
                 };
-                Intl.DateTimeFormat.prototype = OrigDTF.prototype;
-                Intl.DateTimeFormat.supportedLocalesOf = OrigDTF.supportedLocalesOf.bind(OrigDTF);
+                hookedDTF.prototype = OrigDTF.prototype;
+                hookedDTF.supportedLocalesOf = OrigDTF.supportedLocalesOf.bind(OrigDTF);
+                Intl.DateTimeFormat = makeNative(hookedDTF, 'DateTimeFormat');
                 
-                Intl.NumberFormat = function(locales, options) {
+                const hookedNF = function NumberFormat(locales, options) {
                     return new OrigNF(locales || targetLang, options);
                 };
-                Intl.NumberFormat.prototype = OrigNF.prototype;
-                Intl.NumberFormat.supportedLocalesOf = OrigNF.supportedLocalesOf.bind(OrigNF);
+                hookedNF.prototype = OrigNF.prototype;
+                hookedNF.supportedLocalesOf = OrigNF.supportedLocalesOf.bind(OrigNF);
+                Intl.NumberFormat = makeNative(hookedNF, 'NumberFormat');
                 
-                Intl.Collator = function(locales, options) {
+                const hookedColl = function Collator(locales, options) {
                     return new OrigColl(locales || targetLang, options);
                 };
-                Intl.Collator.prototype = OrigColl.prototype;
-                Intl.Collator.supportedLocalesOf = OrigColl.supportedLocalesOf.bind(OrigColl);
+                hookedColl.prototype = OrigColl.prototype;
+                hookedColl.supportedLocalesOf = OrigColl.supportedLocalesOf.bind(OrigColl);
+                Intl.Collator = makeNative(hookedColl, 'Collator');
             }
 
             // --- 3. Canvas Noise ---
             const originalGetImageData = CanvasRenderingContext2D.prototype.getImageData;
-            CanvasRenderingContext2D.prototype.getImageData = function(x, y, w, h) {
+            const hookedGetImageData = function getImageData(x, y, w, h) {
                 const imageData = originalGetImageData.apply(this, arguments);
                 if (fp.noiseSeed) {
                     for (let i = 0; i < imageData.data.length; i += 4) {
@@ -183,10 +354,11 @@ function getInjectScript(fp, profileName, watermarkStyle) {
                 }
                 return imageData;
             };
+            CanvasRenderingContext2D.prototype.getImageData = makeNative(hookedGetImageData, 'getImageData');
 
             // --- 4. Audio Noise ---
             const originalGetChannelData = AudioBuffer.prototype.getChannelData;
-            AudioBuffer.prototype.getChannelData = function(channel) {
+            const hookedGetChannelData = function getChannelData(channel) {
                 const results = originalGetChannelData.apply(this, arguments);
                 const noise = fp.audioNoise || 0.0000001;
                 for (let i = 0; i < 100 && i < results.length; i++) {
@@ -194,15 +366,17 @@ function getInjectScript(fp, profileName, watermarkStyle) {
                 }
                 return results;
             };
+            AudioBuffer.prototype.getChannelData = makeNative(hookedGetChannelData, 'getChannelData');
 
             // --- 5. WebRTC Protection ---
             const originalPC = window.RTCPeerConnection;
-            window.RTCPeerConnection = function(config) {
+            const hookedPC = function RTCPeerConnection(config) {
                 if(!config) config = {};
                 config.iceTransportPolicy = 'relay'; 
                 return new originalPC(config);
             };
-            window.RTCPeerConnection.prototype = originalPC.prototype;
+            hookedPC.prototype = originalPC.prototype;
+            window.RTCPeerConnection = makeNative(hookedPC, 'RTCPeerConnection');
 
             // --- 6. 浮动水印（显示环境名称）---
             // 根据用户设置选择水印样式

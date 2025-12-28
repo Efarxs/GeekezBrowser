@@ -84,7 +84,6 @@ window.zhCN = {
     msgUpdateFailed: "更新失败：",
     tagsLabel: "标签 (逗号分隔)",
     timezoneLabel: "时区",
-    timezoneWarning: "⚠️ 修改时区可能导致部分登录页（AWS, Oracle）无法加载。建议登录环境使用 \"Auto (No Change)\"。",
     languageLabel: "语言 (Language)",
     locationLabel: "地理位置 (Geo Location)",
     geoAuto: "自动 (基于IP)",

@@ -82,7 +82,6 @@ const enTranslations = {
     msgUpdateFailed: "Update Failed:",
     tagsLabel: "Tags (comma separated)",
     timezoneLabel: "Timezone",
-    timezoneWarning: "⚠️ Modifying timezone may cause some login pages (AWS, Oracle) to fail. Use \"Auto (No Change)\" for login environments.",
     languageLabel: "Language",
     locationLabel: "Location (Geo)",
     geoAuto: "Auto (IP Based)",

@@ -232,7 +232,35 @@ ipcMain.handle('download-xray-update', async (e, url) => {
 ipcMain.handle('get-running-ids', () => Object.keys(activeProcesses));
 ipcMain.handle('get-profiles', async () => { if (!fs.existsSync(PROFILES_FILE)) return []; return fs.readJson(PROFILES_FILE); });
 ipcMain.handle('update-profile', async (event, updatedProfile) => { let profiles = await fs.readJson(PROFILES_FILE); const index = profiles.findIndex(p => p.id === updatedProfile.id); if (index > -1) { profiles[index] = updatedProfile; await fs.writeJson(PROFILES_FILE, profiles); return true; } return false; });
-ipcMain.handle('save-profile', async (event, data) => { const profiles = fs.existsSync(PROFILES_FILE) ? await fs.readJson(PROFILES_FILE) : []; const fingerprint = data.fingerprint || generateFingerprint(); if (data.timezone) fingerprint.timezone = data.timezone; else fingerprint.timezone = "America/Los_Angeles"; const newProfile = { id: uuidv4(), name: data.name, proxyStr: data.proxyStr, tags: data.tags || [], fingerprint: fingerprint, preProxyOverride: 'default', isSetup: false, createdAt: Date.now() }; profiles.push(newProfile); await fs.writeJson(PROFILES_FILE, profiles); return newProfile; });
+ipcMain.handle('save-profile', async (event, data) => {
+    const profiles = fs.existsSync(PROFILES_FILE) ? await fs.readJson(PROFILES_FILE) : [];
+    const fingerprint = data.fingerprint || generateFingerprint();
+
+    // Apply timezone
+    if (data.timezone) fingerprint.timezone = data.timezone;
+    else fingerprint.timezone = "America/Los_Angeles";
+
+    // Apply city and geolocation
+    if (data.city) fingerprint.city = data.city;
+    if (data.geolocation) fingerprint.geolocation = data.geolocation;
+
+    // Apply language
+    if (data.language && data.language !== 'auto') fingerprint.language = data.language;
+
+    const newProfile = {
+        id: uuidv4(),
+        name: data.name,
+        proxyStr: data.proxyStr,
+        tags: data.tags || [],
+        fingerprint: fingerprint,
+        preProxyOverride: 'default',
+        isSetup: false,
+        createdAt: Date.now()
+    };
+    profiles.push(newProfile);
+    await fs.writeJson(PROFILES_FILE, profiles);
+    return newProfile;
+});
 ipcMain.handle('delete-profile', async (event, id) => {
     // 关闭正在运行的进程
     if (activeProcesses[id]) {
