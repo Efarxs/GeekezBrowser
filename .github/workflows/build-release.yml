@@ -8,6 +8,9 @@ on:
 permissions:
   contents: write  # Global permissions for all jobs
 
+env:
+  XRAY_FALLBACK_VERSION: 'v24.12.18'  # Fallback version if API fails
+
 jobs:
   build-mac-arm64:
     runs-on: macos-latest  # Apple Silicon runner
@@ -27,9 +30,15 @@ jobs:
       - name: Get latest Xray version
         id: xray_version
         run: |
-          XRAY_VERSION=$(curl -sL "https://api.github.com/repos/XTLS/Xray-core/releases/latest" | python3 -c "import sys, json; print(json.load(sys.stdin)['tag_name'])")
+          # Try to get latest version, fallback if API fails
+          RESPONSE=$(curl -sL "https://api.github.com/repos/XTLS/Xray-core/releases/latest")
+          XRAY_VERSION=$(echo "$RESPONSE" | python3 -c "import sys, json; data=json.load(sys.stdin); print(data.get('tag_name', ''))" 2>/dev/null || echo "")
+          if [ -z "$XRAY_VERSION" ]; then
+            echo "API failed, using fallback version: $XRAY_FALLBACK_VERSION"
+            XRAY_VERSION="${{ env.XRAY_FALLBACK_VERSION }}"
+          fi
           echo "version=$XRAY_VERSION" >> $GITHUB_OUTPUT
-          echo "Latest Xray version: $XRAY_VERSION"
+          echo "Using Xray version: $XRAY_VERSION"
 
       - name: Download Xray for macOS ARM64
         run: |
@@ -79,9 +88,15 @@ jobs:
       - name: Get latest Xray version
         id: xray_version
         run: |
-          XRAY_VERSION=$(curl -sL "https://api.github.com/repos/XTLS/Xray-core/releases/latest" | python3 -c "import sys, json; print(json.load(sys.stdin)['tag_name'])")
+          # Try to get latest version, fallback if API fails
+          RESPONSE=$(curl -sL "https://api.github.com/repos/XTLS/Xray-core/releases/latest")
+          XRAY_VERSION=$(echo "$RESPONSE" | python3 -c "import sys, json; data=json.load(sys.stdin); print(data.get('tag_name', ''))" 2>/dev/null || echo "")
+          if [ -z "$XRAY_VERSION" ]; then
+            echo "API failed, using fallback version: $XRAY_FALLBACK_VERSION"
+            XRAY_VERSION="${{ env.XRAY_FALLBACK_VERSION }}"
+          fi
           echo "version=$XRAY_VERSION" >> $GITHUB_OUTPUT
-          echo "Latest Xray version: $XRAY_VERSION"
+          echo "Using Xray version: $XRAY_VERSION"
 
       - name: Download Xray for macOS x64
         run: |
@@ -132,9 +147,15 @@ jobs:
         id: xray_version
         shell: bash
         run: |
-          XRAY_VERSION=$(curl -sL "https://api.github.com/repos/XTLS/Xray-core/releases/latest" | python3 -c "import sys, json; print(json.load(sys.stdin)['tag_name'])")
+          # Try to get latest version, fallback if API fails
+          RESPONSE=$(curl -sL "https://api.github.com/repos/XTLS/Xray-core/releases/latest")
+          XRAY_VERSION=$(echo "$RESPONSE" | python3 -c "import sys, json; data=json.load(sys.stdin); print(data.get('tag_name', ''))" 2>/dev/null || echo "")
+          if [ -z "$XRAY_VERSION" ]; then
+            echo "API failed, using fallback version: $XRAY_FALLBACK_VERSION"
+            XRAY_VERSION="${{ env.XRAY_FALLBACK_VERSION }}"
+          fi
           echo "version=$XRAY_VERSION" >> $GITHUB_OUTPUT
-          echo "Latest Xray version: $XRAY_VERSION"
+          echo "Using Xray version: $XRAY_VERSION"
 
       - name: Download Xray for Windows
         shell: bash
