@@ -9,7 +9,7 @@ permissions:
   contents: write  # Global permissions for all jobs
 
 env:
-  XRAY_FALLBACK_VERSION: 'v24.12.18'  # Fallback version if API fails
+  XRAY_FALLBACK_VERSION: 'v25.12.8'  # Fallback version if API fails
 
 jobs:
   build-mac-arm64:
