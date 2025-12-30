@@ -45,10 +45,26 @@
     ],
     "win": {
       "target": [
-        "nsis",
-        "zip"
+        {
+          "target": "nsis",
+          "arch": [
+            "x64",
+            "arm64"
+          ]
+        },
+        {
+          "target": "zip",
+          "arch": [
+            "x64",
+            "arm64"
+          ]
+        }
       ],
-      "icon": "icon.ico"
+      "icon": "icon.ico",
+      "artifactName": "${productName}-${version}-${os}-${arch}.${ext}"
+    },
+    "zip": {
+      "artifactName": "${productName}-${version}-${os}-${arch}-portable.${ext}"
     },
     "nsis": {
       "oneClick": false,
