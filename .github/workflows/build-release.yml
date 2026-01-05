@@ -4,6 +4,7 @@ on:
   push:
     tags:
       - 'v*'
+  workflow_dispatch:
 
 permissions:
   contents: write
@@ -12,19 +13,63 @@ env:
   XRAY_FALLBACK_VERSION: 'v25.12.8'
 
 jobs:
-  # ==================== macOS ARM64 ====================
-  build-mac-arm64:
-    runs-on: macos-latest
+  build:
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          # macOS ARM64
+          - platform: macos-latest
+            os: darwin
+            arch: arm64
+            xray_asset: Xray-macos-arm64-v8a.zip
+            build_cmd: npm run build:mac
+          # macOS x64
+          - platform: macos-15-intel
+            os: darwin
+            arch: x64
+            xray_asset: Xray-macos-64.zip
+            build_cmd: npm run build:mac
+          # Windows x64
+          - platform: windows-latest
+            os: win32
+            arch: x64
+            xray_asset: Xray-windows-64.zip
+            build_cmd: npm run build:win
+          # Windows ARM64
+          - platform: windows-latest
+            os: win32
+            arch: arm64
+            xray_asset: Xray-windows-arm64-v8a.zip
+            build_cmd: npx electron-builder --win nsis zip --arm64
+          # Linux x64
+          - platform: ubuntu-latest
+            os: linux
+            arch: x64
+            xray_asset: Xray-linux-64.zip
+            build_cmd: npm run build:linux
+          # Linux ARM64
+          - platform: ubuntu-24.04-arm
+            os: linux
+            arch: arm64
+            xray_asset: Xray-linux-arm64-v8a.zip
+            build_cmd: npx electron-builder --linux --arm64
+
+    runs-on: ${{ matrix.platform }}
+    
     steps:
       - uses: actions/checkout@v4
+      
       - uses: actions/setup-node@v4
         with:
           node-version: '20'
           cache: 'npm'
+      
       - run: npm ci --ignore-scripts
 
       - name: Get Xray version
         id: xray
+        shell: bash
         run: |
           RESPONSE=$(curl -sL "https://api.github.com/repos/XTLS/Xray-core/releases/latest")
           VER=$(echo "$RESPONSE" | python3 -c "import sys,json;d=json.load(sys.stdin);print(d.get('tag_name',''))" 2>/dev/null || echo "")
@@ -32,195 +77,45 @@ jobs:
           echo "version=$VER" >> $GITHUB_OUTPUT
 
       - name: Download Xray
+        shell: bash
         run: |
-          mkdir -p resources/bin/darwin-arm64
-          curl -sL -o xray.zip "https://github.com/XTLS/Xray-core/releases/download/${{ steps.xray.outputs.version }}/Xray-macos-arm64-v8a.zip"
-          unzip -o xray.zip -d resources/bin/darwin-arm64/ && rm xray.zip
-          mv resources/bin/darwin-arm64/geoip.dat resources/bin/darwin-arm64/geosite.dat resources/bin/ 2>/dev/null || true
-          rm -f resources/bin/darwin-arm64/{LICENSE,README.md}
-          chmod +x resources/bin/darwin-arm64/xray
+          BIN_DIR="resources/bin/${{ matrix.os }}-${{ matrix.arch }}"
+          mkdir -p "$BIN_DIR"
+          curl -sL -o xray.zip "https://github.com/XTLS/Xray-core/releases/download/${{ steps.xray.outputs.version }}/${{ matrix.xray_asset }}"
+          unzip -o xray.zip -d "$BIN_DIR/" && rm xray.zip
+          mv "$BIN_DIR/geoip.dat" "$BIN_DIR/geosite.dat" resources/bin/ 2>/dev/null || true
+          rm -f "$BIN_DIR"/{LICENSE,README.md}
+          [ "${{ matrix.os }}" != "win32" ] && chmod +x "$BIN_DIR/xray"
 
-      - run: npx @puppeteer/browsers install chrome@129.0.6668.58 --path resources/puppeteer
-      - run: npm run build:mac
+      - name: Download Chrome
+        run: npx @puppeteer/browsers install chrome@129.0.6668.58 --path resources/puppeteer
+
+      - name: Build
+        run: ${{ matrix.build_cmd }}
         env:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
           CSC_IDENTITY_AUTO_DISCOVERY: false
 
-      - uses: actions/upload-artifact@v4
+      - name: Upload artifacts
+        uses: actions/upload-artifact@v4
         with:
-          name: mac-arm64
-          path: dist/*.dmg
-
-  # ==================== macOS x64 ====================
-  build-mac-x64:
-    runs-on: macos-15-intel
-    steps:
-      - uses: actions/checkout@v4
-      - uses: actions/setup-node@v4
-        with:
-          node-version: '20'
-          cache: 'npm'
-      - run: npm ci --ignore-scripts
-
-      - name: Get Xray version
-        id: xray
-        run: |
-          RESPONSE=$(curl -sL "https://api.github.com/repos/XTLS/Xray-core/releases/latest")
-          VER=$(echo "$RESPONSE" | python3 -c "import sys,json;d=json.load(sys.stdin);print(d.get('tag_name',''))" 2>/dev/null || echo "")
-          [ -z "$VER" ] && VER="${{ env.XRAY_FALLBACK_VERSION }}"
-          echo "version=$VER" >> $GITHUB_OUTPUT
-
-      - name: Download Xray
-        run: |
-          mkdir -p resources/bin/darwin-x64
-          curl -sL -o xray.zip "https://github.com/XTLS/Xray-core/releases/download/${{ steps.xray.outputs.version }}/Xray-macos-64.zip"
-          unzip -o xray.zip -d resources/bin/darwin-x64/ && rm xray.zip
-          mv resources/bin/darwin-x64/geoip.dat resources/bin/darwin-x64/geosite.dat resources/bin/ 2>/dev/null || true
-          rm -f resources/bin/darwin-x64/{LICENSE,README.md}
-          chmod +x resources/bin/darwin-x64/xray
-
-      - run: npx @puppeteer/browsers install chrome@129.0.6668.58 --path resources/puppeteer
-      - run: npm run build:mac
-        env:
-          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
-          CSC_IDENTITY_AUTO_DISCOVERY: false
-
-      - uses: actions/upload-artifact@v4
-        with:
-          name: mac-x64
-          path: dist/*.dmg
-
-  # ==================== Windows x64 ====================
-  build-windows-x64:
-    runs-on: windows-latest
-    steps:
-      - uses: actions/checkout@v4
-      - uses: actions/setup-node@v4
-        with:
-          node-version: '20'
-          cache: 'npm'
-      - run: npm ci --ignore-scripts
-
-      - name: Get Xray version
-        id: xray
-        shell: bash
-        run: |
-          RESPONSE=$(curl -sL "https://api.github.com/repos/XTLS/Xray-core/releases/latest")
-          VER=$(echo "$RESPONSE" | python3 -c "import sys,json;d=json.load(sys.stdin);print(d.get('tag_name',''))" 2>/dev/null || echo "")
-          [ -z "$VER" ] && VER="${{ env.XRAY_FALLBACK_VERSION }}"
-          echo "version=$VER" >> $GITHUB_OUTPUT
-
-      - name: Download Xray
-        shell: bash
-        run: |
-          mkdir -p resources/bin/win32-x64
-          curl -sL -o xray.zip "https://github.com/XTLS/Xray-core/releases/download/${{ steps.xray.outputs.version }}/Xray-windows-64.zip"
-          unzip -o xray.zip -d resources/bin/win32-x64/ && rm xray.zip
-          mv resources/bin/win32-x64/geoip.dat resources/bin/win32-x64/geosite.dat resources/bin/ 2>/dev/null || true
-          rm -f resources/bin/win32-x64/{LICENSE,README.md}
-
-      - run: npx @puppeteer/browsers install chrome@129.0.6668.58 --path resources/puppeteer
-      - run: npm run build:win
-        env:
-          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
-
-      - uses: actions/upload-artifact@v4
-        with:
-          name: windows-x64
+          name: ${{ matrix.os }}-${{ matrix.arch }}
           path: |
-            dist/*-win-x64.exe
-            dist/*-win-x64.zip
+            dist/*.dmg
+            dist/*.exe
+            dist/*.zip
+            dist/*.AppImage
 
-  # ==================== Windows ARM64 ====================
-  build-windows-arm64:
-    runs-on: windows-latest
-    steps:
-      - uses: actions/checkout@v4
-      - uses: actions/setup-node@v4
-        with:
-          node-version: '20'
-          cache: 'npm'
-      - run: npm ci --ignore-scripts
-
-      - name: Get Xray version
-        id: xray
-        shell: bash
-        run: |
-          RESPONSE=$(curl -sL "https://api.github.com/repos/XTLS/Xray-core/releases/latest")
-          VER=$(echo "$RESPONSE" | python3 -c "import sys,json;d=json.load(sys.stdin);print(d.get('tag_name',''))" 2>/dev/null || echo "")
-          [ -z "$VER" ] && VER="${{ env.XRAY_FALLBACK_VERSION }}"
-          echo "version=$VER" >> $GITHUB_OUTPUT
-
-      - name: Download Xray
-        shell: bash
-        run: |
-          mkdir -p resources/bin/win32-arm64
-          curl -sL -o xray.zip "https://github.com/XTLS/Xray-core/releases/download/${{ steps.xray.outputs.version }}/Xray-windows-arm64-v8a.zip"
-          unzip -o xray.zip -d resources/bin/win32-arm64/ && rm xray.zip
-          mv resources/bin/win32-arm64/geoip.dat resources/bin/win32-arm64/geosite.dat resources/bin/ 2>/dev/null || true
-          rm -f resources/bin/win32-arm64/{LICENSE,README.md}
-
-      - run: npx @puppeteer/browsers install chrome@129.0.6668.58 --path resources/puppeteer
-      - name: Build Windows ARM64
-        run: npx electron-builder --win --arm64
-        env:
-          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
-
-      - uses: actions/upload-artifact@v4
-        with:
-          name: windows-arm64
-          path: |
-            dist/*-win-arm64.exe
-            dist/*-win-arm64.zip
-
-  # ==================== Linux x64 ====================
-  build-linux-x64:
-    runs-on: ubuntu-latest
-    steps:
-      - uses: actions/checkout@v4
-      - uses: actions/setup-node@v4
-        with:
-          node-version: '20'
-          cache: 'npm'
-      - run: npm ci --ignore-scripts
-
-      - name: Get Xray version
-        id: xray
-        run: |
-          RESPONSE=$(curl -sL "https://api.github.com/repos/XTLS/Xray-core/releases/latest")
-          VER=$(echo "$RESPONSE" | python3 -c "import sys,json;d=json.load(sys.stdin);print(d.get('tag_name',''))" 2>/dev/null || echo "")
-          [ -z "$VER" ] && VER="${{ env.XRAY_FALLBACK_VERSION }}"
-          echo "version=$VER" >> $GITHUB_OUTPUT
-
-      - name: Download Xray
-        run: |
-          mkdir -p resources/bin/linux-x64
-          curl -sL -o xray.zip "https://github.com/XTLS/Xray-core/releases/download/${{ steps.xray.outputs.version }}/Xray-linux-64.zip"
-          unzip -o xray.zip -d resources/bin/linux-x64/ && rm xray.zip
-          mv resources/bin/linux-x64/geoip.dat resources/bin/linux-x64/geosite.dat resources/bin/ 2>/dev/null || true
-          rm -f resources/bin/linux-x64/{LICENSE,README.md}
-          chmod +x resources/bin/linux-x64/xray
-
-      - run: npx @puppeteer/browsers install chrome@129.0.6668.58 --path resources/puppeteer
-      - run: npm run build:linux
-        env:
-          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
-
-      - uses: actions/upload-artifact@v4
-        with:
-          name: linux-x64
-          path: dist/*.AppImage
-
-  # ==================== Create Release ====================
   release:
-    needs: [build-mac-arm64, build-mac-x64, build-windows-x64, build-windows-arm64, build-linux-x64]
+    needs: build
     runs-on: ubuntu-latest
+    if: startsWith(github.ref, 'refs/tags/')
     steps:
       - uses: actions/download-artifact@v4
         with:
           path: artifacts
 
-      - name: List all artifacts
+      - name: List artifacts
         run: find artifacts -type f
 
       - name: Create Release
