@@ -10,7 +10,7 @@ permissions:
   contents: write
 
 env:
-  XRAY_FALLBACK_VERSION: 'v25.12.8'
+  XRAY_FALLBACK_VERSION: 'v26.1.3'
 
 jobs:
   build:
