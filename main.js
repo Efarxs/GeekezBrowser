@@ -214,8 +214,14 @@ async function handleApiRequest(method, pathname, body, params) {
         const proc = activeProcesses[profile.id];
         if (!proc) return { status: 404, data: { success: false, error: 'Profile not running' } };
         await forceKill(proc.xrayPid);
-        await forceKill(proc.chromePid);
+        try { await proc.browser.close(); } catch (e) { }
+        if (proc.logFd !== undefined) {
+            try { fs.closeSync(proc.logFd); } catch (e) { }
+        }
         delete activeProcesses[profile.id];
+        if (mainWindow && mainWindow.webContents) {
+            mainWindow.webContents.send('profile-stopped', profile.id);
+        }
         return { success: true, message: 'Profile stopped' };
     }
 

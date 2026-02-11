@@ -10,7 +10,7 @@ permissions:
   contents: write
 
 env:
-  XRAY_FALLBACK_VERSION: 'v26.1.13'
+  XRAY_FALLBACK_VERSION: 'v25.12.8'
 
 jobs:
   build:
@@ -35,7 +35,7 @@ jobs:
             os: win32
             arch: x64
             xray_asset: Xray-windows-64.zip
-            build_cmd: npm run build:win
+            build_cmd: npx electron-builder --win nsis zip --x64
           # Windows ARM64
           - platform: windows-latest
             os: win32
