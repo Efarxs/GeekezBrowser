@@ -70,9 +70,6 @@
       "createDesktopShortcut": true,
       "createStartMenuShortcut": true
     },
-    "zip": {
-      "artifactName": "${productName}-${version}-${os}-${arch}-portable.${ext}"
-    },
     "mac": {
       "target": "dmg",
       "icon": "icon.icns"
