@@ -1441,9 +1441,30 @@ ipcMain.handle('launch-profile', async (event, profileId, watermarkStyle) => {
         };
         sender.send('profile-status', { id: profileId, status: 'running' });
 
-        // CDP Geolocation Removed in favor of Stealth JS Hook
-        // 由于 CDP 本身会被检测，我们移除所有 Emulation.Overrides
-        // 地理位置将由 fingerprint.js 中的 Stealth Hook 接管
+        // CDP Timezone Override (Windows only)
+        // On macOS/Linux, TZ env var changes V8's timezone natively.
+        // On Windows, V8 ignores TZ and uses Win32 API, so we use CDP instead.
+        // This changes V8's internal timezone at the engine level - all Date methods
+        // (toString, getTimezoneOffset, getHours, etc.) and Intl APIs work correctly.
+        const targetTimezone = profile.fingerprint?.timezone;
+        if (process.platform === 'win32' && targetTimezone && targetTimezone !== 'Auto') {
+            try {
+                const pages = await browser.pages();
+                for (const page of pages) {
+                    try { await page.emulateTimezone(targetTimezone); } catch (e) { }
+                }
+                browser.on('targetcreated', async (target) => {
+                    if (target.type() === 'page') {
+                        try {
+                            const page = await target.page();
+                            if (page) await page.emulateTimezone(targetTimezone);
+                        } catch (e) { }
+                    }
+                });
+            } catch (e) {
+                console.error('CDP timezone override failed:', e.message);
+            }
+        }
 
         browser.on('disconnected', async () => {
             if (activeProcesses[profileId]) {
