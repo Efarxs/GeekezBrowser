@@ -136,10 +136,6 @@ npm run build:linux
 2. **Geolocation**: Always select a city that matches your proxy IP location to avoid account bans.
 3. **Remote Debugging**: Only enable when you need external control via Puppeteer/DevTools. Keep it disabled for daily use.
 
-## 📝 License
-
-This project is licensed under [CC BY-NC-SA 4.0](https://creativecommons.org/licenses/by-nc-sa/4.0/).
-
 ## ⚠️ Disclaimer
 
 This tool is provided for educational and research purposes only. The developers are not responsible for any account bans or legal issues resulting from the use of this software. Please comply with the terms of service of the platforms you use.

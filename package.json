@@ -114,6 +114,7 @@
     "puppeteer-extra": "^3.3.6",
     "puppeteer-extra-plugin-stealth": "^2.11.2",
     "socks-proxy-agent": "^8.0.5",
+    "sql.js": "^1.14.1",
     "tcp-ping": "^0.1.1",
     "tree-kill": "^1.2.2",
     "uuid": "^9.0.1"
