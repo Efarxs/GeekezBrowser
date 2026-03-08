@@ -118,7 +118,7 @@ npm run build:linux
 - ✅ **Pixelscan**: All tests passed
 - ✅ **Cloudflare**: Bot test passed
 
-## ❓ FAQ
+## ❓ FAQ 
 
 ### macOS: "App is damaged" or "Cannot be opened"
 
@@ -129,6 +129,8 @@ npm run build:linux
    sudo xattr -rd com.apple.quarantine /Applications/GeekEZ\ Browser.app
    ```
 3. Re-open the app.
+
+### <u>[***Click for More FAQ***](https://browser.geekez.net/docs#doc-faq)</u>
 
 ## ⚠️ Important Notes
 

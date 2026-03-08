@@ -1121,13 +1121,19 @@ ipcMain.handle('save-profile', async (event, data) => {
     // Apply language
     if (data.language && data.language !== 'auto') fingerprint.language = data.language;
 
+    // Apply custom screen resolution if provided
+    if (data.screen && data.screen.width && data.screen.height) {
+        fingerprint.screen = data.screen;
+        fingerprint.window = data.screen;
+    }
+
     const newProfile = {
         id: uuidv4(),
         name: data.name,
         proxyStr: data.proxyStr,
         tags: data.tags || [],
         fingerprint: fingerprint,
-        preProxyOverride: 'default',
+        preProxyOverride: data.preProxyOverride || 'default',
         isSetup: false,
         createdAt: Date.now()
     };
