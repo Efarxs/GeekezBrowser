@@ -1486,7 +1486,7 @@ ipcMain.handle('export-full-backup', async (e, { profileIds, password }) => {
             browserData: {}
         };
 
-        // --- 1. 文件拷贝：书签、历史记录等 ---
+        // --- 1. 文件/目录拷贝：书签、历史记录、扩展数据等 ---
         const filesToBackup = [
             'Bookmarks', 'Bookmarks.bak',
             'History', 'History-journal',
@@ -1495,6 +1495,7 @@ ipcMain.handle('export-full-backup', async (e, { profileIds, password }) => {
             'Top Sites', 'Top Sites-journal',
             'Web Data', 'Web Data-journal'
         ];
+
         for (const profile of selectedProfiles) {
             const defaultDir = path.join(DATA_PATH, profile.id, 'browser_data', 'Default');
             if (!fs.existsSync(defaultDir)) continue;
@@ -1942,6 +1943,7 @@ ipcMain.handle('launch-profile', async (event, profileId, watermarkStyle) => {
             // 性能优化参数
             '--no-first-run',                    // 跳过首次运行向导
             '--no-default-browser-check',        // 跳过默认浏览器检查
+            '--disable-session-crashed-bubble',  // 隐藏恢复会话提示气泡
             '--disable-background-timer-throttling', // 防止后台标签页被限速
             '--disable-backgrounding-occluded-windows',
             '--disable-renderer-backgrounding',
@@ -1998,6 +2000,87 @@ ipcMain.handle('launch-profile', async (event, profileId, watermarkStyle) => {
             dumpio: false,
             env: env  // 注入环境变量
         });
+
+        // ==========================================
+        // Fix: Auto-close empty and extension tabs
+        // ==========================================
+        try {
+            // Extension background scripts might open tabs immediately upon load
+            // We use targetcreated to aggressively close them during the first 3 seconds
+            const startTime = Date.now();
+            const startupWindowMs = 3000;
+
+            // Allow chrome-extension:// and remote URLs (like onboarding.immersivetranslate.com) 
+            // to be caught and closed if they open dynamically during startup.
+            const interceptor = async (target) => {
+                if (Date.now() - startTime > startupWindowMs) {
+                    browser.off('targetcreated', interceptor); // remove listener after 3s
+                    return;
+                }
+
+                if (target.type() === 'page') {
+                    try {
+                        const page = await target.page();
+                        if (page) {
+                            const url = page.url();
+                            // If it's an extension welcome page (either extension scheme or a remote onboarding URL)
+                            // Note: we can't reliably guess all remote URLs, but typically restore-session pages 
+                            // were already created BEFORE targetcreated fires for new extension tabs, or they load silently.
+                            // Actually, Chrome session restore creates targets too.
+                            // To be safe, we mainly target the active welcome pages that usually steal focus.
+                            if (url.startsWith('chrome-extension://')) {
+                                await page.close();
+                            } else {
+                                // For remote URLs like immersive translate, extensions often use chrome.tabs.create
+                                // Wait for the URL to resolve and block the request so it doesn't flash
+                                try {
+                                    await page.setRequestInterception(true);
+                                    page.on('request', async (request) => {
+                                        if (Date.now() - startTime > startupWindowMs + 2000) {
+                                            try { await request.continue(); } catch (e) { }
+                                            return;
+                                        }
+                                        const reqUrl = request.url();
+                                        if (request.isNavigationRequest() && (reqUrl.includes('onboarding.') || reqUrl.includes('welcome') || reqUrl.includes('install') || reqUrl.startsWith('chrome-extension://'))) {
+                                            try { await request.abort(); } catch (e) { }
+                                            try { await page.close(); } catch (e) { }
+                                        } else {
+                                            try { await request.continue(); } catch (e) { }
+                                        }
+                                    });
+                                } catch (e) { }
+                            }
+                        }
+                    } catch (e) { }
+                }
+            };
+
+            browser.on('targetcreated', interceptor);
+
+            // Wait a moment for the initial session to restore
+            await new Promise(r => setTimeout(r, 1500));
+            const pages = await browser.pages();
+
+            let realTabCount = pages.filter(p => {
+                const url = p.url();
+                return url !== 'about:blank' && !url.startsWith('chrome-extension://') && !url.includes('onboarding.');
+            }).length;
+
+            for (const page of pages) {
+                try {
+                    const url = page.url();
+                    if (url.startsWith('chrome-extension://') || url.includes('onboarding.')) {
+                        await page.close();
+                        continue;
+                    }
+                    if (url === 'about:blank' && realTabCount > 0) {
+                        await page.close();
+                    }
+                } catch (e) { }
+            }
+        } catch (e) {
+            console.error('Failed to cleanup initial tabs:', e);
+        }
 
         activeProcesses[profileId] = {
             xrayPid: xrayProcess.pid,
