@@ -19,7 +19,7 @@ export const profileService = {
             const watermarkStyle = localStorage.getItem('geekez_watermark_style') || 'enhanced';
             const msg = await ipcService.invoke('launch-profile', id, watermarkStyle);
             return {
-                success: !msg || !msg.includes(':'),
+                success: true,
                 message: msg || ''
             };
         } catch (error) {

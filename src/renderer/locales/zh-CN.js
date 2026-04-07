@@ -1,6 +1,9 @@
 // Chinese Translations (External)
 window.zhCN = {
     enablePreProxy: "开启前置代理",
+    preProxyEnabledMsg: "前置代理已开启",
+    preProxyDisabledMsg: "前置代理已关闭",
+    preProxySaveFailed: "保存前置代理设置失败：",
     manageChain: "管理代理链",
     importYaml: "导入数据",
     importBackup: "导入完整备份 (.geekez)",

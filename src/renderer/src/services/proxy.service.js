@@ -25,11 +25,18 @@ export const proxyService = {
      * 批量测试节点延迟
      */
     async testBatchLatency(nodes) {
-        const promises = nodes.map(async (p) => {
-            const res = await this.testLatency(p.url);
-            return { id: p.id, ...res };
-        });
-        return await Promise.all(promises);
+        try {
+            return await ipcService.invoke(
+                'test-proxy-latency-batch',
+                nodes.map((p) => ({ id: p.id, url: p.url }))
+            );
+        } catch (error) {
+            const promises = nodes.map(async (p) => {
+                const res = await this.testLatency(p.url);
+                return { id: p.id, ...res };
+            });
+            return await Promise.all(promises);
+        }
     },
 
     /**

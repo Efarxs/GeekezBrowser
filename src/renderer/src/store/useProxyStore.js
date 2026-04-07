@@ -6,7 +6,14 @@ import { getProxyRemark, uuidv4 } from '../utils/helpers';
 
 export const useProxyStore = defineStore('proxy', () => {
     // State
-    const settings = ref({ preProxies: [], subscriptions: [], mode: 'single', notify: false, selectedId: null });
+    const settings = ref({
+        preProxies: [],
+        subscriptions: [],
+        mode: 'single',
+        notify: false,
+        selectedId: null,
+        enablePreProxy: false
+    });
     const currentGroup = ref('manual');
     const testingIds = ref(new Set());
 
@@ -47,6 +54,13 @@ export const useProxyStore = defineStore('proxy', () => {
         return { color: 'var(--accent)', border: '1px solid var(--accent)' };
     });
 
+    const setTesting = (id, active) => {
+        const next = new Set(testingIds.value);
+        if (active) next.add(id);
+        else next.delete(id);
+        testingIds.value = next;
+    };
+
     // Actions
     const loadSettings = async () => {
         try {
@@ -59,9 +73,11 @@ export const useProxyStore = defineStore('proxy', () => {
 
     const saveSettings = async () => {
         try {
-            await ipcService.saveSettings(settings.value);
+            const payload = JSON.parse(JSON.stringify(settings.value || {}));
+            await ipcService.saveSettings(payload);
         } catch (e) {
             console.error('[ProxyStore] Failed to save settings:', e);
+            throw e;
         }
     };
 
@@ -73,13 +89,13 @@ export const useProxyStore = defineStore('proxy', () => {
         const p = settings.value.preProxies.find(x => x.id === id);
         if (!p) return;
 
-        testingIds.value.add(id);
+        setTesting(id, true);
         try {
             const res = await proxyService.testLatency(p.url);
             p.latency = res.latency;
             p.latencyErr = res.error;
         } finally {
-            testingIds.value.delete(id);
+            setTesting(id, false);
         }
     };
 
@@ -87,27 +103,38 @@ export const useProxyStore = defineStore('proxy', () => {
         const list = currentGroupNodes.value;
         if (list.length === 0) return;
 
-        list.forEach(p => testingIds.value.add(p.id));
-        try {
-            const results = await proxyService.testBatchLatency(list);
-            results.forEach(res => {
-                const p = settings.value.preProxies.find(x => x.id === res.id);
-                if (p) {
-                    p.latency = res.latency;
-                    p.latencyErr = res.error;
-                }
-            });
+        const concurrency = Math.min(6, Math.max(1, list.length));
+        let cursor = 0;
 
-            // If in single mode, auto-switch to best node if needed (legacy logic)
-            if (settings.value.mode === 'single') {
-                let best = null, min = 99999;
-                list.forEach(p => { if (p.latency > 0 && p.latency < min) { min = p.latency; best = p; } });
-                if (best) {
-                    settings.value.selectedId = best.id;
+        const worker = async () => {
+            while (true) {
+                const index = cursor++;
+                if (index >= list.length) return;
+
+                const node = list[index];
+                setTesting(node.id, true);
+                try {
+                    const res = await proxyService.testLatency(node.url);
+                    const target = settings.value.preProxies.find(x => x.id === node.id);
+                    if (target) {
+                        target.latency = res.latency;
+                        target.latencyErr = res.error;
+                    }
+                } finally {
+                    setTesting(node.id, false);
                 }
             }
-        } finally {
-            list.forEach(p => testingIds.value.delete(p.id));
+        };
+
+        await Promise.all(Array.from({ length: concurrency }, () => worker()));
+
+        // If in single mode, auto-switch to best node after current round finishes.
+        if (settings.value.mode === 'single') {
+            let best = null, min = 99999;
+            list.forEach(p => { if (p.latency > 0 && p.latency < min) { min = p.latency; best = p; } });
+            if (best) {
+                settings.value.selectedId = best.id;
+            }
         }
     };
 

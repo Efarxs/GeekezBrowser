@@ -3,7 +3,7 @@
     <div class="toolbar">
         <div style="display:flex; gap:15px; align-items:center;">
             <label style="font-size:13px; cursor:pointer; display:flex; align-items:center; gap:8px;">
-                <input type="checkbox" v-model="proxyStore.settings.enablePreProxy" @change="proxyStore.saveSettings" style="width:auto; margin:0;"> 
+                <input type="checkbox" v-model="proxyStore.settings.enablePreProxy" @change="handlePreProxyToggle" style="width:auto; margin:0;"> 
                 <span data-i18n="enablePreProxy">{{ $t('enablePreProxy') }}</span>
             </label>
             <span class="status-badge" :style="proxyStore.proxyStatusStyle">{{ proxyStore.proxyStatusText }}</span>
@@ -98,6 +98,19 @@ const openAddModal = () => {
 
 const openProxyManager = () => {
   uiStore.openProxyManager();
+};
+
+const handlePreProxyToggle = async () => {
+    const enabled = !!proxyStore.settings.enablePreProxy;
+    try {
+        await proxyStore.saveSettings();
+        uiStore.showAlert(enabled
+            ? (window.t?.('preProxyEnabledMsg') || '前置代理已开启')
+            : (window.t?.('preProxyDisabledMsg') || '前置代理已关闭'));
+    } catch (e) {
+        proxyStore.settings.enablePreProxy = !enabled;
+        uiStore.showAlert((window.t?.('preProxySaveFailed') || '保存前置代理设置失败：') + (e?.message || e));
+    }
 };
 
 const openExportModal = () => {

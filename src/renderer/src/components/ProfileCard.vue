@@ -82,11 +82,18 @@ const displayScreen = computed(() => {
     return '0x0';
 });
 
-const quickUpdatePreProxy = (val) => {
+const quickUpdatePreProxy = async (val) => {
     const p = profileStore.profiles.find(x => x.id === props.profile.id);
     if (p) {
+        const previous = p.preProxyOverride || 'default';
         p.preProxyOverride = val;
-        profileStore.updateProfile(p);
+        const safeProfile = JSON.parse(JSON.stringify(p));
+        try {
+            await profileStore.updateProfile(safeProfile);
+        } catch (e) {
+            p.preProxyOverride = previous;
+            uiStore.showAlert('保存前置代理设置失败: ' + (e?.message || e));
+        }
     }
 };
 

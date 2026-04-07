@@ -10,7 +10,7 @@
             <input type="text" v-model="form.name" spellcheck="false" autocomplete="off">
             
             <label>{{ t('subUrl') || 'URL' }}</label>
-            <input type="text" v-model="form.url" spellcheck="false" :disabled="!isNew" autocomplete="off">
+            <input type="text" v-model="form.url" spellcheck="false" autocomplete="off">
             
             <label>{{ t('subInterval') || 'Auto Update' }}</label>
             <select v-model="form.interval">

@@ -1,6 +1,9 @@
 // English Translations (Default)
 const enTranslations = {
     enablePreProxy: "Enable Chain Proxy",
+    preProxyEnabledMsg: "Pre-proxy enabled",
+    preProxyDisabledMsg: "Pre-proxy disabled",
+    preProxySaveFailed: "Failed to save pre-proxy settings: ",
     manageChain: "Proxy Chain",
     importYaml: "Import Data",
     importBackup: "Import Full Backup (.geekez)",

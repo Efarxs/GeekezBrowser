@@ -6,6 +6,8 @@ const puppeteer = require('puppeteer'); // 使用原生 puppeteer，不带 extra
 const yaml = require('js-yaml');
 const http = require('http');
 const https = require('https');
+const net = require('net');
+const tls = require('tls');
 const os = require('os');
 const crypto = require('crypto');
 const zlib = require('zlib');
@@ -13,6 +15,7 @@ const { promisify } = require('util');
 const gzip = promisify(zlib.gzip);
 const gunzip = promisify(zlib.gunzip);
 const initSqlJs = require('sql.js');
+const { SocksClient } = require('socks');
 
 const uuidv4 = () => crypto.randomUUID();
 
@@ -909,6 +912,11 @@ async function saveSettingsWithNormalizedExtensions(settings) {
 
 function normalizeSettingsSnapshot(settings) {
     const nextSettings = settings || {};
+    if (!Array.isArray(nextSettings.preProxies)) nextSettings.preProxies = [];
+    if (!Array.isArray(nextSettings.subscriptions)) nextSettings.subscriptions = [];
+    if (!['single', 'balance', 'failover'].includes(nextSettings.mode)) nextSettings.mode = 'single';
+    nextSettings.enablePreProxy = !!nextSettings.enablePreProxy;
+    nextSettings.notify = !!nextSettings.notify;
     nextSettings.userExtensions = normalizeUserExtensions(nextSettings.userExtensions || []);
     nextSettings.closeBehavior = normalizeCloseBehavior(nextSettings.closeBehavior);
     return nextSettings;
@@ -2527,74 +2535,181 @@ ipcMain.handle('check-updates', async () => {
 });
 ipcMain.handle('get-proxy-remark', (event, link) => { return getProxyRemark(link) || ''; });
 ipcMain.handle('fetch-url', async (e, url) => { try { const res = await fetch(url); if (!res.ok) throw new Error('HTTP ' + res.status); return await res.text(); } catch (e) { throw e.message; } });
-ipcMain.handle('test-proxy-latency', async (e, proxyStr) => {
-    const tempPort = await getAvailablePort(); const tempConfigPath = path.join(app.getPath('userData'), `test_config_${tempPort}.json`);
+async function waitForLocalPortReady(port, timeoutMs = 1500) {
+    const start = Date.now();
+    while (Date.now() - start < timeoutMs) {
+        const ok = await new Promise((resolve) => {
+            const socket = net.connect({ host: '127.0.0.1', port });
+            const finish = (value) => {
+                try { socket.destroy(); } catch (e) { }
+                resolve(value);
+            };
+            socket.once('connect', () => finish(true));
+            socket.once('error', () => finish(false));
+            socket.setTimeout(200, () => finish(false));
+        });
+        if (ok) return true;
+        await new Promise((r) => setTimeout(r, 50));
+    }
+    return false;
+}
+
+async function measureSocksConnectLatency(socksPort, timeoutMs = 4000) {
+    const targets = [
+        { host: 'cp.cloudflare.com', port: 443, servername: 'cp.cloudflare.com' },
+        { host: 'www.cloudflare.com', port: 443, servername: 'www.cloudflare.com' },
+        { host: 'www.gstatic.com', port: 443, servername: 'www.gstatic.com' }
+    ];
+
+    let lastError = 'Timeout';
+    for (const target of targets) {
+        const start = process.hrtime.bigint();
+        let socksSocket = null;
+        let tlsSocket = null;
+        try {
+            const result = await Promise.race([
+                SocksClient.createConnection({
+                    command: 'connect',
+                    proxy: {
+                        host: '127.0.0.1',
+                        port: socksPort,
+                        type: 5
+                    },
+                    destination: {
+                        host: target.host,
+                        port: target.port
+                    }
+                }),
+                new Promise((_, reject) => setTimeout(() => reject(new Error('Timeout')), timeoutMs))
+            ]);
+
+            socksSocket = result?.socket || null;
+            if (!socksSocket) throw new Error('No socket');
+
+            const latency = await new Promise((resolve, reject) => {
+                let settled = false;
+                const finish = (err, value) => {
+                    if (settled) return;
+                    settled = true;
+                    try { tlsSocket?.destroy(); } catch (e) { }
+                    try { socksSocket?.destroy(); } catch (e) { }
+                    if (err) reject(err);
+                    else resolve(value);
+                };
+
+                tlsSocket = tls.connect({
+                    socket: socksSocket,
+                    servername: target.servername || target.host,
+                    rejectUnauthorized: false,
+                    ALPNProtocols: ['http/1.1']
+                });
+
+                tlsSocket.once('secureConnect', () => {
+                    const handshakeLatency = Number(process.hrtime.bigint() - start) / 1e6;
+                    finish(null, Math.max(1, Math.round(handshakeLatency)));
+                });
+                tlsSocket.once('error', (err) => finish(err));
+                tlsSocket.setTimeout(timeoutMs, () => finish(new Error('Timeout')));
+            });
+
+            return { success: true, latency };
+        } catch (err) {
+            lastError = err?.code || err?.message || 'Connect failed';
+            try { tlsSocket?.destroy(); } catch (e) { }
+            try { socksSocket?.destroy(); } catch (e) { }
+        }
+    }
+
+    return { success: false, msg: lastError };
+}
+
+async function runProxyLatencyTest(proxyStr) {
+    const tempPort = await getAvailablePort();
+    const tempConfigPath = path.join(app.getPath('userData'), `test_config_${tempPort}.json`);
     let xrayProcess = null;
     try {
-        let outbound; try { outbound = parseProxyLink(proxyStr, "proxy_test"); } catch (err) { return { success: false, msg: "Format Err" }; }
-        const config = { 
-            log: { loglevel: "debug" }, 
-            dns: {
-                servers: ["1.1.1.1", "8.8.8.8"]
-            },
-            inbounds: [{ 
-                port: tempPort, 
-                listen: "127.0.0.1", 
-                protocol: "socks", 
-                settings: { udp: true },
-                sniffing: {
-                    enabled: true,
-                    destOverride: ["http", "tls", "quic"],
-                    routeOnly: false
+        let outbound;
+        try {
+            outbound = parseProxyLink(proxyStr, "proxy_test");
+        } catch (err) {
+            return { success: false, msg: "Format Err" };
+        }
+        const config = {
+            log: { loglevel: "warning" },
+            inbounds: [{
+                port: tempPort,
+                listen: "127.0.0.1",
+                protocol: "socks",
+                settings: {
+                    auth: "noauth",
+                    udp: false
                 }
-            }], 
-            outbounds: [outbound, { protocol: "freedom", tag: "direct" }], 
-            routing: { 
+            }],
+            outbounds: [outbound, { protocol: "freedom", tag: "direct" }],
+            routing: {
                 domainStrategy: "AsIs",
-                rules: [{ type: "field", outboundTag: "proxy_test", port: "0-65535" }] 
-            } 
+                rules: [{ type: "field", outboundTag: "proxy_test", port: "0-65535" }]
+            }
         };
         await fs.writeJson(tempConfigPath, config);
-        
+
         xrayProcess = spawn(BIN_PATH, ['-c', tempConfigPath], { cwd: BIN_DIR, env: { ...process.env, 'XRAY_LOCATION_ASSET': RESOURCES_BIN }, stdio: ['ignore', 'pipe', 'pipe'], windowsHide: true });
         let xrayErr = '';
-        xrayProcess.stderr.on('data', d => { 
+        xrayProcess.stderr.on('data', d => {
             const chunk = d.toString();
-            xrayErr += chunk; 
+            xrayErr += chunk;
             if (xrayErr.length > 5000) xrayErr = xrayErr.substring(xrayErr.length - 5000);
-            process.stdout.write(`\x1b[33m[Xray-Test-Log]\x1b[0m ${chunk}`); 
         });
-        xrayProcess.stdout.on('data', () => {}); // drain stdout
+        xrayProcess.stdout.on('data', () => { });
 
-        // Wait for Xray to initialize
-        await new Promise(r => setTimeout(r, 2000));
-
-        // Check if Xray is still alive
-        if (xrayProcess.exitCode !== null) {
+        const ready = await waitForLocalPortReady(tempPort, 1500);
+        if (!ready || xrayProcess.exitCode !== null) {
             return { success: false, msg: `Xray crashed: ${xrayErr.substring(0, 150) || 'unknown'}` };
         }
 
-        const start = Date.now(); const agent = await createSocksProxyAgent(`socks5://127.0.0.1:${tempPort}`);
-        const result = await new Promise((resolve) => {
-            const req = https.get('https://cp.cloudflare.com/generate_204', { 
-                agent, 
-                timeout: 10000, 
-                rejectUnauthorized: false,
-                headers: {
-                    'User-Agent': 'Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/147.0.0.0 Safari/537.36',
-                    'Connection': 'close'
-                }
-            }, (res) => {
-                const latency = Date.now() - start; if (res.statusCode === 204) resolve({ success: true, latency }); else resolve({ success: false, msg: `HTTP ${res.statusCode}` });
-            });
-            req.on('error', (err) => {
-                const logs = xrayErr.substring(0, 500);
-                resolve({ success: false, msg: err.code || err.message || "Err", xrayLog: logs }); 
-            });
-            req.on('timeout', () => { req.destroy(); resolve({ success: false, msg: "Timeout" }); });
-        });
-        await forceKill(xrayProcess.pid); xrayProcess = null; try { fs.unlinkSync(tempConfigPath); } catch (e) { } return result;
-    } catch (err) { if (xrayProcess) try { await forceKill(xrayProcess.pid); } catch(e) {} try { fs.unlinkSync(tempConfigPath); } catch (e) { } return { success: false, msg: err.message }; }
+        const result = await measureSocksConnectLatency(tempPort, 4000);
+        if (!result.success && !result.xrayLog && xrayErr) {
+            result.xrayLog = xrayErr.substring(0, 500);
+        }
+        await forceKill(xrayProcess.pid);
+        xrayProcess = null;
+        try { fs.unlinkSync(tempConfigPath); } catch (e) { }
+        return result;
+    } catch (err) {
+        if (xrayProcess) try { await forceKill(xrayProcess.pid); } catch (e) { }
+        try { fs.unlinkSync(tempConfigPath); } catch (e) { }
+        return { success: false, msg: err.message };
+    }
+}
+
+async function mapWithConcurrency(items, concurrency, worker) {
+    const results = new Array(items.length);
+    let cursor = 0;
+
+    const runners = Array.from({ length: Math.max(1, Math.min(concurrency, items.length || 1)) }, async () => {
+        while (true) {
+            const index = cursor++;
+            if (index >= items.length) return;
+            results[index] = await worker(items[index], index);
+        }
+    });
+
+    await Promise.all(runners);
+    return results;
+}
+
+ipcMain.handle('test-proxy-latency', async (_e, proxyStr) => {
+    return await runProxyLatencyTest(proxyStr);
+});
+ipcMain.handle('test-proxy-latency-batch', async (_e, entries) => {
+    const list = Array.isArray(entries) ? entries : [];
+    const concurrency = Math.min(6, Math.max(1, list.length));
+    return await mapWithConcurrency(list, concurrency, async (entry) => {
+        const id = entry?.id;
+        const url = String(entry?.url || '');
+        const result = await runProxyLatencyTest(url);
+        return { id, ...result };
+    });
 });
 ipcMain.handle('set-title-bar-color', (e, colors) => { const win = BrowserWindow.fromWebContents(e.sender); if (win) { if (process.platform === 'win32') try { win.setTitleBarOverlay({ color: colors.bg, symbolColor: colors.symbol }); } catch (e) { } win.setBackgroundColor(colors.bg); } });
 ipcMain.handle('check-app-update', async () => { try { const data = await fetchJson('https://api.github.com/repos/EchoHS/GeekezBrowser/releases/latest'); if (!data || !data.tag_name) return { update: false }; const remote = data.tag_name.replace('v', ''); if (compareVersions(remote, app.getVersion()) > 0) { return { update: true, remote, url: 'https://browser.geekez.net/#downloads', notes: data.body }; } return { update: false }; } catch (e) { return { update: false, error: e.message }; } });
@@ -2777,7 +2892,12 @@ ipcMain.handle('get-settings', async () => {
     return normalizeSettingsSnapshot(settings);
 });
 ipcMain.handle('save-settings', async (e, settings) => {
-    await saveSettingsWithNormalizedExtensions(settings || {});
+    const incoming = (settings && typeof settings === 'object')
+        ? JSON.parse(JSON.stringify(settings))
+        : {};
+    const existing = fs.existsSync(SETTINGS_FILE) ? await fs.readJson(SETTINGS_FILE) : {};
+    const merged = { ...(existing || {}), ...(incoming || {}) };
+    await saveSettingsWithNormalizedExtensions(merged);
     refreshTrayMenu().catch(() => { });
     return true;
 });
@@ -3665,15 +3785,25 @@ const launchProfileHandler = async (event, profileId, watermarkStyle) => {
 
     // Pre-proxy settings (settings already loaded above)
     const override = profile.preProxyOverride || 'default';
-    const shouldUsePreProxy = !useDirectNetwork && (override === 'on' || (override === 'default' && settings.enablePreProxy));
+    const shouldUsePreProxy = (override === 'on' || (override === 'default' && settings.enablePreProxy));
     let finalPreProxyConfig = null;
+    let activePreProxy = null;
     let switchMsg = null;
     if (shouldUsePreProxy && settings.preProxies && settings.preProxies.length > 0) {
         const active = settings.preProxies.filter(p => p.enable !== false);
         if (active.length > 0) {
-            if (settings.mode === 'single') { const target = active.find(p => p.id === settings.selectedId) || active[0]; finalPreProxyConfig = { preProxies: [target] }; }
-            else if (settings.mode === 'balance') { const target = active[Math.floor(Math.random() * active.length)]; finalPreProxyConfig = { preProxies: [target] }; if (settings.notify) switchMsg = `Balance: [${target.remark}]`; }
-            else if (settings.mode === 'failover') { const target = active[0]; finalPreProxyConfig = { preProxies: [target] }; if (settings.notify) switchMsg = `Failover: [${target.remark}]`; }
+            if (settings.mode === 'single') {
+                activePreProxy = active.find(p => p.id === settings.selectedId) || active[0];
+                finalPreProxyConfig = { preProxies: [activePreProxy] };
+            } else if (settings.mode === 'balance') {
+                activePreProxy = active[Math.floor(Math.random() * active.length)];
+                finalPreProxyConfig = { preProxies: [activePreProxy] };
+                if (settings.notify) switchMsg = `Balance: [${activePreProxy.remark}]`;
+            } else if (settings.mode === 'failover') {
+                activePreProxy = active[0];
+                finalPreProxyConfig = { preProxies: [activePreProxy] };
+                if (settings.notify) switchMsg = `Failover: [${activePreProxy.remark}]`;
+            }
         }
     }
 
@@ -3703,11 +3833,14 @@ const launchProfileHandler = async (event, profileId, watermarkStyle) => {
             await fs.writeJson(preferencesPath, preferences);
         } catch (e) { }
 
-        if (!useDirectNetwork) {
+        const shouldLaunchXray = (!useDirectNetwork) || !!activePreProxy;
+        if (shouldLaunchXray) {
             localPort = await getAvailablePort();
             const xrayConfigPath = path.join(profileDir, 'config.json');
             const xrayLogPath = path.join(profileDir, 'xray_run.log');
-            const config = generateXrayConfig(profile.proxyStr, localPort, finalPreProxyConfig, profile.fingerprint);
+            const upstreamProxy = useDirectNetwork ? activePreProxy?.url : profile.proxyStr;
+            const chainedPreProxy = useDirectNetwork ? null : finalPreProxyConfig;
+            const config = generateXrayConfig(upstreamProxy, localPort, chainedPreProxy, profile.fingerprint);
             fs.writeJsonSync(xrayConfigPath, config);
             logFd = fs.openSync(xrayLogPath, 'a');
             xrayProcess = spawn(BIN_PATH, ['-c', xrayConfigPath], { cwd: BIN_DIR, env: { ...process.env, 'XRAY_LOCATION_ASSET': RESOURCES_BIN }, stdio: ['ignore', logFd, logFd], windowsHide: true });
@@ -3761,13 +3894,23 @@ const launchProfileHandler = async (event, profileId, watermarkStyle) => {
 
         // 4. 构建启动参数（性能优化）
 
+        const disabledFeatures = [
+            'IsolateOrigins',
+            'site-per-process',
+            'ExtensionsMenuAccessControl',
+            'WebGPU'
+        ];
+        if (process.platform === 'win32') {
+            disabledFeatures.push('StartupLaunch', 'StartupBoost');
+        }
+
         const launchArgs = [
             `--user-data-dir=${userDataDir}`,
             `--window-size=${profile.fingerprint?.window?.width || 1280},${profile.fingerprint?.window?.height || 800}`,
             '--no-sandbox',
             '--disable-setuid-sandbox',
             '--disable-blink-features=AutomationControlled',
-            '--disable-features=IsolateOrigins,site-per-process,ExtensionsMenuAccessControl,WebGPU',
+            `--disable-features=${disabledFeatures.join(',')}`,
             '--force-webrtc-ip-handling-policy=disable_non_proxied_udp',
             `--disable-extensions-except=${extPaths}`,
             `--load-extension=${extPaths}`,
@@ -3786,8 +3929,10 @@ const launchProfileHandler = async (event, profileId, watermarkStyle) => {
             launchArgs.push('--restore-last-session');
         }
 
-        if (!useDirectNetwork && localPort) {
+        if (localPort) {
             launchArgs.unshift(`--proxy-server=socks5://127.0.0.1:${localPort}`);
+        } else {
+            launchArgs.unshift('--no-proxy-server');
         }
 
         if (profile.fingerprint?.userAgent) {

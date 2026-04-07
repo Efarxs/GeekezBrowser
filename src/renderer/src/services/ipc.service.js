@@ -57,7 +57,10 @@ export const ipcService = {
      * 保存设置同步接口
      */
     async saveSettings(settings) {
-        return await this.invoke('save-settings', settings);
+        const payload = settings && typeof settings === 'object'
+            ? JSON.parse(JSON.stringify(settings))
+            : settings;
+        return await this.invoke('save-settings', payload);
     },
 
     /**
