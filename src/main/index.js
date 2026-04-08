@@ -13,6 +13,7 @@ const crypto = require('crypto');
 const zlib = require('zlib');
 const { promisify } = require('util');
 const { getChromiumPath: resolveChromiumPathForApp } = require('./chromium-path');
+const { CLOSE_BEHAVIOR, normalizeCloseBehavior, resolveCloseBehavior } = require('./close-behavior');
 const gzip = promisify(zlib.gzip);
 const gunzip = promisify(zlib.gunzip);
 const initSqlJs = require('sql.js');
@@ -149,11 +150,6 @@ let apiServerRunning = false;
 let mainWindow = null; // Global reference for API-to-UI communication
 let appTray = null;
 let isAppQuitting = false;
-
-const CLOSE_BEHAVIOR = {
-    TRAY: 'tray',
-    QUIT: 'quit'
-};
 let cachedCloseBehavior = CLOSE_BEHAVIOR.TRAY;
 
 // ============================================================================
@@ -296,10 +292,6 @@ function normalizeTags(rawTags) {
             .filter(Boolean);
     }
     return [];
-}
-
-function normalizeCloseBehavior(rawValue) {
-    return rawValue === CLOSE_BEHAVIOR.QUIT ? CLOSE_BEHAVIOR.QUIT : CLOSE_BEHAVIOR.TRAY;
 }
 
 function sanitizeExtensionStoreId(rawId) {
@@ -1593,6 +1585,10 @@ function getCloseBehavior() {
     return normalizeCloseBehavior(cachedCloseBehavior);
 }
 
+function isTrayAvailable() {
+    return !!appTray && (typeof appTray.isDestroyed !== 'function' || !appTray.isDestroyed());
+}
+
 function showMainWindow() {
     if (!mainWindow || mainWindow.isDestroyed()) {
         createWindow();
@@ -1972,7 +1968,11 @@ function createWindow() {
     win.on('close', (event) => {
         if (isAppQuitting) return;
 
-        if (getCloseBehavior() === CLOSE_BEHAVIOR.QUIT) {
+        const effectiveCloseBehavior = resolveCloseBehavior(getCloseBehavior(), {
+            trayAvailable: isTrayAvailable()
+        });
+
+        if (effectiveCloseBehavior === CLOSE_BEHAVIOR.QUIT) {
             event.preventDefault();
             quitApplication();
             return;

@@ -9,7 +9,8 @@ export default defineConfig({
       rollupOptions: {
         input: {
           index: resolve(__dirname, 'src/main/index.js'),
-          'chromium-path': resolve(__dirname, 'src/main/chromium-path.js')
+          'chromium-path': resolve(__dirname, 'src/main/chromium-path.js'),
+          'close-behavior': resolve(__dirname, 'src/main/close-behavior.js')
         }
       }
     }
