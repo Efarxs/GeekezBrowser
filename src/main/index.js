@@ -12,6 +12,7 @@ const os = require('os');
 const crypto = require('crypto');
 const zlib = require('zlib');
 const { promisify } = require('util');
+const { getChromiumPath: resolveChromiumPathForApp } = require('./chromium-path');
 const gzip = promisify(zlib.gzip);
 const gunzip = promisify(zlib.gunzip);
 const initSqlJs = require('sql.js');
@@ -1541,26 +1542,13 @@ function forceKill(pid) {
 }
 
 function getChromiumPath() {
-    const basePath = isDev ? path.join(app.getAppPath(), 'resources', 'puppeteer') : path.join(process.resourcesPath, 'puppeteer');
-    if (!fs.existsSync(basePath)) return null;
-    function findFile(dir, filename) {
-        try {
-            const files = fs.readdirSync(dir);
-            for (const file of files) {
-                const fullPath = path.join(dir, file);
-                const stat = fs.statSync(fullPath);
-                if (stat.isDirectory()) { const res = findFile(fullPath, filename); if (res) return res; }
-                else if (file === filename) return fullPath;
-            }
-        } catch (e) { return null; } return null;
-    }
-
-    // macOS: Chrome binary is inside .app/Contents/MacOS/
-    if (process.platform === 'darwin') {
-        return findFile(basePath, 'Google Chrome for Testing');
-    }
-    // Windows
-    return findFile(basePath, 'chrome.exe');
+    return resolveChromiumPathForApp({
+        isDev,
+        appPath: app.getAppPath(),
+        resourcesPath: process.resourcesPath,
+        platform: process.platform,
+        env: process.env
+    });
 }
 
 // Settings management
