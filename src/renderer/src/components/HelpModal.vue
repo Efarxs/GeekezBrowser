@@ -24,13 +24,23 @@
                         <div style="margin-bottom:25px;"><h4 style="color:var(--accent);margin-bottom:8px;">3. 前置代理（可选）</h4><p style="font-size:14px;">用于隐藏本机IP或链路加速。建议使用TCP协议。</p></div>
                         <div style="margin-bottom:25px;"><h4 style="color:var(--accent);margin-bottom:8px;">4. 最佳实践</h4><p style="font-size:14px;">• 使用高质量住宅IP<br>• 一个账号固定一个环境<br>• 避免频繁切换<br>• 模拟真实用户行为</p></div>
                     </template>
+
+                    <div style="display:flex;align-items:center;gap:10px;margin-bottom:16px;">
+                        <div style="width:4px;height:18px;background:linear-gradient(180deg, #00BCD4, #3F51B5);border-radius:2px;"></div>
+                        <h4 style="margin:0;color:var(--text-primary);font-size:14px;font-weight:600;">{{ curLang === 'en' ? 'DOCUMENTATION' : '使用文档' }}</h4>
+                    </div>
+                    <button class="help-highlight-card help-doc-card" @click="openExternal('https://browser.geekez.net/doc#doc-usage')">
+                        <div class="help-card-icon">📘</div>
+                        <div class="help-highlight-link">{{ curLang === 'en' ? 'Click to view Detailed User Guide' : '点击查看详细使用说明' }}</div>
+                        <div class="help-card-meta">https://browser.geekez.net/doc#doc-usage</div>
+                    </button>
                 </div>
 
                 <!-- About Section -->
                 <div v-if="activeTab === 'about'" class="help-section active">
                     <div style="text-align:center;margin-bottom:24px;padding:20px 0;">
                         <div style="font-size:28px;font-weight:700;color:var(--text-primary);letter-spacing:1px;">Geek<span style="color:var(--accent);">EZ</span></div>
-                        <div style="font-size:12px;opacity:0.5;margin-top:4px;">v1.5.1 · {{ curLang === 'en' ? 'Anti-detect Browser' : '指纹浏览器' }}</div>
+                        <div style="font-size:12px;opacity:0.5;margin-top:4px;">v1.5.2 · {{ curLang === 'en' ? 'Anti-detect Browser' : '指纹浏览器' }}</div>
                     </div>
                     
                     <div style="display:flex;align-items:center;gap:10px;margin-bottom:16px;">
@@ -82,13 +92,21 @@
                     </div>
 
                     <div style="display:flex;align-items:center;gap:10px;margin-bottom:16px;">
+                        <div style="width:4px;height:18px;background:linear-gradient(180deg, #00BCD4, #3F51B5);border-radius:2px;"></div>
+                        <h4 style="margin:0;color:var(--text-primary);font-size:14px;font-weight:600;">{{ curLang === 'en' ? 'Office Website' : '官网' }}</h4>
+                    </div>
+                    <button class="help-highlight-card" @click="openExternal('https://browser.geekez.net')">
+                        <div style="font-size:11px;color:var(--accent);font-weight:600;margin-bottom:4px;">🌍 {{ curLang === 'en' ? 'Official Website' : '点击打开官网'  }}</div>
+                    </button>
+
+                    <div style="display:flex;align-items:center;gap:10px;margin-bottom:16px;">
                         <div style="width:4px;height:18px;background:linear-gradient(180deg, #9C27B0, #E91E63);border-radius:2px;"></div>
                         <h4 style="margin:0;color:var(--text-primary);font-size:14px;font-weight:600;">{{ curLang === 'en' ? 'COMMUNITY' : '交流社群' }}</h4>
                     </div>
-                    <div style="background:linear-gradient(135deg, var(--input-bg), var(--card-bg));padding:16px;border-radius:8px;border:1px solid var(--border);text-align:center;">
+                    <div class="help-highlight-card">
                         <div style="font-size:18px;margin-bottom:6px;">💬</div>
                         <div style="font-size:12px;opacity:0.8;margin-bottom:8px;">{{ curLang === 'en' ? 'Join our QQ Group for support' : '加入 QQ 群获取支持与交流' }}</div>
-                        <a href="tencent://groupwpa/?subcmd=all&uin=1079216892" :title="curLang === 'en' ? 'Click to join QQ Group' : '点击加入QQ群'" style="font-size:16px;font-weight:600;color:var(--accent);letter-spacing:1px;text-decoration:none;">{{ curLang === 'en' ? 'Click to join: 1079216892' : '点击加入：1079216892' }}</a>
+                        <a href="tencent://groupwpa/?subcmd=all&uin=1079216892" :title="curLang === 'en' ? 'Click to join QQ Group' : '点击加入QQ群'" class="help-highlight-link">{{ curLang === 'en' ? 'Click to join: 1079216892' : '点击加入：1079216892' }}</a>
                     </div>
                 </div>
             </div>
@@ -99,10 +117,15 @@
 <script setup>
 import { ref, onMounted } from 'vue';
 import { useUIStore } from '../store/useUIStore';
+import { ipcService } from '../services/ipc.service';
 
 const uiStore = useUIStore();
 const activeTab = ref('manual');
 const curLang = ref(localStorage.getItem('geekez_lang') || 'cn');
+
+function openExternal(url) {
+    ipcService.openUrl(url);
+}
 
 // 监听 Tab 切换指令 (兼容旧版代码调用)
 window.switchHelpTab = (tabName) => {
@@ -116,3 +139,108 @@ onMounted(() => {
     });
 });
 </script>
+
+<style scoped>
+.help-inline-link {
+    margin-top: 12px;
+    padding: 0;
+    border: none;
+    background: transparent;
+    color: var(--accent);
+    font-size: 12px;
+    font-weight: 600;
+    cursor: pointer;
+}
+
+.help-inline-link:hover {
+    text-decoration: underline;
+}
+
+.help-highlight-card {
+    box-sizing: border-box;
+    display: flex;
+    flex-direction: column;
+    align-items: center;
+    justify-content: center;
+    gap: 6px;
+    width: 100%;
+    max-width: 100%;
+    margin-bottom: 24px;
+    padding: 16px;
+    border: 1px solid var(--border);
+    border-radius: 8px;
+    background: linear-gradient(135deg, var(--input-bg), var(--card-bg));
+    text-align: center;
+    overflow: hidden;
+}
+
+.help-doc-card {
+    align-items: flex-start;
+    text-align: left;
+    padding: 18px;
+    border-color: rgba(63, 81, 181, 0.28);
+    background:
+        radial-gradient(circle at top right, rgba(63, 81, 181, 0.14), transparent 34%),
+        linear-gradient(135deg, rgba(0, 188, 212, 0.08), rgba(63, 81, 181, 0.12)),
+        linear-gradient(135deg, var(--input-bg), var(--card-bg));
+    cursor: pointer;
+    transition: transform 0.15s ease, border-color 0.15s ease, box-shadow 0.15s ease;
+}
+
+.help-doc-card:hover {
+    transform: translateY(-1px);
+    border-color: rgba(63, 81, 181, 0.5);
+    box-shadow: 0 10px 24px rgba(0, 0, 0, 0.12);
+}
+
+.help-card-icon {
+    font-size: 22px;
+    line-height: 1;
+}
+
+
+
+.help-card-meta {
+    display: inline-flex;
+    max-width: 100%;
+    padding: 4px 10px;
+    border-radius: 999px;
+    background: rgba(63, 81, 181, 0.12);
+    color: var(--accent);
+    font-size: 11px;
+    font-weight: 600;
+    word-break: break-all;
+}
+
+.help-highlight-link {
+    display: inline-block;
+    max-width: 100%;
+    color: var(--accent);
+    font-size: 16px;
+    font-weight: 600;
+    letter-spacing: 1px;
+    line-height: 1.45;
+    text-decoration: none;
+    word-break: break-word;
+}
+
+@media (max-width: 640px) {
+    .help-highlight-card {
+        padding: 14px;
+        margin-bottom: 18px;
+    }
+
+    .help-card-title {
+        font-size: 13px;
+    }
+
+    .help-card-desc {
+        font-size: 11px;
+    }
+
+    .help-highlight-link {
+        font-size: 14px;
+        letter-spacing: 0.4px;
+    }
+}
+</style>

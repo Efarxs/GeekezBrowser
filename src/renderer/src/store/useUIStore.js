@@ -29,6 +29,8 @@ export const useUIStore = defineStore('ui', () => {
     const alertShowBtn = ref(true);
     const confirmMsg = ref('');
     const confirmNotes = ref('');
+    const confirmOkText = ref('');
+    const confirmCancelText = ref('');
     const inputModalTitle = ref('');
     const inputModalValue = ref('');
     
@@ -47,6 +49,7 @@ export const useUIStore = defineStore('ui', () => {
     
     // Callbacks for legacy/store logic
     let confirmCallback = null;
+    let confirmCancelCallback = null;
     let inputCallback = null;
     let passwordCallback = null;
 
@@ -115,17 +118,24 @@ export const useUIStore = defineStore('ui', () => {
         alertModalVisible.value = true;
     };
 
-    const showConfirm = (msg, callback, notes = '') => {
+    const showConfirm = (msg, callback, notes = '', options = {}) => {
         confirmMsg.value = msg;
         confirmNotes.value = notes;
+        confirmOkText.value = options.okText || '';
+        confirmCancelText.value = options.cancelText || '';
         confirmCallback = callback;
+        confirmCancelCallback = typeof options.onCancel === 'function' ? options.onCancel : null;
         confirmModalVisible.value = true;
     };
 
     const handleConfirm = (result) => {
         confirmModalVisible.value = false;
         if (result && confirmCallback) confirmCallback();
+        if (!result && confirmCancelCallback) confirmCancelCallback();
         confirmCallback = null;
+        confirmCancelCallback = null;
+        confirmOkText.value = '';
+        confirmCancelText.value = '';
     };
 
     const showInput = (title, callback) => {
@@ -183,6 +193,8 @@ export const useUIStore = defineStore('ui', () => {
         alertShowBtn,
         confirmMsg,
         confirmNotes,
+        confirmOkText,
+        confirmCancelText,
         inputModalTitle,
         inputModalValue,
         currentEditId,

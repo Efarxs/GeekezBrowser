@@ -8,8 +8,8 @@
                 class="confirm-notes">
             </div>
             <div class="modal-footer confirm-footer">
-                <button class="outline" @click="uiStore.handleConfirm(false)">{{ $t('cancel') || 'Cancel' }}</button>
-                <button class="primary" @click="uiStore.handleConfirm(true)">{{ $t('ok') || 'OK' }}</button>
+                <button class="outline" @click="uiStore.handleConfirm(false)">{{ uiStore.confirmCancelText || ($t('cancel') || 'Cancel') }}</button>
+                <button class="primary" @click="uiStore.handleConfirm(true)">{{ uiStore.confirmOkText || ($t('ok') || 'OK') }}</button>
             </div>
         </div>
     </div>

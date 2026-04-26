@@ -43,7 +43,7 @@
                     </path>
                     <circle cx="12" cy="12" r="3"></circle>
                 </svg></div>
-            <div class="icon-btn" @click="checkUpdates" title="Check Updates" id="btnUpdate"><svg viewBox="0 0 24 24"
+            <div class="icon-btn" :class="{ 'has-update': hasUpdateBadge }" @click="checkUpdates" title="Check Updates" id="btnUpdate"><svg viewBox="0 0 24 24"
                     width="20" height="20" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round"
                     stroke-linejoin="round">
                     <circle cx="12" cy="12" r="10"></circle>
@@ -56,13 +56,64 @@
 </template>
 
 <script setup>
-import { onMounted, ref } from 'vue';
+import { computed, onMounted, ref } from 'vue';
 import { useUIStore } from '../store/useUIStore';
 import { ipcService } from '../services/ipc.service';
-import { settingService } from '../services/setting.service';
 
 const uiStore = useUIStore();
 const appVersion = ref('');
+const pendingAppVersion = ref('');
+const pendingXrayVersion = ref('');
+const hasUpdateBadge = computed(() => !!pendingAppVersion.value || !!pendingXrayVersion.value);
+
+const SKIPPED_APP_VERSION_KEY = 'geekez_skipped_version';
+const SKIPPED_XRAY_VERSION_KEY = 'geekez_skipped_xray_version';
+
+const t = (key) => window.t ? window.t(key) : key;
+
+function normalizeVersion(version) {
+    return String(version || '').trim().replace(/^v/i, '');
+}
+
+function getSkippedVersion(storageKey) {
+    return normalizeVersion(localStorage.getItem(storageKey) || '');
+}
+
+function setSkippedVersion(storageKey, version) {
+    localStorage.setItem(storageKey, normalizeVersion(version));
+}
+
+function clearSkippedVersion(storageKey, version = '') {
+    const current = getSkippedVersion(storageKey);
+    const normalized = normalizeVersion(version);
+    if (!normalized || current === normalized) {
+        localStorage.removeItem(storageKey);
+    }
+}
+
+function escapeHtml(value) {
+    return String(value || '')
+        .replace(/&/g, '&amp;')
+        .replace(/</g, '&lt;')
+        .replace(/>/g, '&gt;');
+}
+
+function parseMarkdown(notes) {
+    if (!notes) return '';
+
+    return escapeHtml(notes)
+        .replace(/\*\*(.*?)\*\*/g, '<strong>$1</strong>')
+        .replace(/\*(.*?)\*/g, '<em>$1</em>')
+        .replace(/\[([^\]]+)\]\(([^)]+)\)/g, '<a href="#" onclick="window.electronAPI.invoke(\'open-url\', \'$2\'); return false;" style="color:var(--accent);text-decoration:none;">$1</a>')
+        .replace(/^\s*-\s+(.*)$/gm, '<li>$1</li>')
+        .replace(/(<li>.*<\/li>)/s, '<ul style="padding-left:20px;margin:5px 0;">$1</ul>')
+        .replace(/\n\n/g, '<br><br>')
+        .replace(/\n/g, '<br>');
+}
+
+function closeCheckingAlert() {
+    uiStore.alertModalVisible = false;
+}
 
 const openGithub = () => {
     ipcService.openUrl('https://github.com/echohs/GeekezBrowser');
@@ -76,25 +127,138 @@ const openSettings = () => {
     uiStore.settingsModalVisible = true;
 };
 
-const checkUpdates = async () => {
-    const t = (key) => window.t ? window.t(key) : key;
-    if (window.uiStore) window.uiStore.showAlert(t('checkingUpdate'), false);
-    try {
-        const result = await settingService.checkUpdates();
-        if (result && result.hasUpdate) {
-            if (window.uiStore) {
-                window.uiStore.showConfirm(
-                    `${t('appUpdateFound')} v${result.latestVersion}\n\n${t('askUpdate')}`,
-                    () => { ipcService.openUrl(result.downloadUrl); }
-                );
+async function promptAppUpdate(version, url, notes, onSkip = null) {
+    pendingAppVersion.value = normalizeVersion(version);
+    closeCheckingAlert();
+
+    uiStore.showConfirm(
+        `${t('appUpdateFound')} (v${version})`,
+        () => {
+            pendingAppVersion.value = '';
+            clearSkippedVersion(SKIPPED_APP_VERSION_KEY, version);
+            ipcService.openUrl(url);
+        },
+        parseMarkdown(notes),
+        {
+            cancelText: t('skipVersion'),
+            okText: t('startUpgrade'),
+            onCancel: () => {
+                setSkippedVersion(SKIPPED_APP_VERSION_KEY, version);
+                pendingAppVersion.value = '';
+                if (typeof onSkip === 'function') onSkip();
             }
-        } else if (result && result.error) {
-            if (window.uiStore) window.uiStore.showAlert(t('updateError'));
-        } else {
-            if (window.uiStore) window.uiStore.showAlert(t('noUpdate'));
         }
+    );
+}
+
+async function promptXrayUpdate(version, downloadUrl) {
+    pendingXrayVersion.value = normalizeVersion(version);
+    closeCheckingAlert();
+
+    uiStore.showConfirm(
+        `${t('xrayUpdatePrompt')} (v${version})`,
+        async () => {
+            uiStore.showAlert(`${t('xrayUpdateFound')} (v${version})`, false);
+            const success = await ipcService.invoke('download-xray-update', downloadUrl);
+            closeCheckingAlert();
+
+            if (success) {
+                pendingXrayVersion.value = '';
+                clearSkippedVersion(SKIPPED_XRAY_VERSION_KEY, version);
+                uiStore.showAlert(t('updateDownloaded'));
+                return;
+            }
+
+            uiStore.showAlert(t('updateError'));
+        },
+        '',
+        {
+            cancelText: t('skipVersion'),
+            okText: t('confirmUpdate'),
+            onCancel: () => {
+                setSkippedVersion(SKIPPED_XRAY_VERSION_KEY, version);
+                pendingXrayVersion.value = '';
+            }
+        }
+    );
+}
+
+async function checkAppUpdateFlow(onSkip = null) {
+    const appRes = await ipcService.invoke('check-app-update');
+    const remoteVersion = normalizeVersion(appRes?.remote);
+
+    if (!appRes?.update || !remoteVersion) {
+        pendingAppVersion.value = '';
+        return { prompted: false, update: false, error: appRes?.error || '' };
+    }
+
+    if (getSkippedVersion(SKIPPED_APP_VERSION_KEY) === remoteVersion) {
+        pendingAppVersion.value = '';
+        return { prompted: false, update: false, skipped: true };
+    }
+
+    await promptAppUpdate(remoteVersion, appRes.url, appRes.notes, onSkip);
+    return { prompted: true, update: true };
+}
+
+async function checkXrayUpdateFlow() {
+    const xrayRes = await ipcService.invoke('check-xray-update');
+    const remoteVersion = normalizeVersion(xrayRes?.remote);
+
+    if (!xrayRes?.update || !remoteVersion) {
+        pendingXrayVersion.value = '';
+        return { prompted: false, update: false };
+    }
+
+    if (getSkippedVersion(SKIPPED_XRAY_VERSION_KEY) === remoteVersion) {
+        pendingXrayVersion.value = '';
+        return { prompted: false, update: false, skipped: true };
+    }
+
+    await promptXrayUpdate(remoteVersion, xrayRes.downloadUrl);
+    return { prompted: true, update: true };
+}
+
+const checkUpdates = async () => {
+    const btn = document.getElementById('btnUpdate');
+    if (btn) {
+        btn.style.transition = 'transform 1s';
+        btn.style.transform = 'rotate(360deg)';
+    }
+
+    uiStore.showAlert(t('checkingUpdate'), false);
+    let hadError = false;
+
+    try {
+        const appResult = await checkAppUpdateFlow(async () => {
+            await checkXrayUpdateFlow();
+        });
+        hadError = hadError || !!appResult.error;
+        if (appResult.prompted) return;
+
+        const xrayResult = await checkXrayUpdateFlow();
+        if (xrayResult.prompted) return;
+
+        uiStore.showAlert(hadError ? t('updateError') : t('noUpdate'));
     } catch (e) {
-        if (window.uiStore) window.uiStore.showAlert(t('updateError'));
+        uiStore.showAlert(t('updateError'));
+    } finally {
+        setTimeout(() => {
+            if (btn) btn.style.transform = 'none';
+        }, 1000);
+    }
+};
+
+const checkUpdatesSilent = async () => {
+    try {
+        const appResult = await checkAppUpdateFlow(async () => {
+            await checkXrayUpdateFlow();
+        });
+        if (appResult.prompted) return;
+
+        await checkXrayUpdateFlow();
+    } catch (e) {
+        console.error('Silent update check failed:', e);
     }
 };
 
@@ -103,7 +267,6 @@ const toggleLang = () => {
 };
 
 onMounted(() => {
-    // Initial theme apply
     document.body.setAttribute('data-theme', uiStore.theme);
     ipcService.getAppInfo()
         .then((info) => {
@@ -112,6 +275,10 @@ onMounted(() => {
             }
         })
         .catch(() => { });
+
+    setTimeout(() => {
+        checkUpdatesSilent().catch(() => { });
+    }, 2200);
 });
 </script>
 

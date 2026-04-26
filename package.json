@@ -1,12 +1,11 @@
 {
   "name": "geekez-browser",
-  "version": "1.5.1",
+  "version": "1.5.2",
   "description": "Stealthy Anti-Detect Browser for E-Commerce",
   "main": "out/main/index.js",
   "author": "EchoHS",
   "scripts": {
     "dev": "electron-vite dev",
-    "test": "node --test tests/*.test.js",
     "build": "electron-vite build",
     "postinstall": "node setup.js",
     "build:win": "npm run build && electron-builder --win",

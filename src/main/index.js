@@ -14,6 +14,7 @@ const zlib = require('zlib');
 const { promisify } = require('util');
 const { getChromiumPath: resolveChromiumPathForApp } = require('./chromium-path');
 const { CLOSE_BEHAVIOR, normalizeCloseBehavior, resolveCloseBehavior } = require('./close-behavior');
+const { fetchLatestGitHubReleaseInfo } = require('./release-check');
 const { resolveXrayAssetName } = require('./xray-assets');
 const gzip = promisify(zlib.gzip);
 const gunzip = promisify(zlib.gunzip);
@@ -2475,43 +2476,20 @@ ipcMain.handle('check-updates', async () => {
             mainWindow.webContents.send('update-status', { type: 'checking' });
         }
 
-        const https = require('https');
-        const data = await new Promise((resolve, reject) => {
-            const req = https.get('https://api.github.com/repos/EchoHS/GeekezBrowser/releases/latest', {
-                headers: { 'User-Agent': 'GeekezBrowser/' + currentVersion }
-            }, (res) => {
-                let body = '';
-                res.on('data', chunk => body += chunk);
-                res.on('end', () => {
-                    try { resolve(JSON.parse(body)); } catch (e) { reject(new Error('Invalid response')); }
-                });
-            });
-            req.on('error', reject);
-            req.setTimeout(10000, () => { req.destroy(); reject(new Error('Timeout')); });
+        const releaseInfo = await fetchLatestGitHubReleaseInfo({
+            owner: 'EchoHS',
+            repo: 'GeekezBrowser',
+            currentVersion
         });
-
-        const latestVersion = (data.tag_name || '').replace(/^v/, '');
-        if (!latestVersion) {
-            return { hasUpdate: false, message: 'noUpdate' };
-        }
-
-        // Simple version comparison
-        const current = currentVersion.split('.').map(Number);
-        const latest = latestVersion.split('.').map(Number);
-        let hasUpdate = false;
-        for (let i = 0; i < Math.max(current.length, latest.length); i++) {
-            const c = current[i] || 0;
-            const l = latest[i] || 0;
-            if (l > c) { hasUpdate = true; break; }
-            if (c > l) break;
-        }
+        const latestVersion = releaseInfo.latestVersion;
+        const hasUpdate = compareVersions(latestVersion, currentVersion) > 0;
 
         if (hasUpdate) {
             return {
                 hasUpdate: true,
                 currentVersion,
                 latestVersion,
-                downloadUrl: data.html_url || 'https://github.com/EchoHS/GeekezBrowser/releases',
+                downloadUrl: releaseInfo.downloadUrl || 'https://github.com/EchoHS/GeekezBrowser/releases',
                 message: 'appUpdateFound'
             };
         }
@@ -2701,7 +2679,7 @@ ipcMain.handle('test-proxy-latency-batch', async (_e, entries) => {
     });
 });
 ipcMain.handle('set-title-bar-color', (e, colors) => { const win = BrowserWindow.fromWebContents(e.sender); if (win) { if (process.platform === 'win32') try { win.setTitleBarOverlay({ color: colors.bg, symbolColor: colors.symbol }); } catch (e) { } win.setBackgroundColor(colors.bg); } });
-ipcMain.handle('check-app-update', async () => { try { const data = await fetchJson('https://api.github.com/repos/EchoHS/GeekezBrowser/releases/latest'); if (!data || !data.tag_name) return { update: false }; const remote = data.tag_name.replace('v', ''); if (compareVersions(remote, app.getVersion()) > 0) { return { update: true, remote, url: 'https://browser.geekez.net/#downloads', notes: data.body }; } return { update: false }; } catch (e) { return { update: false, error: e.message }; } });
+ipcMain.handle('check-app-update', async () => { try { const releaseInfo = await fetchLatestGitHubReleaseInfo({ owner: 'EchoHS', repo: 'GeekezBrowser', currentVersion: app.getVersion() }); if (compareVersions(releaseInfo.latestVersion, app.getVersion()) > 0) { return { update: true, remote: releaseInfo.latestVersion, url: 'https://browser.geekez.net/#downloads', notes: releaseInfo.notes }; } return { update: false }; } catch (e) { return { update: false, error: e.message }; } });
 ipcMain.handle('check-xray-update', async () => { try { const data = await fetchJson('https://api.github.com/repos/XTLS/Xray-core/releases/latest'); if (!data || !data.tag_name) return { update: false }; const remoteVer = data.tag_name; const currentVer = await getLocalXrayVersion(); if (remoteVer !== currentVer) { const assetName = resolveXrayAssetName({ platform: os.platform(), arch: os.arch() }); if (!assetName) return { update: false, error: `Unsupported platform/arch: ${os.platform()}-${os.arch()}` }; const downloadUrl = `https://gh-proxy.com/https://github.com/XTLS/Xray-core/releases/download/${remoteVer}/${assetName}`; return { update: true, remote: remoteVer.replace(/^v/, ''), downloadUrl }; } return { update: false }; } catch (e) { return { update: false }; } });
 ipcMain.handle('download-xray-update', async (e, url) => {
     const exeName = process.platform === 'win32' ? 'xray.exe' : 'xray';
