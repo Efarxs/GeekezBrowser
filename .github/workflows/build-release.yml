@@ -131,10 +131,11 @@ jobs:
       - name: Upload assets to published release
         env:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          GH_REPO: ${{ github.repository }}
         run: |
           mapfile -d '' files < <(find artifacts -type f \( -name '*.dmg' -o -name '*.exe' -o -name '*.zip' -o -name '*.AppImage' \) -print0)
           if [ "${#files[@]}" -eq 0 ]; then
             echo "No release assets found."
             exit 1
           fi
-          gh release upload "${{ github.event.release.tag_name }}" "${files[@]}" --clobber
+          gh release upload "${{ github.event.release.tag_name }}" "${files[@]}" --clobber --repo "${{ github.repository }}"
