@@ -40,7 +40,7 @@
                 <div v-if="activeTab === 'about'" class="help-section active">
                     <div style="text-align:center;margin-bottom:24px;padding:20px 0;">
                         <div style="font-size:28px;font-weight:700;color:var(--text-primary);letter-spacing:1px;">Geek<span style="color:var(--accent);">EZ</span></div>
-                        <div style="font-size:12px;opacity:0.5;margin-top:4px;">v1.5.2 · {{ curLang === 'en' ? 'Anti-detect Browser' : '指纹浏览器' }}</div>
+                        <div style="font-size:12px;opacity:0.5;margin-top:4px;">{{ appVersion }} · {{ curLang === 'en' ? 'Anti-detect Browser' : '指纹浏览器' }}</div>
                     </div>
                     
                     <div style="display:flex;align-items:center;gap:10px;margin-bottom:16px;">
@@ -122,9 +122,21 @@ import { ipcService } from '../services/ipc.service';
 const uiStore = useUIStore();
 const activeTab = ref('manual');
 const curLang = ref(localStorage.getItem('geekez_lang') || 'cn');
+const appVersion = ref('v...');
 
 function openExternal(url) {
     ipcService.openUrl(url);
+}
+
+async function loadAppVersion() {
+    try {
+        const info = await ipcService.getAppInfo();
+        if (info && info.version) {
+            appVersion.value = `v${info.version}`;
+        }
+    } catch {
+        // Keep fallback placeholder when app version is temporarily unavailable.
+    }
 }
 
 // 监听 Tab 切换指令 (兼容旧版代码调用)
@@ -134,6 +146,7 @@ window.switchHelpTab = (tabName) => {
 
 // 监听语言变化
 onMounted(() => {
+    loadAppVersion();
     window.addEventListener('storage', () => {
         curLang.value = localStorage.getItem('geekez_lang') || 'cn';
     });

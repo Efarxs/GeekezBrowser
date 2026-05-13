@@ -16,7 +16,8 @@ export const profileService = {
      */
     async launch(id) {
         try {
-            const watermarkStyle = localStorage.getItem('geekez_watermark_style') || 'enhanced';
+            const settings = await ipcService.getSettings().catch(() => null);
+            const watermarkStyle = settings?.watermarkStyle || localStorage.getItem('geekez_watermark_style') || 'enhanced';
             const lang = localStorage.getItem('geekez_lang') === 'en' ? 'en' : 'cn';
             const msg = await ipcService.invoke('launch-profile', id, watermarkStyle, lang);
             return {

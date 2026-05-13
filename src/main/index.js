@@ -23,6 +23,11 @@ const { SocksClient } = require('socks');
 
 const uuidv4 = () => crypto.randomUUID();
 
+const gotSingleInstanceLock = app.requestSingleInstanceLock();
+if (!gotSingleInstanceLock) {
+    app.quit();
+}
+
 let getPortApiPromise = null;
 async function resolveGetPortApi() {
     if (!getPortApiPromise) {
@@ -60,7 +65,7 @@ async function createSocksProxyAgent(proxyUrl) {
 // Only disable if GPU compatibility issues occur
 
 import { generateXrayConfig, parseProxyLink, getProxyRemark } from './utils';
-import { generateFingerprint, getInjectScript } from './fingerprint';
+import { generateFingerprint, getInjectScript, getWatermarkScript } from './fingerprint';
 
 const isDev = !app.isPackaged;
 const RESOURCES_BIN = isDev ? path.join(app.getAppPath(), 'resources', 'bin') : path.join(process.resourcesPath, 'bin');
@@ -224,6 +229,56 @@ function shouldStreamApiOpenRequest(req, params) {
     return accept.includes('text/plain');
 }
 
+function parseCliLikeArgs(rawValue) {
+    const text = String(rawValue || '').trim();
+    if (!text) return [];
+
+    const matches = text.match(/"[^"]*"|'[^']*'|[^\s]+/g) || [];
+    return matches
+        .map((part) => String(part || '').trim())
+        .map((part) => {
+            if ((part.startsWith('"') && part.endsWith('"')) || (part.startsWith("'") && part.endsWith("'"))) {
+                return part.slice(1, -1);
+            }
+            return part;
+        })
+        .filter(Boolean);
+}
+
+function normalizeLaunchOverrideArgs(input) {
+    const source = Array.isArray(input) ? input : [input];
+    const flat = [];
+
+    for (const item of source) {
+        if (Array.isArray(item)) {
+            flat.push(...normalizeLaunchOverrideArgs(item));
+            continue;
+        }
+        flat.push(...parseCliLikeArgs(item));
+    }
+
+    const seen = new Set();
+    return flat.filter((arg) => {
+        const normalized = String(arg || '').trim();
+        if (!normalized || !normalized.startsWith('--')) return false;
+        if (seen.has(normalized)) return false;
+        seen.add(normalized);
+        return true;
+    });
+}
+
+function resolveApiLaunchOverrideArgs(params) {
+    const rawArgs = params?.getAll?.('args') || [];
+    return normalizeLaunchOverrideArgs(rawArgs);
+}
+
+function normalizeStoredCustomArgs(input, fallbackValue = '') {
+    if (input === undefined) return fallbackValue;
+    if (input === null || input === '') return '';
+    const normalizedArgs = normalizeLaunchOverrideArgs(input);
+    return normalizedArgs.join('\n');
+}
+
 function createCompositeSender(targets = []) {
     const validTargets = targets.filter(target => target && typeof target.send === 'function');
     return {
@@ -310,7 +365,7 @@ function getApiLaunchUiSender() {
     return null;
 }
 
-async function streamApiOpenProfile({ req, res, params, settings, profile, resolveRemoteDebugPortForProfile }) {
+async function streamApiOpenProfile({ req, res, params, settings, profile, resolveRemoteDebugPortForProfile, launchOverrideArgs = [] }) {
     const lang = resolveApiPreferredLang(params, settings);
     const profileName = profile.name || profile.id || (lang === 'en' ? 'Profile' : '环境');
     const streamSender = createApiOpenStreamSender(req, res, profileName, lang);
@@ -332,11 +387,18 @@ async function streamApiOpenProfile({ req, res, params, settings, profile, resol
             return { __streamHandled: true };
         }
 
+        if (launchOverrideArgs.length > 0) {
+            streamSender.writeLine(lang === 'en'
+                ? `Temporary launch args: ${launchOverrideArgs.join(' ')}`
+                : `本次临时启动参数：${launchOverrideArgs.join(' ')}`);
+        }
+
         const launchMessage = await launchProfileHandler(
             { sender },
             profile.id,
             settings.watermarkStyle || 'enhanced',
-            lang
+            lang,
+            { launchArgsOverride: launchOverrideArgs }
         );
 
         streamSender.writeLine(lang === 'en'
@@ -1355,6 +1417,9 @@ async function buildProfileFromInput(rawData, profiles, settings, existingProfil
 
     const fingerprint = normalizeFingerprint(mergedFingerprintSource);
     const debugPort = await allocateDebugPortIfNeeded(settings, profiles, firstDefined(data.debugPort, existingProfile?.debugPort));
+    const normalizedCustomArgs = hasOwn(data, 'args')
+        ? normalizeStoredCustomArgs(data.args, existingProfile?.customArgs || '')
+        : normalizeStoredCustomArgs(firstDefined(data.customArgs, existingProfile?.customArgs, ''), existingProfile?.customArgs || '');
 
     return {
         ...(existingProfile || {}),
@@ -1365,7 +1430,7 @@ async function buildProfileFromInput(rawData, profiles, settings, existingProfil
         fingerprint,
         preProxyOverride: firstDefined(data.preProxyOverride, existingProfile?.preProxyOverride, 'default'),
         debugPort,
-        customArgs: firstDefined(data.customArgs, existingProfile?.customArgs, '') || '',
+        customArgs: normalizedCustomArgs,
         isSetup: existingProfile?.isSetup || false,
         createdAt: existingProfile?.createdAt || Date.now()
     };
@@ -1461,6 +1526,7 @@ async function handleApiRequest(method, pathname, body, params, context = {}) {
     if (method === 'GET' && openMatch) {
         const profile = findProfile(decodeURIComponent(openMatch[1]));
         if (!profile) return { status: 404, data: { success: false, error: 'Profile not found' } };
+        const launchOverrideArgs = resolveApiLaunchOverrideArgs(params);
         if (shouldStreamApiOpenRequest(context.req, params) && context.req && context.res) {
             return await streamApiOpenProfile({
                 req: context.req,
@@ -1468,7 +1534,8 @@ async function handleApiRequest(method, pathname, body, params, context = {}) {
                 params,
                 settings,
                 profile,
-                resolveRemoteDebugPortForProfile
+                resolveRemoteDebugPortForProfile,
+                launchOverrideArgs
             });
         }
         if (activeProcesses[profile.id]) {
@@ -1494,13 +1561,20 @@ async function handleApiRequest(method, pathname, body, params, context = {}) {
                     isDestroyed: () => true
                 }
             };
-        const launchMessage = await launchProfileHandler(launchEvent, profile.id, settings.watermarkStyle || 'enhanced', lang);
+        const launchMessage = await launchProfileHandler(
+            launchEvent,
+            profile.id,
+            settings.watermarkStyle || 'enhanced',
+            lang,
+            { launchArgsOverride: launchOverrideArgs }
+        );
         const launchedPort = await resolveRemoteDebugPortForProfile(profile.id, profile.debugPort);
         const launchedPayload = {
             success: true,
             message: launchMessage || 'Launched',
             profileId: profile.id,
-            name: profile.name
+            name: profile.name,
+            launchArgs: launchOverrideArgs
         };
         if (launchedPort) {
             launchedPayload['remote port'] = launchedPort;
@@ -1834,6 +1908,10 @@ async function focusRunningProfileWindow(profileId) {
         return false;
     }
 }
+
+app.on('second-instance', () => {
+    showMainWindow();
+});
 
 async function readAllProfilesSafe() {
     if (!fs.existsSync(PROFILES_FILE)) return [];
@@ -3997,8 +4075,9 @@ ipcMain.handle('export-data', async (e, type) => {
 });
 
 // --- 核心启动逻辑 ---
-const launchProfileHandler = async (event, profileId, watermarkStyle, preferredLang) => {
+const launchProfileHandler = async (event, profileId, watermarkStyle, preferredLang, launchOptions = {}) => {
     const sender = event.sender;
+    const launchArgsOverride = normalizeLaunchOverrideArgs(launchOptions.launchArgsOverride || []);
     const progressTitle = preferredLang === 'en' ? 'Launching Profile' : '正在启动环境';
     const progressWarn = preferredLang === 'en'
         ? 'Please wait while the environment starts. Do not close the application.'
@@ -4386,6 +4465,19 @@ const launchProfileHandler = async (event, profileId, watermarkStyle, preferredL
             }
         }
 
+        if (launchArgsOverride.length > 0) {
+            launchArgs.push(...launchArgsOverride);
+            console.log('⚡ API Launch Args Override:', launchArgsOverride.join(' '));
+            updateLaunchProgress(
+                84,
+                preferredLang === 'en'
+                    ? `Applying temporary launch args: ${launchArgsOverride.join(' ')}`
+                    : `正在应用本次临时启动参数：${launchArgsOverride.join(' ')}`,
+                true,
+                { step: 7, profileName: progressProfileName }
+            );
+        }
+
         updateLaunchProgress(
             86,
             preferredLang === 'en' ? 'Launching browser window...' : '正在启动浏览器窗口...',
@@ -4431,6 +4523,7 @@ const launchProfileHandler = async (event, profileId, watermarkStyle, preferredL
             ? `${targetLang},${shortLang};q=0.9`
             : targetLang;
         const fingerprintInjectScript = getInjectScript(profile.fingerprint, profile.name, style);
+        const watermarkInjectScript = getWatermarkScript(profile.name, style);
         const enableWebglOverride = !!(
             profile.fingerprint?.webglProfile !== 'none' &&
             profile.fingerprint?.webgl &&
@@ -4543,11 +4636,17 @@ const launchProfileHandler = async (event, profileId, watermarkStyle, preferredL
                     await page.evaluateOnNewDocument(fingerprintInjectScript);
                 } catch (e) { }
                 try {
+                    await page.evaluateOnNewDocument(watermarkInjectScript);
+                } catch (e) { }
+                try {
                     await page.evaluateOnNewDocument(webglOverrideScript);
                 } catch (e) { }
 
                 try {
                     await page.evaluate(fingerprintInjectScript);
+                } catch (e) { }
+                try {
+                    await page.evaluate(watermarkInjectScript);
                 } catch (e) { }
                 try {
                     await page.evaluate(webglOverrideScript);
