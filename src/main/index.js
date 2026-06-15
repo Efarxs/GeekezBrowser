@@ -65,7 +65,7 @@ async function createSocksProxyAgent(proxyUrl) {
 // Only disable if GPU compatibility issues occur
 
 import { generateXrayConfig, parseProxyLink, getProxyRemark } from './utils';
-import { generateFingerprint, getInjectScript, getWatermarkScript } from './fingerprint';
+import { generateFingerprint, getInjectScript, getGeolocationScript, getWatermarkScript } from './fingerprint';
 
 const isDev = !app.isPackaged;
 const RESOURCES_BIN = isDev ? path.join(app.getAppPath(), 'resources', 'bin') : path.join(process.resourcesPath, 'bin');
@@ -2349,7 +2349,7 @@ async function generateExtension(profilePath, fingerprint, profileName, watermar
         content_scripts: [
             {
                 matches: ["<all_urls>"],
-                js: ["content.js"],
+                js: ["geo.js", "content.js"],
                 run_at: "document_start",
                 all_frames: true,
                 match_about_blank: true,
@@ -2369,8 +2369,10 @@ async function generateExtension(profilePath, fingerprint, profileName, watermar
         action: { default_popup: "popup.html" }
     };
     const style = watermarkStyle || 'enhanced';
+    const geoScriptContent = getGeolocationScript(fingerprint);
     const scriptContent = getInjectScript(fingerprint, profileName, style);
     await fs.writeJson(path.join(extDir, 'manifest.json'), manifest);
+    await fs.writeFile(path.join(extDir, 'geo.js'), geoScriptContent);
     await fs.writeFile(path.join(extDir, 'content.js'), scriptContent);
 
     // --- background.js ---
@@ -4742,6 +4744,7 @@ const launchProfileHandler = async (event, profileId, watermarkStyle, preferredL
         const acceptLanguageHeader = shortLang && shortLang !== targetLang
             ? `${targetLang},${shortLang};q=0.9`
             : targetLang;
+        const geolocationScript = getGeolocationScript(profile.fingerprint);
         const fingerprintInjectScript = getInjectScript(profile.fingerprint, profile.name, style);
         const watermarkInjectScript = getWatermarkScript(profile.name, style);
         const enableWebglOverride = !!(
@@ -4853,6 +4856,9 @@ const launchProfileHandler = async (event, profileId, watermarkStyle, preferredL
             if (!page) return;
             try {
                 try {
+                    await page.evaluateOnNewDocument(geolocationScript);
+                } catch (e) { }
+                try {
                     await page.evaluateOnNewDocument(fingerprintInjectScript);
                 } catch (e) { }
                 try {
@@ -4862,6 +4868,9 @@ const launchProfileHandler = async (event, profileId, watermarkStyle, preferredL
                     await page.evaluateOnNewDocument(webglOverrideScript);
                 } catch (e) { }
 
+                try {
+                    await page.evaluate(geolocationScript);
+                } catch (e) { }
                 try {
                     await page.evaluate(fingerprintInjectScript);
                 } catch (e) { }

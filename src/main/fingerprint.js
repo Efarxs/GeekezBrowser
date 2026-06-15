@@ -877,7 +877,7 @@ function getInjectScript(fp, profileName, watermarkStyle) {
 
             if (enableUaSpoof) {
                 defineValueGetter(Navigator.prototype, 'userAgent', targetUa, 'get userAgent');
-                defineValueGetter(Navigator.prototype, 'appVersion', targetUa.replace(/^Mozilla\//, ''), 'get appVersion');
+                defineValueGetter(Navigator.prototype, 'appVersion', targetUa.startsWith('Mozilla/') ? targetUa.slice('Mozilla/'.length) : targetUa, 'get appVersion');
                 defineValueGetter(Navigator.prototype, 'platform', targetPlatform, 'get platform');
                 defineValueGetter(Navigator.prototype, 'vendor', 'Google Inc.', 'get vendor');
 
@@ -926,27 +926,45 @@ function getInjectScript(fp, profileName, watermarkStyle) {
                 const longitude = fp.geolocation.longitude;
                 const accuracy = fp.geolocation.accuracy || (500 + Math.floor(Math.random() * 1000));
 
-                const fakeGetCurrentPosition = function getCurrentPosition(success) {
+                const buildPosition = () => ({
+                    coords: {
+                        latitude: latitude + (Math.random() - 0.5) * 0.005,
+                        longitude: longitude + (Math.random() - 0.5) * 0.005,
+                        accuracy,
+                        altitude: null,
+                        altitudeAccuracy: null,
+                        heading: null,
+                        speed: null
+                    },
+                    timestamp: Date.now()
+                });
+
+                const fakeGetCurrentPosition = function getCurrentPosition(success, error, options) {
                     const position = {
-                        coords: {
-                            latitude: latitude + (Math.random() - 0.5) * 0.005,
-                            longitude: longitude + (Math.random() - 0.5) * 0.005,
-                            accuracy,
-                            altitude: null,
-                            altitudeAccuracy: null,
-                            heading: null,
-                            speed: null
-                        },
-                        timestamp: Date.now()
+                        ...buildPosition()
                     };
                     setTimeout(() => {
                         if (typeof success === 'function') success(position);
                     }, 12);
                 };
 
-                const fakeWatchPosition = function watchPosition(success) {
-                    fakeGetCurrentPosition(success);
-                    return Math.floor(Math.random() * 10000) + 1;
+                const watchTimers = new Map();
+                const fakeWatchPosition = function watchPosition(success, error, options) {
+                    const watchId = Math.floor(Math.random() * 100000) + 1;
+                    fakeGetCurrentPosition(success, error, options);
+                    if (typeof success === 'function') {
+                        watchTimers.set(watchId, setInterval(() => {
+                            try { success(buildPosition()); } catch (e) { }
+                        }, 10000));
+                    }
+                    return watchId;
+                };
+
+                const fakeClearWatch = function clearWatch(watchId) {
+                    if (watchTimers.has(watchId)) {
+                        clearInterval(watchTimers.get(watchId));
+                        watchTimers.delete(watchId);
+                    }
                 };
 
                 try {
@@ -957,6 +975,11 @@ function getInjectScript(fp, profileName, watermarkStyle) {
                     });
                     Object.defineProperty(Geolocation.prototype, 'watchPosition', {
                         value: makeNative(fakeWatchPosition, 'watchPosition'),
+                        configurable: true,
+                        writable: true
+                    });
+                    Object.defineProperty(Geolocation.prototype, 'clearWatch', {
+                        value: makeNative(fakeClearWatch, 'clearWatch'),
                         configurable: true,
                         writable: true
                     });
@@ -1614,6 +1637,102 @@ function getInjectScript(fp, profileName, watermarkStyle) {
     `;
 }
 
+function getGeolocationScript(fp) {
+    const normalizedFp = generateFingerprint(fp || {});
+    const geo = normalizedFp.geolocation;
+    if (!geo || typeof geo.latitude !== 'number' || typeof geo.longitude !== 'number') {
+        return '(() => {})();';
+    }
+
+    const geoJson = JSON.stringify({
+        latitude: geo.latitude,
+        longitude: geo.longitude,
+        accuracy: geo.accuracy || 100
+    });
+
+    return `
+    (function() {
+        try {
+            const geo = ${geoJson};
+            if (!window.Geolocation || !Geolocation.prototype) return;
+
+            const makeNative = (func, name) => {
+                const nativeStr = 'function ' + name + '() { [native code] }';
+                Object.defineProperty(func, 'toString', {
+                    value: function() { return nativeStr; },
+                    configurable: true,
+                    writable: true
+                });
+                Object.defineProperty(func.toString, 'toString', {
+                    value: function() { return 'function toString() { [native code] }'; },
+                    configurable: true,
+                    writable: true
+                });
+                return func;
+            };
+
+            const latitude = geo.latitude;
+            const longitude = geo.longitude;
+            const accuracy = geo.accuracy || 100;
+            const watchTimers = new Map();
+
+            const buildPosition = () => ({
+                coords: {
+                    latitude: latitude + (Math.random() - 0.5) * 0.005,
+                    longitude: longitude + (Math.random() - 0.5) * 0.005,
+                    accuracy,
+                    altitude: null,
+                    altitudeAccuracy: null,
+                    heading: null,
+                    speed: null
+                },
+                timestamp: Date.now()
+            });
+
+            const fakeGetCurrentPosition = function getCurrentPosition(success, error, options) {
+                setTimeout(() => {
+                    if (typeof success === 'function') success(buildPosition());
+                }, 12);
+            };
+
+            const fakeWatchPosition = function watchPosition(success, error, options) {
+                const watchId = Math.floor(Math.random() * 100000) + 1;
+                fakeGetCurrentPosition(success, error, options);
+                if (typeof success === 'function') {
+                    watchTimers.set(watchId, setInterval(() => {
+                        try { success(buildPosition()); } catch (e) { }
+                    }, 10000));
+                }
+                return watchId;
+            };
+
+            const fakeClearWatch = function clearWatch(watchId) {
+                if (watchTimers.has(watchId)) {
+                    clearInterval(watchTimers.get(watchId));
+                    watchTimers.delete(watchId);
+                }
+            };
+
+            Object.defineProperty(Geolocation.prototype, 'getCurrentPosition', {
+                value: makeNative(fakeGetCurrentPosition, 'getCurrentPosition'),
+                configurable: true,
+                writable: true
+            });
+            Object.defineProperty(Geolocation.prototype, 'watchPosition', {
+                value: makeNative(fakeWatchPosition, 'watchPosition'),
+                configurable: true,
+                writable: true
+            });
+            Object.defineProperty(Geolocation.prototype, 'clearWatch', {
+                value: makeNative(fakeClearWatch, 'clearWatch'),
+                configurable: true,
+                writable: true
+            });
+        } catch (e) { }
+    })();
+    `;
+}
+
 function getWatermarkScript(profileName, watermarkStyle) {
     const safeProfileName = (profileName || 'Profile').replace(/[<>"'&]/g, '');
     const style = watermarkStyle || 'enhanced';
@@ -1712,4 +1831,4 @@ function getWatermarkScript(profileName, watermarkStyle) {
     `;
 }
 
-export { generateFingerprint, getInjectScript, getWatermarkScript };
+export { generateFingerprint, getInjectScript, getGeolocationScript, getWatermarkScript };
