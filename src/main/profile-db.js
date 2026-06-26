@@ -162,7 +162,7 @@ class ProfileDB {
         return cnt > 0;
     }
 
-    getPaged(page = 1, pageSize = 20, search = '', tag = '') {
+    getPaged(page = 1, pageSize = 20, search = '', tag = '', sortOrder = 'DESC') {
         const whereClauses = [];
         const params = [];
 
@@ -184,8 +184,9 @@ class ProfileDB {
         const totalCount = countStmt.getAsObject().cnt;
         countStmt.free();
 
+        const dir = sortOrder === 'ASC' ? 'ASC' : 'DESC';
         const offset = (page - 1) * pageSize;
-        const dataStmt = this.db.prepare(`SELECT * FROM profiles ${where} ORDER BY created_at ASC LIMIT ? OFFSET ?`);
+        const dataStmt = this.db.prepare(`SELECT * FROM profiles ${where} ORDER BY created_at ${dir} LIMIT ? OFFSET ?`);
         dataStmt.bind([...params, pageSize, offset]);
         const items = [];
         while (dataStmt.step()) {

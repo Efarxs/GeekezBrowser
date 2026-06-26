@@ -1,5 +1,14 @@
 <template>
     <div class="pagination-bar">
+        <div class="pagination-left">
+            <button class="sort-btn" :title="sortOrder === 'DESC' ? '最新在前' : '最旧在前'" @click="$emit('sort-toggle')">
+                <svg viewBox="0 0 16 16" width="14" height="14" fill="currentColor">
+                    <path v-if="sortOrder === 'DESC'" d="M8 12L3 7h10z"/>
+                    <path v-else d="M8 4L3 9h10z"/>
+                </svg>
+                {{ $t('createdAt') || 'Created' }}
+            </button>
+        </div>
         <span class="pagination-info">{{ $t('totalProfiles') || 'Total' }}: {{ totalCount }}</span>
         <div class="pagination-controls">
             <button class="page-btn" :disabled="currentPage <= 1" @click="$emit('page-change', currentPage - 1)">
@@ -24,10 +33,11 @@ import { computed } from 'vue';
 const props = defineProps({
     currentPage: { type: Number, required: true },
     totalPages: { type: Number, required: true },
-    totalCount: { type: Number, required: true }
+    totalCount: { type: Number, required: true },
+    sortOrder: { type: String, default: 'DESC' }
 });
 
-defineEmits(['page-change']);
+defineEmits(['page-change', 'sort-toggle']);
 
 const displayPages = computed(() => {
     const total = props.totalPages;
@@ -60,6 +70,31 @@ const displayPages = computed(() => {
     background: var(--card-bg, #1a1a1a);
     flex-shrink: 0;
     gap: 20px;
+}
+
+.pagination-left {
+    display: flex;
+    align-items: center;
+}
+
+.sort-btn {
+    display: flex;
+    align-items: center;
+    gap: 4px;
+    padding: 4px 10px;
+    border-radius: 4px;
+    border: 1px solid var(--border, #333);
+    background: var(--bg-color, #111);
+    color: var(--text-secondary, #999);
+    font-size: 12px;
+    cursor: pointer;
+    transition: all 0.15s;
+    white-space: nowrap;
+}
+
+.sort-btn:hover {
+    background: var(--hover-bg, #2a2a2a);
+    color: var(--text-primary, #fff);
 }
 
 .pagination-info {

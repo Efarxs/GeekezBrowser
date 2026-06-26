@@ -1155,7 +1155,7 @@ function normalizeSettingsSnapshot(settings) {
 
 function isDirectProxy(proxyStr) {
     const value = String(proxyStr || '').trim().toLowerCase();
-    return value === 'direct' || value === 'direct://';
+    return value === '' || value === 'direct' || value === 'direct://';
 }
 
 function isAutoTimezoneValue(value) {
@@ -1360,10 +1360,7 @@ async function resolveAutoIpBaseFingerprintAfterLaunch(profileId, baseFingerprin
 
 function ensureProxyStrValid(proxyStr) {
     const raw = String(proxyStr || '').trim();
-    if (!raw) {
-        throw new Error('代理链接错误：不能为空');
-    }
-    if (isDirectProxy(raw)) return;
+    if (!raw || isDirectProxy(raw)) return;
 
     try {
         parseProxyLink(raw, 'proxy_validate');
@@ -1465,8 +1462,9 @@ function normalizeFingerprintOptions(data = {}) {
         if (!requestedWebglProfile || requestedWebglProfile === 'custom') {
             explicitWebgl = data.fingerprint.webgl;
         }
-    } else if (!requestedWebglProfile && inputFp.webgl) {
+    } else if (!requestedWebglProfile && inputFp.webgl && !inputFp.webgl.disabled) {
         // Backward compatibility: keep legacy custom WebGL only when no profile id is present.
+        // Skip stale data where WebGL was explicitly disabled (old 'none' default).
         explicitWebgl = inputFp.webgl;
     }
 
@@ -1723,7 +1721,21 @@ async function handleApiRequest(method, pathname, body, params, context = {}) {
     if (method === 'DELETE' && profileMatch) {
         const profile = findProfile(decodeURIComponent(profileMatch[1]));
         if (!profile) return { status: 404, data: { success: false, error: 'Profile not found' } };
+        // Stop running process if active
+        if (activeProcesses[profile.id]) {
+            await stopRunningProfile(profile.id, { refreshMenu: false });
+            await new Promise(r => setTimeout(r, 1000));
+        }
         profileDB.delete(profile.id);
+        // Delete profile directory
+        const profileDir = path.join(DATA_PATH, profile.id);
+        if (fs.existsSync(profileDir)) {
+            try {
+                await fs.remove(profileDir);
+            } catch (e) {
+                console.warn('Failed to delete profile directory via API:', e.message);
+            }
+        }
         notifyUIRefresh();
         return { success: true, message: 'Profile deleted' };
     }
@@ -3521,8 +3533,8 @@ ipcMain.handle('get-profile-runtime-state', () => ({
     launchingIds: Array.from(launchingProfiles)
 }));
 ipcMain.handle('get-profiles', async () => { return profileDB.getAll(); });
-ipcMain.handle('get-profiles-paged', async (event, { page, pageSize, search, tag } = {}) => {
-    return profileDB.getPaged(page || 1, pageSize || 20, search || '', tag || '');
+ipcMain.handle('get-profiles-paged', async (event, { page, pageSize, search, tag, sortOrder } = {}) => {
+    return profileDB.getPaged(page || 1, pageSize || 20, search || '', tag || '', sortOrder);
 });
 ipcMain.handle('get-all-tags', async () => { return profileDB.getAllTags(); });
 ipcMain.handle('update-profile', async (event, updatedProfile) => {

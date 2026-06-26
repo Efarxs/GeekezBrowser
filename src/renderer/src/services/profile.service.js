@@ -14,8 +14,8 @@ export const profileService = {
     /**
      * 分页加载环境列表
      */
-    async loadProfilesPaged({ page = 1, pageSize = 15, search = '', tag = '' } = {}) {
-        return await ipcService.invoke('get-profiles-paged', { page, pageSize, search, tag });
+    async loadProfilesPaged({ page = 1, pageSize = 15, search = '', tag = '', sortOrder = 'DESC' } = {}) {
+        return await ipcService.invoke('get-profiles-paged', { page, pageSize, search, tag, sortOrder });
     },
 
     /**

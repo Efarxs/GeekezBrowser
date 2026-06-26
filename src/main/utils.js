@@ -440,6 +440,13 @@ function generateXrayConfig(mainProxyStr, localPort, preProxyConfig = null, prof
     outbounds.push(mainOutbound);
     outbounds.push({ protocol: "freedom", tag: "direct" });
 
+    // Enable Mux (multiplexing) on proxy outbounds to reduce TCP connection overhead
+    outbounds.forEach(ob => {
+        if (ob.protocol && ob.protocol !== 'freedom' && ob.protocol !== 'blackhole') {
+            ob.mux = { enabled: true, concurrency: 8 };
+        }
+    });
+
     return {
         log: { loglevel: "warning" },
         inbounds: [{ 

@@ -18,6 +18,7 @@ export const useProfileStore = defineStore('profile', () => {
     const totalCount = ref(0);
     const totalPages = ref(0);
     const availableTags = ref([]);
+    const sortOrder = ref(localStorage.getItem('geekez_sort') || 'DESC');
 
     // Actions
     const loadProfiles = async () => {
@@ -26,7 +27,8 @@ export const useProfileStore = defineStore('profile', () => {
                 page: currentPage.value,
                 pageSize: pageSize.value,
                 search: searchText.value,
-                tag: selectedTag.value
+                tag: selectedTag.value,
+                sortOrder: sortOrder.value
             });
             profiles.value = result.items;
             totalCount.value = result.totalCount;
@@ -69,6 +71,13 @@ export const useProfileStore = defineStore('profile', () => {
 
     const setPage = (page) => {
         currentPage.value = page;
+        loadProfiles();
+    };
+
+    const toggleSortOrder = () => {
+        sortOrder.value = sortOrder.value === 'ASC' ? 'DESC' : 'ASC';
+        localStorage.setItem('geekez_sort', sortOrder.value);
+        currentPage.value = 1;
         loadProfiles();
     };
 
@@ -154,6 +163,7 @@ export const useProfileStore = defineStore('profile', () => {
         totalCount,
         totalPages,
         availableTags,
+        sortOrder,
         // Actions
         loadProfiles,
         loadTags,
@@ -161,6 +171,7 @@ export const useProfileStore = defineStore('profile', () => {
         setSearchText,
         setSelectedTag,
         setPage,
+        toggleSortOrder,
         // Getters
         filteredProfiles,
         selectedCount,

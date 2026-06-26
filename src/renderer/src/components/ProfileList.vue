@@ -24,7 +24,9 @@
             :currentPage="profileStore.currentPage"
             :totalPages="profileStore.totalPages"
             :totalCount="profileStore.totalCount"
+            :sortOrder="profileStore.sortOrder"
             @page-change="profileStore.setPage"
+            @sort-toggle="profileStore.toggleSortOrder"
         />
     </div>
 </template>

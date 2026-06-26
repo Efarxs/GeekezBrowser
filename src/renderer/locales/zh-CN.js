@@ -119,6 +119,7 @@ window.zhCN = {
     updateDownloaded: "内核更新完成，重启软件生效。",
     emptyStateMsg: "点击 '+ 新建环境' 开始使用",
     totalProfiles: "总数",
+    createdAt: "创建时间",
     confirmDelSub: "确定要删除该订阅及其所有节点吗？",
     msgSubUpdated: "订阅更新成功：",
     msgImported: "成功导入",

@@ -116,6 +116,7 @@ const enTranslations = {
     updateError: "Update check failed.",
     updateDownloaded: "Update downloaded. Please restart.",
     emptyStateMsg: "Click '+ New Profile' to start",
+    createdAt: "Created",
     confirmDelSub: "Are you sure to delete this subscription?",
     msgSubUpdated: "Updated:",
     msgImported: "Imported",
