@@ -134,7 +134,7 @@ const form = reactive({
   proxyStr: '',
   timezone: 'Auto',
   city: 'Auto (IP Based)',
-  language: 'auto',
+  language: 'en-US',
   preProxyOverride: 'default',
   resW: null,
   resH: null,
@@ -169,7 +169,7 @@ const timezoneSearch = ref(AUTO_TIMEZONE_LABEL);
 const showTimezoneList = ref(false);
 const citySearch = ref('Auto (IP Based)');
 const showCityList = ref(false);
-const languageSearch = ref('Auto (System Default)');
+const languageSearch = ref('English (US)');
 const showLanguageList = ref(false);
 
 // Lists (Accessing from global window if not imported)
@@ -240,7 +240,7 @@ watch(() => uiStore.addModalVisible, async (newVal) => {
       proxyStr: '',
       timezone: 'Auto',
       city: 'Auto (IP Based)',
-      language: 'auto',
+      language: 'en-US',
       preProxyOverride: 'default',
       resW: null,
       resH: null,
@@ -251,7 +251,7 @@ watch(() => uiStore.addModalVisible, async (newVal) => {
     });
     timezoneSearch.value = AUTO_TIMEZONE_LABEL;
     citySearch.value = 'Auto (IP Based)';
-    languageSearch.value = 'Auto (System Default)';
+    languageSearch.value = 'English (US)';
     try {
       settings.value = await window.electronAPI.getSettings();
       showUaWebglModify.value = !!settings.value?.enableUaWebglModify;
