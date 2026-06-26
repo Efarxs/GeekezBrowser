@@ -1068,29 +1068,17 @@ function getInjectScript(fp) {
                 const isNvidia = renderer.includes('nvidia') || vendor.includes('nvidia');
                 const isAmd = renderer.includes('amd') || renderer.includes('radeon') || vendor.includes('ati');
                 const isIntel = renderer.includes('intel') || vendor.includes('intel');
+                const isHighTier = isApple || isNvidia || isAmd;
 
-                let textureSize = 16384;
-                let renderbufferSize = 16384;
-                let vertexUniforms = 1024;
-                let fragmentUniforms = 1024;
-                let varyingVectors = 30;
-                let vertexAttribs = 16;
-
-                if (isApple || isNvidia || isAmd) {
-                    textureSize = 32768;
-                    renderbufferSize = 32768;
-                    vertexUniforms = 4096;
-                    fragmentUniforms = 2048;
-                    varyingVectors = 32;
-                } else if (isIntel) {
-                    textureSize = 16384;
-                    renderbufferSize = 16384;
-                    vertexUniforms = 2048;
-                    fragmentUniforms = 1024;
-                    varyingVectors = 30;
-                }
+                const textureSize = isHighTier ? 32768 : 16384;
+                const renderbufferSize = isHighTier ? 32768 : 16384;
+                const vertexUniforms = isHighTier ? 4096 : (isIntel ? 2048 : 1024);
+                const fragmentUniforms = isHighTier ? 2048 : 1024;
+                const varyingVectors = isHighTier ? 32 : 30;
+                const vertexAttribs = 16;
 
                 return {
+                    // WebGL1 shared caps
                     3379: textureSize, // MAX_TEXTURE_SIZE
                     34076: textureSize, // MAX_CUBE_MAP_TEXTURE_SIZE
                     34024: renderbufferSize, // MAX_RENDERBUFFER_SIZE
@@ -1098,14 +1086,31 @@ function getInjectScript(fp) {
                     34930: 16, // MAX_TEXTURE_IMAGE_UNITS
                     35660: 16, // MAX_VERTEX_TEXTURE_IMAGE_UNITS
                     35661: 32, // MAX_COMBINED_TEXTURE_IMAGE_UNITS
-                    36347: vertexUniforms, // MAX_VERTEX_UNIFORM_VECTORS
+                    36347: vertexUniforms, // MAX_VERTEX_UNIFORM_VECTORS (WebGL1)
                     36348: varyingVectors, // MAX_VARYING_VECTORS
                     36349: fragmentUniforms, // MAX_FRAGMENT_UNIFORM_VECTORS
                     3386: new Int32Array([textureSize, textureSize]), // MAX_VIEWPORT_DIMS
                     33901: new Float32Array([1, 1024]), // ALIASED_POINT_SIZE_RANGE
                     33902: new Float32Array([1, 1]), // ALIASED_LINE_WIDTH_RANGE
                     34852: 8, // MAX_DRAW_BUFFERS
-                    36063: 8 // MAX_COLOR_ATTACHMENTS
+                    36063: 8, // MAX_COLOR_ATTACHMENTS
+
+                    // WebGL2-specific caps
+                    32883: isHighTier ? 2048 : 1024, // MAX_3D_TEXTURE_SIZE
+                    35071: isHighTier ? 2048 : 256,  // MAX_ARRAY_TEXTURE_LAYERS
+                    36183: isHighTier ? 8 : 4,       // MAX_SAMPLES
+                    36203: 16777215,                 // MAX_ELEMENT_INDEX (2^24-1)
+                    35375: 72,                       // MAX_UNIFORM_BUFFER_BINDINGS
+                    35376: isHighTier ? 65536 : 16384, // MAX_UNIFORM_BLOCK_SIZE
+                    35378: isHighTier ? 14 : 12,     // MAX_VERTEX_UNIFORM_BLOCKS
+                    35382: isHighTier ? 14 : 12,     // MAX_FRAGMENT_UNIFORM_BLOCKS
+                    35379: isHighTier ? 28 : 24,     // MAX_COMBINED_UNIFORM_BLOCKS
+                    35659: isHighTier ? 64 : 32,     // MAX_VARYING_COMPONENTS
+                    35978: isHighTier ? 128 : 64,    // MAX_TRANSFORM_FEEDBACK_INTERLEAVED_COMPONENTS
+                    35981: 4,                        // MAX_TRANSFORM_FEEDBACK_SEPARATE_ATTRIBS
+                    35968: 4,                        // MAX_TRANSFORM_FEEDBACK_SEPARATE_COMPONENTS
+                    35076: -8,                       // MIN_PROGRAM_TEXEL_OFFSET
+                    35077: 7                         // MAX_PROGRAM_TEXEL_OFFSET
                 };
             };
             const webglCaps = deriveWebglCaps();

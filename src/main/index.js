@@ -4607,6 +4607,8 @@ const launchProfileHandler = async (event, profileId, preferredLang, launchOptio
             if (preferences.protection) delete preferences.protection;
             if (!preferences.profile) preferences.profile = {};
             preferences.profile.name = profile.name;
+            if (!preferences.browser) preferences.browser = {};
+            preferences.browser.enable_autostart = false;
             if (!preferences.webrtc) preferences.webrtc = {};
             preferences.webrtc.ip_handling_policy = 'disable_non_proxied_udp';
             await fs.writeJson(preferencesPath, preferences);
