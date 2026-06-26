@@ -134,7 +134,7 @@ const form = reactive({
   proxyStr: '',
   timezone: 'Auto',
   city: 'Auto (IP Based)',
-  language: 'auto',
+  language: 'en-US',
   preProxyOverride: 'default',
   resW: 1920,
   resH: 1080,
@@ -236,7 +236,7 @@ watch(() => uiStore.editModalVisible, async (visible) => {
     citySearch.value = form.city || 'Auto (IP Based)';
 
     // Language
-    form.language = fp.language || 'auto';
+    form.language = fp.language || 'en-US';
     const langObj = allLanguages.find(l => l.code === form.language);
     languageSearch.value = langObj ? langObj.name : 'Auto (System Default)';
   }
