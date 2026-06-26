@@ -52,7 +52,6 @@ It is designed to solve multi-account association issues in cross-border e-comme
 ### 🧩 Workflow & Management
 *   **Extension Support**: Supports installing Chrome extensions (e.g., MetaMask, AdBlock) and customizing which environments they apply to.
 *   **Tag System**: Add custom tags (e.g., "TikTok", "US", "Main") for grouped management.
-*   **Safe Labeling**: Uses **dynamic watermark** to display environment names at the top of pages (e.g., `Profile-1`).
 *   **Stable Multi-Instance**: Supports running multiple environments simultaneously with fully isolated ports and processes.
 *   **Remote Debugging Port (Advanced)**: Optional external Puppeteer/DevTools connection for automation (disabled by default for lower risk).
 

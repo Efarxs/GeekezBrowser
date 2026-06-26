@@ -6,6 +6,8 @@
   "author": "EchoHS",
   "scripts": {
     "dev": "electron-vite dev",
+    "check:no-watermark": "node scripts/check-no-watermark.js",
+    "prebuild": "npm run check:no-watermark",
     "build": "electron-vite build",
     "postinstall": "node setup.js",
     "build:win": "npm run build && electron-builder --win",

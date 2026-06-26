@@ -12,14 +12,26 @@ export const profileService = {
     },
 
     /**
+     * 分页加载环境列表
+     */
+    async loadProfilesPaged({ page = 1, pageSize = 15, search = '', tag = '' } = {}) {
+        return await ipcService.invoke('get-profiles-paged', { page, pageSize, search, tag });
+    },
+
+    /**
+     * 获取所有标签
+     */
+    async getAllTags() {
+        return await ipcService.invoke('get-all-tags');
+    },
+
+    /**
      * 启动指定环境
      */
     async launch(id) {
         try {
-            const settings = await ipcService.getSettings().catch(() => null);
-            const watermarkStyle = settings?.watermarkStyle || localStorage.getItem('geekez_watermark_style') || 'enhanced';
             const lang = localStorage.getItem('geekez_lang') === 'en' ? 'en' : 'cn';
-            const msg = await ipcService.invoke('launch-profile', id, watermarkStyle, lang);
+            const msg = await ipcService.invoke('launch-profile', id, lang);
             return {
                 success: true,
                 message: msg || ''

@@ -2,7 +2,6 @@ const fs = require('fs');
 const path = require('path');
 const https = require('https');
 const os = require('os');
-const { exec } = require('child_process');
 const readline = require('readline'); // 引入 readline 用于控制光标
 const { resolveXrayAssetName } = require('./src/main/xray-assets');
 
@@ -173,15 +172,14 @@ function downloadFile(url, dest, label = 'Downloading') {
 
 function extractZip(zipPath, destDir) {
     return new Promise((resolve, reject) => {
-        console.log('📦 Extracting...');
-        if (os.platform() === 'win32') {
-            exec(`powershell -command "Expand-Archive -Path '${zipPath}' -DestinationPath '${destDir}' -Force"`, (err) => {
-                if (err) reject(err); else resolve();
-            });
-        } else {
-            exec(`unzip -o "${zipPath}" -d "${destDir}"`, (err) => {
-                if (err) reject(err); else resolve();
-            });
+        try {
+            console.log('📦 Extracting...');
+            const AdmZip = require('adm-zip');
+            const zip = new AdmZip(zipPath);
+            zip.extractAllTo(destDir, true);
+            resolve();
+        } catch (err) {
+            reject(err);
         }
     });
 }

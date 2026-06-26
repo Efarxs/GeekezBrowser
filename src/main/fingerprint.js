@@ -1,6 +1,7 @@
 const os = require('os');
 const fs = require('fs');
 const path = require('path');
+const crypto = require('crypto');
 
 const RESOLUTIONS = [
     { w: 1920, h: 1080 },
@@ -480,11 +481,11 @@ function augmentWebglCatalogFromExternalDataset() {
 augmentWebglCatalogFromExternalDataset();
 
 function randInt(min, max) {
-    return Math.floor(Math.random() * (max - min + 1)) + min;
+    return crypto.randomInt(min, max + 1);
 }
 
 function getRandom(arr) {
-    return arr[Math.floor(Math.random() * arr.length)];
+    return arr[crypto.randomInt(0, arr.length)];
 }
 
 function asNumber(value) {
@@ -743,13 +744,13 @@ function generateFingerprint(options = {}) {
         hardwareConcurrency: asNumber(options.hardwareConcurrency) || getRandom([4, 8, 12, 16]),
         deviceMemory: asNumber(options.deviceMemory) || getRandom([2, 4, 8, 16]),
         canvasNoise: options.canvasNoise || {
-            r: randInt(-5, 5),
-            g: randInt(-5, 5),
-            b: randInt(-5, 5),
-            a: randInt(-5, 5)
+            r: randInt(-10, 10),
+            g: randInt(-10, 10),
+            b: randInt(-10, 10),
+            a: randInt(-10, 10)
         },
         audioNoise: typeof options.audioNoise === 'number' ? options.audioNoise : (Math.random() * 0.000001),
-        noiseSeed: asNumber(options.noiseSeed) || randInt(1000, 9999999),
+        noiseSeed: asNumber(options.noiseSeed) || randInt(1, 2147483647),
         timezone: options.timezone || 'America/Los_Angeles',
         city: options.city || null,
         geolocation: options.geolocation || null,
@@ -767,11 +768,9 @@ function generateFingerprint(options = {}) {
     return fingerprint;
 }
 
-function getInjectScript(fp, profileName, watermarkStyle) {
+function getInjectScript(fp) {
     const normalizedFp = generateFingerprint(fp || {});
     const fpJson = JSON.stringify(normalizedFp);
-    const safeProfileName = (profileName || 'Profile').replace(/[<>"'&]/g, '');
-    const style = watermarkStyle || 'enhanced';
 
     return `
     (function() {
@@ -1021,10 +1020,17 @@ function getInjectScript(fp, profileName, watermarkStyle) {
                 const hookedGetImageData = function getImageData(x, y, w, h) {
                     const imageData = originalGetImageData.apply(this, arguments);
                     if (fp.noiseSeed) {
+                        const modulus = 41 + (fp.noiseSeed % 23);
+                        const noiseR = fp.canvasNoise ? (fp.canvasNoise.r || 0) : 0;
+                        const noiseG = fp.canvasNoise ? (fp.canvasNoise.g || 0) : 0;
+                        const noiseB = fp.canvasNoise ? (fp.canvasNoise.b || 0) : 0;
+                        const noiseA = fp.canvasNoise ? (fp.canvasNoise.a || 0) : 0;
                         for (let i = 0; i < imageData.data.length; i += 4) {
-                            if ((i + fp.noiseSeed) % 53 === 0) {
-                                const noise = fp.canvasNoise ? (fp.canvasNoise.a || 0) : 0;
-                                imageData.data[i + 3] = Math.max(0, Math.min(255, imageData.data[i + 3] + noise));
+                            if ((i + fp.noiseSeed) % modulus === 0) {
+                                imageData.data[i]     = Math.max(0, Math.min(255, imageData.data[i]     + noiseR));
+                                imageData.data[i + 1] = Math.max(0, Math.min(255, imageData.data[i + 1] + noiseG));
+                                imageData.data[i + 2] = Math.max(0, Math.min(255, imageData.data[i + 2] + noiseB));
+                                imageData.data[i + 3] = Math.max(0, Math.min(255, imageData.data[i + 3] + noiseA));
                             }
                         }
                     }
@@ -1568,68 +1574,6 @@ function getInjectScript(fp, profileName, watermarkStyle) {
                 window.RTCPeerConnection = makeNative(HookedRTCPeerConnection, 'RTCPeerConnection');
             }
 
-            // --- 9. Watermark ---
-            const watermarkStyle = '${style}';
-
-            function createWatermark() {
-                try {
-                    if (document.getElementById('geekez-watermark')) return;
-                    if (!document.body) {
-                        setTimeout(createWatermark, 50);
-                        return;
-                    }
-
-                    if (watermarkStyle === 'banner') {
-                        const banner = document.createElement('div');
-                        banner.id = 'geekez-watermark';
-                        banner.style.cssText = 'position: fixed; top: 0; left: 0; right: 0; background: linear-gradient(135deg, rgba(102, 126, 234, 0.5), rgba(118, 75, 162, 0.5)); backdrop-filter: blur(10px); color: white; padding: 5px 20px; text-align: center; font-size: 12px; font-weight: 500; z-index: 2147483647; box-shadow: 0 2px 10px rgba(0,0,0,0.1); display: flex; align-items: center; justify-content: center; gap: 8px; font-family: monospace;';
-
-                        const icon = document.createElement('span');
-                        icon.textContent = '🔹';
-
-                        const text = document.createElement('span');
-                        text.textContent = '环境：${safeProfileName}';
-
-                        const closeBtn = document.createElement('button');
-                        closeBtn.textContent = '×';
-                        closeBtn.style.cssText = 'position: absolute; right: 10px; background: rgba(255,255,255,0.2); border: none; color: white; width: 20px; height: 20px; border-radius: 50%; cursor: pointer; font-size: 16px; line-height: 1;';
-                        closeBtn.onclick = function() { banner.style.display = 'none'; };
-
-                        banner.appendChild(icon);
-                        banner.appendChild(text);
-                        banner.appendChild(closeBtn);
-                        document.body.appendChild(banner);
-                    } else {
-                        const watermark = document.createElement('div');
-                        watermark.id = 'geekez-watermark';
-                        watermark.style.cssText = 'position: fixed; bottom: 16px; right: 16px; background: linear-gradient(135deg, rgba(102, 126, 234, 0.5), rgba(118, 75, 162, 0.5)); backdrop-filter: blur(10px); color: white; padding: 10px 16px; border-radius: 8px; font-size: 15px; font-weight: 600; z-index: 2147483647; pointer-events: none; user-select: none; box-shadow: 0 4px 15px rgba(102, 126, 234, 0.4); display: flex; align-items: center; gap: 8px; font-family: monospace; animation: geekez-pulse 2s ease-in-out infinite;';
-
-                        const icon = document.createElement('span');
-                        icon.textContent = '🎯';
-                        icon.style.cssText = 'font-size: 18px; animation: geekez-rotate 3s linear infinite;';
-
-                        const text = document.createElement('span');
-                        text.textContent = '${safeProfileName}';
-
-                        watermark.appendChild(icon);
-                        watermark.appendChild(text);
-                        document.body.appendChild(watermark);
-
-                        if (!document.getElementById('geekez-watermark-styles')) {
-                            const styleNode = document.createElement('style');
-                            styleNode.id = 'geekez-watermark-styles';
-                            styleNode.textContent = '@keyframes geekez-pulse { 0%, 100% { box-shadow: 0 4px 15px rgba(102, 126, 234, 0.4); } 50% { box-shadow: 0 4px 25px rgba(102, 126, 234, 0.6); } } @keyframes geekez-rotate { from { transform: rotate(0deg); } to { transform: rotate(360deg); } }';
-                            document.head.appendChild(styleNode);
-                        }
-                    }
-                } catch (e) { }
-            }
-
-            if (document.readyState === 'loading') {
-                document.addEventListener('DOMContentLoaded', createWatermark);
-            } else {
-                createWatermark();
-            }
         } catch (e) {
             console.error('FP Error', e);
         }
@@ -1733,102 +1677,4 @@ function getGeolocationScript(fp) {
     `;
 }
 
-function getWatermarkScript(profileName, watermarkStyle) {
-    const safeProfileName = (profileName || 'Profile').replace(/[<>"'&]/g, '');
-    const style = watermarkStyle || 'enhanced';
-
-    return `
-    (function() {
-        try {
-            if (window.__geekezWatermarkBootstrapped__) return;
-            window.__geekezWatermarkBootstrapped__ = true;
-
-            const watermarkStyle = ${JSON.stringify(style)};
-            const profileLabel = ${JSON.stringify(safeProfileName)};
-
-            function ensureStyleNode() {
-                try {
-                    if (document.getElementById('geekez-watermark-styles')) return;
-                    const styleNode = document.createElement('style');
-                    styleNode.id = 'geekez-watermark-styles';
-                    styleNode.textContent = '@keyframes geekez-pulse { 0%, 100% { box-shadow: 0 4px 15px rgba(102, 126, 234, 0.4); } 50% { box-shadow: 0 4px 25px rgba(102, 126, 234, 0.6); } } @keyframes geekez-rotate { from { transform: rotate(0deg); } to { transform: rotate(360deg); } }';
-                    (document.head || document.documentElement).appendChild(styleNode);
-                } catch (e) { }
-            }
-
-            function createWatermark() {
-                try {
-                    if (document.getElementById('geekez-watermark')) return;
-                    if (!document.body) {
-                        setTimeout(createWatermark, 50);
-                        return;
-                    }
-
-                    ensureStyleNode();
-
-                    if (watermarkStyle === 'banner') {
-                        const banner = document.createElement('div');
-                        banner.id = 'geekez-watermark';
-                        banner.style.cssText = 'position: fixed; top: 0; left: 0; right: 0; background: linear-gradient(135deg, rgba(102, 126, 234, 0.5), rgba(118, 75, 162, 0.5)); backdrop-filter: blur(10px); color: white; padding: 5px 20px; text-align: center; font-size: 12px; font-weight: 500; z-index: 2147483647; box-shadow: 0 2px 10px rgba(0,0,0,0.1); display: flex; align-items: center; justify-content: center; gap: 8px; font-family: monospace;';
-
-                        const icon = document.createElement('span');
-                        icon.textContent = '🔹';
-
-                        const text = document.createElement('span');
-                        text.textContent = '环境：' + profileLabel;
-
-                        const closeBtn = document.createElement('button');
-                        closeBtn.textContent = '×';
-                        closeBtn.style.cssText = 'position: absolute; right: 10px; background: rgba(255,255,255,0.2); border: none; color: white; width: 20px; height: 20px; border-radius: 50%; cursor: pointer; font-size: 16px; line-height: 1;';
-                        closeBtn.onclick = function() { banner.style.display = 'none'; };
-
-                        banner.appendChild(icon);
-                        banner.appendChild(text);
-                        banner.appendChild(closeBtn);
-                        document.body.appendChild(banner);
-                        return;
-                    }
-
-                    const watermark = document.createElement('div');
-                    watermark.id = 'geekez-watermark';
-                    watermark.style.cssText = 'position: fixed; bottom: 16px; right: 16px; background: linear-gradient(135deg, rgba(102, 126, 234, 0.5), rgba(118, 75, 162, 0.5)); backdrop-filter: blur(10px); color: white; padding: 10px 16px; border-radius: 8px; font-size: 15px; font-weight: 600; z-index: 2147483647; pointer-events: none; user-select: none; box-shadow: 0 4px 15px rgba(102, 126, 234, 0.4); display: flex; align-items: center; gap: 8px; font-family: monospace; animation: geekez-pulse 2s ease-in-out infinite;';
-
-                    const icon = document.createElement('span');
-                    icon.textContent = '🎯';
-                    icon.style.cssText = 'font-size: 18px; animation: geekez-rotate 3s linear infinite;';
-
-                    const text = document.createElement('span');
-                    text.textContent = profileLabel;
-
-                    watermark.appendChild(icon);
-                    watermark.appendChild(text);
-                    document.body.appendChild(watermark);
-                } catch (e) { }
-            }
-
-            function scheduleWatermark() {
-                if (document.readyState === 'loading') {
-                    document.addEventListener('DOMContentLoaded', createWatermark, { once: true });
-                } else {
-                    createWatermark();
-                }
-                setTimeout(createWatermark, 250);
-                setTimeout(createWatermark, 1000);
-            }
-
-            scheduleWatermark();
-
-            try {
-                const observer = new MutationObserver(() => {
-                    if (!document.getElementById('geekez-watermark')) {
-                        createWatermark();
-                    }
-                });
-                observer.observe(document.documentElement || document, { childList: true, subtree: true });
-            } catch (e) { }
-        } catch (e) { }
-    })();
-    `;
-}
-
-export { generateFingerprint, getInjectScript, getGeolocationScript, getWatermarkScript };
+export { generateFingerprint, getInjectScript, getGeolocationScript };

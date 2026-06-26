@@ -282,55 +282,6 @@
                         </div>
                     </div>
 
-                    <!-- Watermark Style Section -->
-                    <div style="margin-bottom: 25px;">
-                        <h4 style="margin-bottom:10px; color:var(--text-primary); font-size:14px;"
-                            data-i18n="watermarkTitle">{{ $t('watermarkTitle') }}</h4>
-                        <p style="font-size:12px; opacity:0.7; margin-bottom:15px;" data-i18n="watermarkDesc">
-                            {{ $t('watermarkDesc') }}
-                        </p>
-
-                        <div style="display:flex; flex-direction:column; gap:12px;">
-                            <!-- 方案5: 增强水印 (默认) -->
-                            <label :style="{ borderColor: settingsStore.watermarkStyle === 'enhanced' ? 'var(--accent)' : 'var(--border)' }"
-                                style="display:flex; align-items:flex-start; gap:10px; padding:12px; border:1px solid; border-radius:6px; cursor:pointer; transition:0.2s;">
-                                <input type="radio" name="watermarkStyle" value="enhanced"
-                                    style="margin-top:3px; width:auto; cursor:pointer;"
-                                    :checked="settingsStore.watermarkStyle === 'enhanced'"
-                                    @change="settingsStore.saveWatermarkStyle('enhanced')">
-                                <div style="flex:1;">
-                                    <div style="font-weight:bold; margin-bottom:5px; color:var(--text-primary);"
-                                        data-i18n="watermarkEnhancedLabel">
-                                        {{ $t('watermarkEnhancedLabel') }}
-                                    </div>
-                                    <div style="font-size:11px; color:var(--text-secondary); line-height:1.5;"
-                                        data-i18n="watermarkEnhancedDesc">
-                                        {{ $t('watermarkEnhancedDesc') }}
-                                    </div>
-                                </div>
-                            </label>
-
-                            <!-- 方案1: 顶部横幅 -->
-                            <label :style="{ borderColor: settingsStore.watermarkStyle === 'banner' ? 'var(--accent)' : 'var(--border)' }"
-                                style="display:flex; align-items:flex-start; gap:10px; padding:12px; border:1px solid; border-radius:6px; cursor:pointer; transition:0.2s;">
-                                <input type="radio" name="watermarkStyle" value="banner"
-                                    style="margin-top:3px; width:auto; cursor:pointer;"
-                                    :checked="settingsStore.watermarkStyle === 'banner'"
-                                    @change="settingsStore.saveWatermarkStyle('banner')">
-                                <div style="flex:1;">
-                                    <div style="font-weight:bold; margin-bottom:5px; color:var(--text-primary);"
-                                        data-i18n="watermarkBannerLabel">
-                                        {{ $t('watermarkBannerLabel') }}
-                                    </div>
-                                    <div style="font-size:11px; color:var(--text-secondary); line-height:1.5;"
-                                        data-i18n="watermarkBannerDesc">
-                                        {{ $t('watermarkBannerDesc') }}
-                                    </div>
-                                </div>
-                            </label>
-                        </div>
-                    </div>
-
                     <!-- Data Directory Section -->
                     <div style="margin-bottom: 25px;">
                         <h4 style="margin-bottom:10px; color:var(--text-primary); font-size:14px;"

@@ -2,10 +2,10 @@
     <div class="layout">
         <div class="main-list" id="profileList" :class="{ 'grid-view': isGridView }">
             <template v-if="filteredProfiles.length > 0">
-                <ProfileCard 
-                    v-for="profile in filteredProfiles" 
-                    :key="profile.id" 
-                    :profile="profile" 
+                <ProfileCard
+                    v-for="profile in filteredProfiles"
+                    :key="profile.id"
+                    :profile="profile"
                     :isRunning="profileStore.isRunning(profile.id)"
                     :isLaunching="profileStore.isLaunching(profile.id)"
                     :isSelected="profileStore.isSelected(profile.id)"
@@ -19,6 +19,13 @@
                 <div class="empty-state-text">{{ emptyMessage }}</div>
             </div>
         </div>
+        <Pagination
+            v-if="profileStore.totalPages > 1"
+            :currentPage="profileStore.currentPage"
+            :totalPages="profileStore.totalPages"
+            :totalCount="profileStore.totalCount"
+            @page-change="profileStore.setPage"
+        />
     </div>
 </template>
 
@@ -26,6 +33,7 @@
 import { computed, onMounted } from 'vue';
 import { useProfileStore } from '../store/useProfileStore';
 import ProfileCard from './ProfileCard.vue';
+import Pagination from './Pagination.vue';
 
 const profileStore = useProfileStore();
 
@@ -42,5 +50,6 @@ const emptyMessage = computed(() => {
 
 onMounted(() => {
     profileStore.loadProfiles();
+    profileStore.loadTags();
 });
 </script>
