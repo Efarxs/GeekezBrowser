@@ -272,9 +272,10 @@ onUnmounted(() => {
 
 async function handleSave() {
   const proxyLines = form.proxyStr.split('\n').map(l => l.trim()).filter(l => l);
+
+  // If no proxy provided, create a single profile with Direct connection
   if (proxyLines.length === 0) {
-    uiStore.showAlert(window.t('inputReq'));
-    return;
+    proxyLines.push('direct');
   }
 
   isSaving.value = true;
@@ -287,7 +288,7 @@ async function handleSave() {
       let name;
       if (!form.name) {
         try {
-            name = getProxyRemark(proxyStr) || `Profile-${String(i + 1).padStart(2, '0')}`;
+            name = proxyStr === 'direct' ? 'Direct' : (getProxyRemark(proxyStr) || `Profile-${String(i + 1).padStart(2, '0')}`);
         } catch(e) {
             name = `Profile-${String(i + 1).padStart(2, '0')}`;
         }
