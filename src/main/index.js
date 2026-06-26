@@ -1185,13 +1185,47 @@ function hasValidGeolocation(geo) {
         Number.isFinite(geo.longitude);
 }
 
+const COUNTRY_TO_LANG = {
+    US: 'en-US', CA: 'en-CA', GB: 'en-GB', IE: 'en-IE', AU: 'en-AU', NZ: 'en-NZ', IN: 'en-IN', ZA: 'en-ZA',
+    DE: 'de-DE', AT: 'de-AT', CH: 'de-CH',
+    FR: 'fr-FR', BE: 'nl-BE',
+    IT: 'it-IT', CH_IT: 'it-CH',
+    ES: 'es-ES', MX: 'es-MX', AR: 'es-AR', CL: 'es-CL', CO: 'es-CO',
+    PT: 'pt-PT', BR: 'pt-BR',
+    NL: 'nl-NL',
+    SE: 'sv-SE', NO: 'no-NO', DK: 'da-DK', FI: 'fi-FI',
+    PL: 'pl-PL', CZ: 'cs-CZ', HU: 'hu-HU', RO: 'ro-RO',
+    EL: 'el-GR',          // Greece — ipinfo returns EL, not GR
+    GR: 'el-GR',
+    TR: 'tr-TR',
+    RU: 'ru-RU', UA: 'uk-UA',
+    CN: 'zh-CN', TW: 'zh-TW', HK: 'zh-HK',
+    JP: 'ja-JP', KR: 'ko-KR',
+    TH: 'th-TH', VN: 'vi-VN', ID: 'id-ID', MY: 'ms-MY', PH: 'fil-PH',
+    SA: 'ar-SA', AE: 'ar-AE',
+    IL: 'he-IL'
+};
+
+function resolveLanguageFromCountry(countryCode) {
+    if (!countryCode) return null;
+    const code = String(countryCode).toUpperCase().trim();
+    return COUNTRY_TO_LANG[code] || null;
+}
+
+function isAutoLanguageValue(value) {
+    const normalized = String(value || '').trim().toLowerCase();
+    return !normalized || normalized === 'auto';
+}
+
 function getAutoIpBasePolicy(fingerprint = {}) {
     const timezone = isAutoTimezoneValue(fingerprint.timezone);
     const location = !hasValidGeolocation(fingerprint.geolocation) && isAutoIpBasedCityValue(fingerprint.city);
+    const language = isAutoLanguageValue(fingerprint.language);
     return {
         timezone,
         location,
-        enabled: timezone || location
+        language,
+        enabled: timezone || location || language
     };
 }
 
@@ -1311,6 +1345,7 @@ function isAutoIpBaseSourceUsable(source, policy) {
         if (!Number.isFinite(latitude) || !Number.isFinite(longitude)) return false;
     }
     if (policy.timezone && !isValidTimezoneId(source.timezone)) return false;
+    if (policy.language && !source.country) return false;
     return true;
 }
 
@@ -1328,6 +1363,12 @@ function buildAutoIpBaseFingerprint(baseFingerprint = {}, source, policy) {
     }
     if (policy.timezone && isValidTimezoneId(source.timezone)) {
         nextFingerprint.timezone = source.timezone;
+    }
+    if (policy.language) {
+        const resolved = resolveLanguageFromCountry(source.country);
+        if (resolved) {
+            nextFingerprint.language = resolved;
+        }
     }
     return nextFingerprint;
 }
