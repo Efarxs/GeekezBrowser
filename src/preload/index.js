@@ -3,10 +3,12 @@ const { contextBridge, ipcRenderer } = require('electron');
 
 contextBridge.exposeInMainWorld('electronAPI', {
     getProfiles: () => ipcRenderer.invoke('get-profiles'),
+    getProfilesPaged: (options) => ipcRenderer.invoke('get-profiles-paged', options),
+    getAllTags: () => ipcRenderer.invoke('get-all-tags'),
     saveProfile: (data) => ipcRenderer.invoke('save-profile', data),
     updateProfile: (data) => ipcRenderer.invoke('update-profile', data),
     deleteProfile: (id) => ipcRenderer.invoke('delete-profile', id),
-    launchProfile: (id, watermarkStyle) => ipcRenderer.invoke('launch-profile', id, watermarkStyle),
+    launchProfile: (id) => ipcRenderer.invoke('launch-profile', id),
     getSettings: () => ipcRenderer.invoke('get-settings'),
     saveSettings: (data) => ipcRenderer.invoke('save-settings', data),
     exportProfile: (id) => ipcRenderer.invoke('export-profile', id),

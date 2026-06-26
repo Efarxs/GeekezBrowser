@@ -20,6 +20,7 @@ const gzip = promisify(zlib.gzip);
 const gunzip = promisify(zlib.gunzip);
 const initSqlJs = require('sql.js');
 const { SocksClient } = require('socks');
+const { ProfileDB } = require('./profile-db');
 
 const uuidv4 = () => crypto.randomUUID();
 
@@ -65,7 +66,7 @@ async function createSocksProxyAgent(proxyUrl) {
 // Only disable if GPU compatibility issues occur
 
 import { generateXrayConfig, parseProxyLink, getProxyRemark } from './utils';
-import { generateFingerprint, getInjectScript, getGeolocationScript, getWatermarkScript } from './fingerprint';
+import { generateFingerprint, getInjectScript, getGeolocationScript } from './fingerprint';
 
 const isDev = !app.isPackaged;
 const RESOURCES_BIN = isDev ? path.join(app.getAppPath(), 'resources', 'bin') : path.join(process.resourcesPath, 'bin');
@@ -100,6 +101,7 @@ const DATA_PATH = getCustomDataPath();
 const TRASH_PATH = path.join(app.getPath('userData'), '_Trash_Bin');
 const PROFILES_FILE = path.join(DATA_PATH, 'profiles.json');
 const SETTINGS_FILE = path.join(DATA_PATH, 'settings.json');
+const profileDB = new ProfileDB(DATA_PATH);
 const USER_EXTENSIONS_DIR = path.join(DATA_PATH, '_extensions');
 
 fs.ensureDirSync(DATA_PATH);
@@ -396,7 +398,6 @@ async function streamApiOpenProfile({ req, res, params, settings, profile, resol
         const launchMessage = await launchProfileHandler(
             { sender },
             profile.id,
-            settings.watermarkStyle || 'enhanced',
             lang,
             { launchArgsOverride: launchOverrideArgs }
         );
@@ -1140,6 +1141,7 @@ async function saveSettingsWithNormalizedExtensions(settings) {
 
 function normalizeSettingsSnapshot(settings) {
     const nextSettings = settings || {};
+    delete nextSettings.watermarkStyle;
     if (!Array.isArray(nextSettings.preProxies)) nextSettings.preProxies = [];
     if (!Array.isArray(nextSettings.subscriptions)) nextSettings.subscriptions = [];
     if (!['single', 'balance', 'failover'].includes(nextSettings.mode)) nextSettings.mode = 'single';
@@ -1645,12 +1647,13 @@ async function buildProfileFromInput(rawData, profiles, settings, existingProfil
 // --- Chrome 密码解密辅助函数 ---
 // 解密 Chrome 主密钥 (平台相关)
 async function handleApiRequest(method, pathname, body, params, context = {}) {
-    let profiles = fs.existsSync(PROFILES_FILE) ? await fs.readJson(PROFILES_FILE) : [];
     const settings = fs.existsSync(SETTINGS_FILE) ? await fs.readJson(SETTINGS_FILE) : {};
 
     // Helper: Find profile by ID or Name
     const findProfile = (idOrName) => {
-        return profiles.find(p => p.id === idOrName || p.name === idOrName);
+        const byId = profileDB.getById(idOrName);
+        if (byId) return byId;
+        return profileDB.getByName(idOrName);
     };
 
     const resolveRemoteDebugPortForProfile = async (profileId, fallbackPort = null) => {
@@ -1659,8 +1662,7 @@ async function handleApiRequest(method, pathname, body, params, context = {}) {
         const fromFallback = normalizeDebugPort(fallbackPort);
         if (fromFallback) return fromFallback;
 
-        const latestProfiles = fs.existsSync(PROFILES_FILE) ? await fs.readJson(PROFILES_FILE).catch(() => []) : [];
-        const latest = Array.isArray(latestProfiles) ? latestProfiles.find(p => p.id === profileId) : null;
+        const latest = profileDB.getById(profileId);
         return normalizeDebugPort(latest?.debugPort);
     };
 
@@ -1671,6 +1673,7 @@ async function handleApiRequest(method, pathname, body, params, context = {}) {
 
     // GET /api/profiles
     if (method === 'GET' && pathname === '/api/profiles') {
+        const profiles = profileDB.getAll();
         const tagFilter = (params.get('tag') || '').trim().toLowerCase();
         const filteredProfiles = tagFilter
             ? profiles.filter(profile => (profile.tags || []).some(tag => (tag || '').toLowerCase() === tagFilter))
@@ -1689,10 +1692,10 @@ async function handleApiRequest(method, pathname, body, params, context = {}) {
     // POST /api/profiles - Create with unique name
     if (method === 'POST' && pathname === '/api/profiles') {
         const data = parseApiBody(body);
-        const newProfile = await buildProfileFromInput(data, profiles, settings);
-        profiles.push(newProfile);
-        await fs.writeJson(PROFILES_FILE, profiles);
-        notifyUIRefresh(); // Notify UI to refresh
+        const allProfiles = profileDB.getAll();
+        const newProfile = await buildProfileFromInput(data, allProfiles, settings);
+        profileDB.insert(newProfile);
+        notifyUIRefresh();
         return {
             success: true,
             profile: newProfile,
@@ -1704,16 +1707,15 @@ async function handleApiRequest(method, pathname, body, params, context = {}) {
     if (method === 'PUT' && profileMatch) {
         const profile = findProfile(decodeURIComponent(profileMatch[1]));
         if (!profile) return { status: 404, data: { success: false, error: 'Profile not found' } };
-        const idx = profiles.findIndex(p => p.id === profile.id);
         const data = parseApiBody(body);
-        const otherProfiles = profiles.filter(p => p.id !== profile.id);
-        profiles[idx] = await buildProfileFromInput(data, otherProfiles, settings, profile);
-        await fs.writeJson(PROFILES_FILE, profiles);
+        const otherProfiles = profileDB.getAll().filter(p => p.id !== profile.id);
+        const rebuilt = await buildProfileFromInput(data, otherProfiles, settings, profile);
+        profileDB.update(profile.id, rebuilt);
         notifyUIRefresh();
         return {
             success: true,
-            profile: profiles[idx],
-            remoteDebugPort: settings.enableRemoteDebugging ? profiles[idx].debugPort : null
+            profile: rebuilt,
+            remoteDebugPort: settings.enableRemoteDebugging ? rebuilt.debugPort : null
         };
     }
 
@@ -1721,9 +1723,8 @@ async function handleApiRequest(method, pathname, body, params, context = {}) {
     if (method === 'DELETE' && profileMatch) {
         const profile = findProfile(decodeURIComponent(profileMatch[1]));
         if (!profile) return { status: 404, data: { success: false, error: 'Profile not found' } };
-        profiles = profiles.filter(p => p.id !== profile.id);
-        await fs.writeJson(PROFILES_FILE, profiles);
-        notifyUIRefresh(); // Notify UI to refresh
+        profileDB.delete(profile.id);
+        notifyUIRefresh();
         return { success: true, message: 'Profile deleted' };
     }
 
@@ -1770,7 +1771,6 @@ async function handleApiRequest(method, pathname, body, params, context = {}) {
         const launchMessage = await launchProfileHandler(
             launchEvent,
             profile.id,
-            settings.watermarkStyle || 'enhanced',
             lang,
             { launchArgsOverride: launchOverrideArgs }
         );
@@ -1910,11 +1910,10 @@ async function handleApiRequest(method, pathname, body, params, context = {}) {
                             fingerprint: item.fingerprint || await generateFingerprint({}),
                             createdAt: Date.now()
                         };
-                        profiles.push(newProfile);
+                        profileDB.insert(newProfile);
                         imported++;
                     }
-                    await fs.writeJson(PROFILES_FILE, profiles);
-                    notifyUIRefresh(); // Notify UI to refresh
+                    notifyUIRefresh();
                     return { success: true, message: `Imported ${imported} profiles from YAML`, count: imported };
                 }
             } catch (yamlErr) { }
@@ -1932,11 +1931,10 @@ async function handleApiRequest(method, pathname, body, params, context = {}) {
                 for (const profile of backupData.profiles || []) {
                     const name = generateUniqueName(profile.name);
                     const newProfile = { ...profile, id: uuidv4(), name };
-                    profiles.push(newProfile);
+                    profileDB.insert(newProfile);
                     imported++;
                 }
-                await fs.writeJson(PROFILES_FILE, profiles);
-                notifyUIRefresh(); // Notify UI to refresh
+                notifyUIRefresh();
                 return { success: true, message: `Imported ${imported} profiles from backup`, count: imported };
             } catch (decryptErr) {
                 return { status: 400, data: { success: false, error: 'Invalid password or corrupted backup' } };
@@ -2121,9 +2119,7 @@ app.on('second-instance', () => {
 });
 
 async function readAllProfilesSafe() {
-    if (!fs.existsSync(PROFILES_FILE)) return [];
-    const profiles = await fs.readJson(PROFILES_FILE).catch(() => []);
-    return Array.isArray(profiles) ? profiles : [];
+    try { return profileDB.getAll(); } catch { return []; }
 }
 
 function quitApplication() {
@@ -2208,9 +2204,8 @@ async function launchOrFocusProfileFromTray(profileId) {
         const focused = await focusRunningProfileWindow(profile.id);
         if (!focused) {
             try {
-                const settings = readSettingsSync();
                 const launchEvent = getProfileLaunchEventSender();
-                await launchProfileHandler(launchEvent, profile.id, settings.watermarkStyle || 'enhanced');
+                await launchProfileHandler(launchEvent, profile.id);
             } catch (e) { }
         }
         await refreshTrayMenu();
@@ -2218,9 +2213,8 @@ async function launchOrFocusProfileFromTray(profileId) {
     }
 
     try {
-        const settings = readSettingsSync();
         const launchEvent = getProfileLaunchEventSender();
-        await launchProfileHandler(launchEvent, profile.id, settings.watermarkStyle || 'enhanced');
+        await launchProfileHandler(launchEvent, profile.id);
     } catch (err) {
         dialog.showErrorBox('启动环境失败', String(err?.message || err || '未知错误'));
     }
@@ -2527,7 +2521,7 @@ function notifyUIRefresh() {
     refreshTrayMenu().catch(() => { });
 }
 
-async function generateExtension(profilePath, fingerprint, profileName, watermarkStyle, profileId) {
+async function generateExtension(profilePath, fingerprint, profileId) {
     const extDir = path.join(profilePath, 'extension');
     await fs.ensureDir(extDir);
 
@@ -2568,9 +2562,8 @@ async function generateExtension(profilePath, fingerprint, profileName, watermar
         ],
         action: { default_popup: "popup.html" }
     };
-    const style = watermarkStyle || 'enhanced';
     const geoScriptContent = getGeolocationScript(fingerprint);
-    const scriptContent = getInjectScript(fingerprint, profileName, style);
+    const scriptContent = getInjectScript(fingerprint);
     await fs.writeJson(path.join(extDir, 'manifest.json'), manifest);
     await fs.writeFile(path.join(extDir, 'geo.js'), geoScriptContent);
     await fs.writeFile(path.join(extDir, 'content.js'), scriptContent);
@@ -2941,6 +2934,7 @@ document.addEventListener('DOMContentLoaded', async () => {
 }
 
 app.whenReady().then(async () => {
+    await profileDB.init();
     cachedCloseBehavior = normalizeCloseBehavior(readSettingsSync().closeBehavior);
     createWindow();
     await createTray().catch((err) => {
@@ -3526,26 +3520,28 @@ ipcMain.handle('get-profile-runtime-state', () => ({
     runningIds: Object.keys(activeProcesses),
     launchingIds: Array.from(launchingProfiles)
 }));
-ipcMain.handle('get-profiles', async () => { if (!fs.existsSync(PROFILES_FILE)) return []; return fs.readJson(PROFILES_FILE); });
+ipcMain.handle('get-profiles', async () => { return profileDB.getAll(); });
+ipcMain.handle('get-profiles-paged', async (event, { page, pageSize, search, tag } = {}) => {
+    return profileDB.getPaged(page || 1, pageSize || 20, search || '', tag || '');
+});
+ipcMain.handle('get-all-tags', async () => { return profileDB.getAllTags(); });
 ipcMain.handle('update-profile', async (event, updatedProfile) => {
-    const profiles = fs.existsSync(PROFILES_FILE) ? await fs.readJson(PROFILES_FILE) : [];
-    const index = profiles.findIndex(p => p.id === updatedProfile.id);
-    if (index === -1) return false;
+    const existing = profileDB.getById(updatedProfile.id);
+    if (!existing) return false;
 
     const settings = fs.existsSync(SETTINGS_FILE) ? await fs.readJson(SETTINGS_FILE) : {};
-    const others = profiles.filter((_, i) => i !== index);
-    const rebuilt = await buildProfileFromInput(updatedProfile, others, settings, profiles[index]);
-    profiles[index] = rebuilt;
-    await fs.writeJson(PROFILES_FILE, profiles);
+    const allProfiles = profileDB.getAll();
+    const others = allProfiles.filter(p => p.id !== updatedProfile.id);
+    const rebuilt = await buildProfileFromInput(updatedProfile, others, settings, existing);
+    profileDB.update(updatedProfile.id, rebuilt);
     notifyUIRefresh();
     return true;
 });
 ipcMain.handle('save-profile', async (event, data) => {
-    const profiles = fs.existsSync(PROFILES_FILE) ? await fs.readJson(PROFILES_FILE) : [];
+    const allProfiles = profileDB.getAll();
     const settings = fs.existsSync(SETTINGS_FILE) ? await fs.readJson(SETTINGS_FILE) : {};
-    const newProfile = await buildProfileFromInput(data, profiles, settings);
-    profiles.push(newProfile);
-    await fs.writeJson(PROFILES_FILE, profiles);
+    const newProfile = await buildProfileFromInput(data, allProfiles, settings);
+    profileDB.insert(newProfile);
     notifyUIRefresh();
     return newProfile;
 });
@@ -3557,10 +3553,7 @@ ipcMain.handle('delete-profile', async (event, id) => {
         await new Promise(r => setTimeout(r, 1000));
     }
 
-    // 从 profiles.json 中删除
-    let profiles = await fs.readJson(PROFILES_FILE);
-    profiles = profiles.filter(p => p.id !== id);
-    await fs.writeJson(PROFILES_FILE, profiles);
+    profileDB.delete(id);
     notifyUIRefresh();
 
     // 永久删除 profile 文件夹（带重试机制）
@@ -3865,11 +3858,16 @@ ipcMain.handle('set-data-directory', async (e, { newPath, migrate }) => {
         // 如果需要迁移数据
         if (migrate && DATA_PATH !== newPath) {
             const oldProfiles = path.join(DATA_PATH, 'profiles.json');
+            const oldProfilesDb = path.join(DATA_PATH, 'profiles.db');
             const oldSettings = path.join(DATA_PATH, 'settings.json');
 
             // 迁移 profiles.json
             if (fs.existsSync(oldProfiles)) {
                 await fs.copy(oldProfiles, path.join(newPath, 'profiles.json'));
+            }
+            // 迁移 profiles.db
+            if (fs.existsSync(oldProfilesDb)) {
+                await fs.copy(oldProfilesDb, path.join(newPath, 'profiles.db'));
             }
             // 迁移 settings.json
             if (fs.existsSync(oldSettings)) {
@@ -3877,7 +3875,7 @@ ipcMain.handle('set-data-directory', async (e, { newPath, migrate }) => {
             }
 
             // 迁移所有环境数据目录
-            const profiles = fs.existsSync(oldProfiles) ? await fs.readJson(oldProfiles) : [];
+            const profiles = profileDB.getAll();
             for (const profile of profiles) {
                 const oldDir = path.join(DATA_PATH, profile.id);
                 const newDir = path.join(newPath, profile.id);
@@ -4015,13 +4013,13 @@ async function writeEncryptedPasswords(pwFile, passwords, profileId) {
 
 // 获取用于选择器的环境列表
 ipcMain.handle('get-export-profiles', async () => {
-    const profiles = fs.existsSync(PROFILES_FILE) ? await fs.readJson(PROFILES_FILE) : [];
+    const profiles = profileDB.getAll();
     return profiles.map(p => ({ id: p.id, name: p.name, tags: p.tags || [] }));
 });
 
 // 导出选定环境 (精简版，不含浏览器数据)
 ipcMain.handle('export-selected-data', async (e, { type, profileIds }) => {
-    const allProfiles = fs.existsSync(PROFILES_FILE) ? await fs.readJson(PROFILES_FILE) : [];
+    const allProfiles = profileDB.getAll();
     const settings = fs.existsSync(SETTINGS_FILE) ? await fs.readJson(SETTINGS_FILE) : { preProxies: [], subscriptions: [] };
 
     // 过滤选中的环境
@@ -4077,7 +4075,7 @@ ipcMain.handle('export-full-backup', async (e, { profileIds, password, filePath 
         }
         
         currentImportProgress = { percent: 5, message: 'Preparing Profiles...', processing: true };
-        const allProfiles = fs.existsSync(PROFILES_FILE) ? await fs.readJson(PROFILES_FILE) : [];
+        const allProfiles = profileDB.getAll();
         const settings = fs.existsSync(SETTINGS_FILE) ? await fs.readJson(SETTINGS_FILE) : { preProxies: [], subscriptions: [] };
 
         const selectedProfiles = allProfiles
@@ -4234,14 +4232,8 @@ ipcMain.handle('import-full-backup', async (e, { filePath, password }) => {
 
         // 还原 profiles
         currentImportProgress = { percent: 40, message: 'Restoring Profiles...', processing: true };
-        const currentProfiles = fs.existsSync(PROFILES_FILE) ? await fs.readJson(PROFILES_FILE) : [];
-        let importedCount = 0;
-        for (const profile of backupData.profiles) {
-            const idx = currentProfiles.findIndex(cp => cp.id === profile.id);
-            if (idx > -1) { currentProfiles[idx] = profile; } else { currentProfiles.push(profile); }
-            importedCount++;
-        }
-        await fs.writeJson(PROFILES_FILE, currentProfiles);
+        profileDB.importBatch(backupData.profiles || []);
+        const importedCount = (backupData.profiles || []).length;
 
         // 还原代理和订阅
         currentImportProgress = { percent: 50, message: 'Restoring Proxies & Settings...', processing: true };
@@ -4370,16 +4362,11 @@ ipcMain.handle('import-data', async () => {
 
             if (data.profiles || data.preProxies || data.subscriptions) {
                 if (Array.isArray(data.profiles)) {
-                    const currentProfiles = fs.existsSync(PROFILES_FILE) ? await fs.readJson(PROFILES_FILE) : [];
-                    data.profiles.forEach(p => {
-                        const idx = currentProfiles.findIndex(cp => cp.id === p.id);
-                        if (idx > -1) currentProfiles[idx] = p;
-                        else {
-                            if (!p.id) p.id = uuidv4();
-                            currentProfiles.push(p);
-                        }
+                    const profilesToImport = data.profiles.map(p => {
+                        if (!p.id) p.id = uuidv4();
+                        return p;
                     });
-                    await fs.writeJson(PROFILES_FILE, currentProfiles);
+                    profileDB.importBatch(profilesToImport);
                     updated = true;
                 }
                 if (Array.isArray(data.preProxies) || Array.isArray(data.subscriptions)) {
@@ -4401,10 +4388,8 @@ ipcMain.handle('import-data', async () => {
                 }
             } else if (data.name && data.proxyStr && data.fingerprint) {
                 // 单个环境导入
-                const profiles = fs.existsSync(PROFILES_FILE) ? await fs.readJson(PROFILES_FILE) : [];
                 const newProfile = { ...data, id: uuidv4(), isSetup: false, createdAt: Date.now() };
-                profiles.push(newProfile);
-                await fs.writeJson(PROFILES_FILE, profiles);
+                profileDB.insert(newProfile);
                 updated = true;
             }
             return updated;
@@ -4418,7 +4403,7 @@ ipcMain.handle('import-data', async () => {
 
 // 保留旧的 export-data 用于向后兼容 (deprecated)
 ipcMain.handle('export-data', async (e, type) => {
-    const profiles = fs.existsSync(PROFILES_FILE) ? await fs.readJson(PROFILES_FILE) : [];
+    const profiles = profileDB.getAll();
     const settings = fs.existsSync(SETTINGS_FILE) ? await fs.readJson(SETTINGS_FILE) : { preProxies: [], subscriptions: [] };
 
     // 清理 fingerprint
@@ -4448,7 +4433,7 @@ ipcMain.handle('export-data', async (e, type) => {
 });
 
 // --- 核心启动逻辑 ---
-const launchProfileHandler = async (event, profileId, watermarkStyle, preferredLang, launchOptions = {}) => {
+const launchProfileHandler = async (event, profileId, preferredLang, launchOptions = {}) => {
     const sender = event.sender;
     const launchArgsOverride = normalizeLaunchOverrideArgs(launchOptions.launchArgsOverride || []);
     const progressTitle = preferredLang === 'en' ? 'Launching Profile' : '正在启动环境';
@@ -4535,7 +4520,7 @@ const launchProfileHandler = async (event, profileId, watermarkStyle, preferredL
     }));
     const uiLang = preferredLang === 'en' ? 'en' : (settings.lang === 'en' ? 'en' : 'cn');
 
-    const profiles = await fs.readJson(PROFILES_FILE);
+    const profiles = profileDB.getAll();
     const profileIndex = profiles.findIndex(p => p.id === profileId);
     const profile = profileIndex > -1 ? profiles[profileIndex] : null;
     if (!profile) throw new Error('Profile not found');
@@ -4553,8 +4538,7 @@ const launchProfileHandler = async (event, profileId, watermarkStyle, preferredL
     // Auto-assign a stable remote debugging port when feature is enabled and no explicit port exists.
     if (settings.enableRemoteDebugging && !normalizeDebugPort(profile.debugPort)) {
         profile.debugPort = await allocateDebugPortIfNeeded(settings, profiles, null);
-        profiles[profileIndex] = profile;
-        await fs.writeJson(PROFILES_FILE, profiles);
+        profileDB.update(profile.id, profile);
     }
 
     const useDirectNetwork = isDirectProxy(profile.proxyStr);
@@ -4788,9 +4772,8 @@ const launchProfileHandler = async (event, profileId, watermarkStyle, preferredL
             profile.fingerprint.languages = [];
         }
 
-        // 1. 生成 GeekEZ Guard 扩展（使用传递的水印样式）
-        const style = watermarkStyle || 'enhanced'; // 默认使用增强水印
-        const extPath = await generateExtension(profileDir, profile.fingerprint, profile.name, style, profileId);
+        // 1. 生成 GeekEZ Guard 扩展
+        const extPath = await generateExtension(profileDir, profile.fingerprint, profileId);
 
         // 2. 获取当前环境需要加载的用户扩展
         updateLaunchProgress(
@@ -4946,8 +4929,7 @@ const launchProfileHandler = async (event, profileId, watermarkStyle, preferredL
             : targetLang;
         let runtimeFingerprint = profile.fingerprint;
         let geolocationScript = getGeolocationScript(runtimeFingerprint);
-        let fingerprintInjectScript = getInjectScript(runtimeFingerprint, profile.name, style);
-        const watermarkInjectScript = getWatermarkScript(profile.name, style);
+        let fingerprintInjectScript = getInjectScript(runtimeFingerprint);
         const enableWebglOverride = !!(
             profile.fingerprint?.webglProfile !== 'none' &&
             profile.fingerprint?.webgl &&
@@ -5063,9 +5045,6 @@ const launchProfileHandler = async (event, profileId, watermarkStyle, preferredL
                     await page.evaluateOnNewDocument(fingerprintInjectScript);
                 } catch (e) { }
                 try {
-                    await page.evaluateOnNewDocument(watermarkInjectScript);
-                } catch (e) { }
-                try {
                     await page.evaluateOnNewDocument(webglOverrideScript);
                 } catch (e) { }
 
@@ -5074,9 +5053,6 @@ const launchProfileHandler = async (event, profileId, watermarkStyle, preferredL
                 } catch (e) { }
                 try {
                     await page.evaluate(fingerprintInjectScript);
-                } catch (e) { }
-                try {
-                    await page.evaluate(watermarkInjectScript);
                 } catch (e) { }
                 try {
                     await page.evaluate(webglOverrideScript);
@@ -5258,7 +5234,7 @@ const launchProfileHandler = async (event, profileId, watermarkStyle, preferredL
 
                 runtimeFingerprint = resolved.fingerprint;
                 geolocationScript = getGeolocationScript(runtimeFingerprint);
-                fingerprintInjectScript = getInjectScript(runtimeFingerprint, profile.name, style);
+                fingerprintInjectScript = getInjectScript(runtimeFingerprint);
 
                 try {
                     const pages = await browser.pages();
