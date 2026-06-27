@@ -1151,6 +1151,15 @@ function normalizeSettingsSnapshot(settings) {
     nextSettings.notify = !!nextSettings.notify;
     nextSettings.userExtensions = normalizeUserExtensions(nextSettings.userExtensions || []);
     nextSettings.closeBehavior = normalizeCloseBehavior(nextSettings.closeBehavior);
+    // 数据库配置：默认 sqlite，支持 postgres / mysql
+    if (!nextSettings.database || typeof nextSettings.database !== 'object') {
+        nextSettings.database = { type: 'sqlite' };
+    } else {
+        const dbType = nextSettings.database.type;
+        if (!['sqlite', 'postgres', 'mysql'].includes(dbType)) {
+            nextSettings.database.type = 'sqlite';
+        }
+    }
     return nextSettings;
 }
 
