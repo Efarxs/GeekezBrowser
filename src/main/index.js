@@ -1823,7 +1823,7 @@ async function handleApiRequest(method, pathname, body, params, context = {}) {
     // GET /api/open/:idOrName - Launch profile
     const openMatch = pathname.match(/^\/api\/open\/([^\/]+)$/);
     if (method === 'GET' && openMatch) {
-        const profile = findProfile(decodeURIComponent(openMatch[1]));
+        const profile = await findProfile(decodeURIComponent(openMatch[1]));
         if (!profile) return { status: 404, data: { success: false, error: 'Profile not found' } };
         const launchOverrideArgs = resolveApiLaunchOverrideArgs(params);
         if (shouldStreamApiOpenRequest(context.req, params) && context.req && context.res) {
@@ -1860,30 +1860,35 @@ async function handleApiRequest(method, pathname, body, params, context = {}) {
                     isDestroyed: () => true
                 }
             };
-        const launchMessage = await launchProfileHandler(
-            launchEvent,
-            profile.id,
-            lang,
-            { launchArgsOverride: launchOverrideArgs }
-        );
-        const launchedPort = await resolveRemoteDebugPortForProfile(profile.id, profile.debugPort);
-        const launchedPayload = {
-            success: true,
-            message: launchMessage || 'Launched',
-            profileId: profile.id,
-            name: profile.name,
-            launchArgs: launchOverrideArgs
-        };
-        if (launchedPort) {
-            launchedPayload['remote port'] = launchedPort;
+        try {
+            const launchMessage = await launchProfileHandler(
+                launchEvent,
+                profile.id,
+                lang,
+                { launchArgsOverride: launchOverrideArgs }
+            );
+            const launchedPort = await resolveRemoteDebugPortForProfile(profile.id, profile.debugPort);
+            const launchedPayload = {
+                success: true,
+                message: launchMessage || 'Launched',
+                profileId: profile.id,
+                name: profile.name,
+                launchArgs: launchOverrideArgs
+            };
+            if (launchedPort) {
+                launchedPayload['remote port'] = launchedPort;
+            }
+            return launchedPayload;
+        } catch (launchErr) {
+            console.error(`[API] Launch failed for ${profile.name} (${profile.id}):`, launchErr.message);
+            return { status: 500, data: { success: false, error: `Launch failed: ${launchErr.message}`, profileId: profile.id, name: profile.name } };
         }
-        return launchedPayload;
     }
 
     // POST /api/profiles/:idOrName/stop - Stop profile
     const stopMatch = pathname.match(/^\/api\/profiles\/([^\/]+)\/stop$/);
     if (method === 'POST' && stopMatch) {
-        const profile = findProfile(decodeURIComponent(stopMatch[1]));
+        const profile = await findProfile(decodeURIComponent(stopMatch[1]));
         if (!profile) return { status: 404, data: { success: false, error: 'Profile not found' } };
         const stopped = await stopRunningProfile(profile.id);
         if (!stopped) return { status: 404, data: { success: false, error: 'Profile not running' } };
