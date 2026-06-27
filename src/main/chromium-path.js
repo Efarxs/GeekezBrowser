@@ -143,10 +143,13 @@ function listStandardChromiumCandidates(platform = process.platform, env = proce
     ].filter(Boolean);
 }
 
-function resolveChromiumPath({ basePath, platform = process.platform, env = process.env } = {}) {
+function resolveChromiumPath({ basePath, platform = process.platform, env = process.env, preferChromeForTesting = false } = {}) {
     // Priority 0: fingerprint-chromium (engine-level fingerprint spoofing)
-    const fcPath = findBundledChromiumPath(path.join(basePath, 'chrome', 'fingerprint-chromium'), platform);
-    if (fcPath) return fcPath;
+    // Skip if preferChromeForTesting is set
+    if (!preferChromeForTesting) {
+        const fcPath = findBundledChromiumPath(path.join(basePath, 'chrome', 'fingerprint-chromium'), platform);
+        if (fcPath) return fcPath;
+    }
 
     const bundledPath = findBundledChromiumPath(basePath, platform);
     if (bundledPath) return bundledPath;
@@ -165,9 +168,9 @@ function resolveChromiumPath({ basePath, platform = process.platform, env = proc
     return null;
 }
 
-function getChromiumPath({ isDev, appPath, resourcesPath, platform = process.platform, env = process.env } = {}) {
+function getChromiumPath({ isDev, appPath, resourcesPath, platform = process.platform, env = process.env, preferChromeForTesting = false } = {}) {
     const basePath = isDev ? path.join(appPath, 'resources', 'puppeteer') : path.join(resourcesPath, 'puppeteer');
-    return resolveChromiumPath({ basePath, platform, env });
+    return resolveChromiumPath({ basePath, platform, env, preferChromeForTesting });
 }
 
 function getChromiumVersion({ isDev, appPath, resourcesPath, platform = process.platform } = {}) {
