@@ -288,6 +288,10 @@ async function handleSave() {
   try {
     const p = profileStore.profiles.find(x => x.id === uiStore.currentEditId);
     if (!p) return;
+    if (profileStore.isRunning(p.id) || profileStore.isLaunching(p.id)) {
+      uiStore.showAlert(window.t('runningNoEdit') || 'Cannot edit a running profile.');
+      return;
+    }
     const browserPreset = parseBrowserVersionPreset(form.browserVersionPreset);
 
     const tagsRaw = (form.tags || '').toString();
