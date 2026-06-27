@@ -288,7 +288,8 @@ async function main() {
                 process.stdout.write(`⬇️  Downloading fingerprint-chromium ${FC_VERSION}...\n`);
 
                 // 查询 GitHub Release 获取下载 URL
-                const FC_API_URL = `https://api.github.com/repos/adryfish/fingerprint-chromium/releases/tags/v${FC_VERSION}`;
+                // 注意：adryfish 的 tag 没有 v 前缀
+                const FC_API_URL = `https://api.github.com/repos/adryfish/fingerprint-chromium/releases/tags/${FC_VERSION}`;
                 let downloadUrl;
 
                 try {
@@ -320,15 +321,15 @@ async function main() {
                         makeRequest(isGlobal ? FC_API_URL : (GH_PROXY + FC_API_URL));
                     });
 
-                    // 根据平台选择 asset
+                    // 根据平台选择 asset（命名格式：ungoogled-chromium_*_windows_x64.zip）
                     const platformMap = {
-                        win32: 'chrome-win64',
-                        darwin: 'chrome-mac',
-                        linux: 'chrome-linux64',
+                        win32: 'windows_x64',
+                        darwin: 'macos',
+                        linux: 'linux',
                     };
                     const platformKeyword = platformMap[os.platform()];
                     const asset = (releaseData.assets || []).find(a =>
-                        a.name.endsWith('.zip') && a.name.includes(platformKeyword)
+                        a.name.includes(platformKeyword) && (a.name.endsWith('.zip') || a.name.endsWith('.tar.xz'))
                     );
 
                     if (!asset) {
@@ -339,12 +340,12 @@ async function main() {
                     console.log(`📦 Asset: ${asset.name} (${formatBytes(asset.size)})`);
                 } catch (e) {
                     console.error(`⚠️  GitHub API query failed: ${e.message}`);
-                    // Fallback 1: 使用硬编码的直链
-                    const FC_BASE = `https://github.com/adryfish/fingerprint-chromium/releases/download/v${FC_VERSION}`;
+                    // Fallback 1: 使用硬编码的直链（tag 无 v 前缀）
+                    const FC_BASE = `https://github.com/adryfish/fingerprint-chromium/releases/download/${FC_VERSION}`;
                     const HARDCODED_URLS = {
-                        win32: `${FC_BASE}/chrome-win64.zip`,
-                        darwin: `${FC_BASE}/chrome-mac-x64.zip`,
-                        linux: `${FC_BASE}/chrome-linux64.zip`,
+                        win32: `${FC_BASE}/ungoogled-chromium_${FC_VERSION}-1.1_windows_x64.zip`,
+                        darwin: `${FC_BASE}/ungoogled-chromium_${FC_VERSION}-1.1_macos.dmg`,
+                        linux: `${FC_BASE}/ungoogled-chromium-${FC_VERSION}-1-x86_64_linux.tar.xz`,
                     };
                     downloadUrl = isGlobal ? HARDCODED_URLS[os.platform()] : (GH_PROXY + HARDCODED_URLS[os.platform()]);
 
