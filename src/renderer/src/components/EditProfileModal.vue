@@ -91,6 +91,14 @@
           </div>
         </div>
 
+        <div class="mt-10">
+          <label class="checkbox-label">
+            <input type="checkbox" v-model="form.ignoreCertErrors">
+            {{ $t('ignoreCertErrors') }}
+          </label>
+          <div class="hint-text">{{ $t('ignoreCertErrorsHint') }}</div>
+        </div>
+
         <!-- Advanced Sections -->
         <div v-if="settings.enableRemoteDebugging" class="mt-10">
           <label class="label-tiny">Remote Debugging Port</label>
@@ -142,7 +150,8 @@ const form = reactive({
   debugPort: null,
   customArgs: '',
   browserVersionPreset: 'none',
-  webglProfile: 'none'
+  webglProfile: 'none',
+  ignoreCertErrors: false
 });
 
 function parseBrowserVersionPreset(preset) {
@@ -223,6 +232,7 @@ watch(() => uiStore.editModalVisible, async (visible) => {
     form.resH = fp.screen?.height || 1080;
     form.debugPort = p.debugPort || null;
     form.customArgs = p.customArgs || '';
+    form.ignoreCertErrors = !!p.ignoreCertErrors;
     form.browserVersionPreset = toBrowserVersionPreset(fp.uaMode, fp.browserType, fp.browserMajorVersion);
     form.webglProfile = fp.webglProfile || fp.webgl?.profileId || 'none';
     
@@ -320,7 +330,8 @@ async function handleSave() {
         webglProfile: form.webglProfile
       },
       debugPort: form.debugPort,
-      customArgs: form.customArgs
+      customArgs: form.customArgs,
+      ignoreCertErrors: form.ignoreCertErrors
     };
 
     // 这一步彻底洗掉 Vue 的 Proxy 深度监控包装，防止 Electron 的原生底层报错 "An object could not be cloned"
@@ -346,6 +357,15 @@ async function handleSave() {
   font-size: 10px;
   opacity: 0.5;
   margin-bottom: 8px;
+}
+
+.checkbox-label {
+  font-size: 12px;
+  font-weight: bold;
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  cursor: pointer;
 }
 
 .warning-text {

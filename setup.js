@@ -235,36 +235,173 @@ async function main() {
         if (os.platform() !== 'win32') fs.chmodSync(path.join(BIN_DIR, exeName), '755');
         console.log(`✅ Xray Updated Successfully! (Platform: ${PLATFORM_ARCH})`);
 
-        // 2. 准备 Chrome
-        process.stdout.write('⬇️  Downloading Chrome...\n');
-        const { install } = require('@puppeteer/browsers');
-        const BUILD_ID = '147.0.7727.50';
+        // 2. 准备浏览器内核
         const DOWNLOAD_ROOT = path.join(__dirname, 'resources', 'puppeteer');
-        const MIRROR_URL = 'https://npmmirror.com/mirrors/chrome-for-testing';
+        const USE_CFT = process.env.USE_CHROME_FOR_TESTING === '1';
 
-        if (fs.existsSync(DOWNLOAD_ROOT)) {
-            console.log(`🧹 Cleaning existing Chrome directory...`);
-            fs.rmSync(DOWNLOAD_ROOT, { recursive: true, force: true });
-        }
+        if (USE_CFT) {
+            // --- Chrome for Testing (fallback) ---
+            process.stdout.write('⬇️  Downloading Chrome for Testing...\n');
+            const { install } = require('@puppeteer/browsers');
+            const BUILD_ID = '147.0.7727.50';
+            const MIRROR_URL = 'https://npmmirror.com/mirrors/chrome-for-testing';
 
-        const baseUrlChrome = isGlobal ? undefined : MIRROR_URL;
-
-        const chromeStartTime = Date.now();
-
-        const result = await install({
-            cacheDir: DOWNLOAD_ROOT,
-            browser: 'chrome',
-            buildId: BUILD_ID,
-            unpack: true,
-            baseUrl: baseUrlChrome,
-            downloadProgressCallback: (downloadedBytes, totalBytes) => {
-                showProgress(downloadedBytes, totalBytes, chromeStartTime, 'Chrome   ');
+            if (fs.existsSync(DOWNLOAD_ROOT)) {
+                console.log(`🧹 Cleaning existing Chrome directory...`);
+                fs.rmSync(DOWNLOAD_ROOT, { recursive: true, force: true });
             }
-        });
 
-        process.stdout.write('\n'); // 换行，避免最后一行被吞
-        console.log('✅ Chrome downloaded successfully!');
-        console.log(`📂 Install Path: ${result.path}`);
+            const baseUrlChrome = isGlobal ? undefined : MIRROR_URL;
+            const chromeStartTime = Date.now();
+
+            const result = await install({
+                cacheDir: DOWNLOAD_ROOT,
+                browser: 'chrome',
+                buildId: BUILD_ID,
+                unpack: true,
+                baseUrl: baseUrlChrome,
+                downloadProgressCallback: (downloadedBytes, totalBytes) => {
+                    showProgress(downloadedBytes, totalBytes, chromeStartTime, 'Chrome   ');
+                }
+            });
+
+            process.stdout.write('\n');
+            console.log('✅ Chrome for Testing downloaded successfully!');
+            console.log(`📂 Install Path: ${result.path}`);
+        } else {
+            // --- fingerprint-chromium (primary) ---
+            const FC_VERSION = '148.0.7778.215';
+            const FC_TARGET_DIR = path.join(DOWNLOAD_ROOT, 'chrome', 'fingerprint-chromium');
+            const FC_VERSION_FILE = path.join(FC_TARGET_DIR, 'VERSION');
+
+            // 检查是否已存在且版本匹配
+            let needDownload = true;
+            if (fs.existsSync(FC_VERSION_FILE)) {
+                const installed = fs.readFileSync(FC_VERSION_FILE, 'utf8').trim();
+                if (installed === FC_VERSION) {
+                    console.log(`✅ fingerprint-chromium ${FC_VERSION} already installed, skipping download.`);
+                    needDownload = false;
+                }
+            }
+
+            if (needDownload) {
+                process.stdout.write(`⬇️  Downloading fingerprint-chromium ${FC_VERSION}...\n`);
+
+                // 查询 GitHub Release 获取下载 URL
+                const FC_API_URL = `https://api.github.com/repos/adryfish/fingerprint-chromium/releases/tags/v${FC_VERSION}`;
+                let downloadUrl;
+
+                try {
+                    const releaseData = await new Promise((resolve, reject) => {
+                        const makeRequest = (url) => {
+                            const urlObj = new URL(url);
+                            https.get({
+                                hostname: urlObj.hostname,
+                                path: urlObj.pathname + urlObj.search,
+                                headers: { 'User-Agent': 'GeekEZ-Browser-Setup' },
+                                timeout: 15000
+                            }, (res) => {
+                                if (res.statusCode >= 300 && res.statusCode < 400 && res.headers.location) {
+                                    makeRequest(res.headers.location);
+                                    return;
+                                }
+                                if (res.statusCode !== 200) {
+                                    reject(new Error(`GitHub API returned ${res.statusCode}`));
+                                    return;
+                                }
+                                let data = '';
+                                res.on('data', chunk => data += chunk);
+                                res.on('end', () => {
+                                    try { resolve(JSON.parse(data)); }
+                                    catch (e) { reject(e); }
+                                });
+                            }).on('error', reject).on('timeout', () => reject(new Error('Timeout')));
+                        };
+                        makeRequest(isGlobal ? FC_API_URL : (GH_PROXY + FC_API_URL));
+                    });
+
+                    // 根据平台选择 asset
+                    const platformMap = {
+                        win32: 'chrome-win64',
+                        darwin: 'chrome-mac',
+                        linux: 'chrome-linux64',
+                    };
+                    const platformKeyword = platformMap[os.platform()];
+                    const asset = (releaseData.assets || []).find(a =>
+                        a.name.endsWith('.zip') && a.name.includes(platformKeyword)
+                    );
+
+                    if (!asset) {
+                        throw new Error(`No matching asset found for platform ${os.platform()}. Available: ${(releaseData.assets || []).map(a => a.name).join(', ')}`);
+                    }
+
+                    downloadUrl = isGlobal ? asset.browser_download_url : (GH_PROXY + asset.browser_download_url);
+                    console.log(`📦 Asset: ${asset.name} (${formatBytes(asset.size)})`);
+                } catch (e) {
+                    console.error(`⚠️  GitHub API query failed: ${e.message}`);
+                    // Fallback 1: 使用硬编码的直链
+                    const FC_BASE = `https://github.com/adryfish/fingerprint-chromium/releases/download/v${FC_VERSION}`;
+                    const HARDCODED_URLS = {
+                        win32: `${FC_BASE}/chrome-win64.zip`,
+                        darwin: `${FC_BASE}/chrome-mac-x64.zip`,
+                        linux: `${FC_BASE}/chrome-linux64.zip`,
+                    };
+                    downloadUrl = isGlobal ? HARDCODED_URLS[os.platform()] : (GH_PROXY + HARDCODED_URLS[os.platform()]);
+
+                    if (!downloadUrl || !HARDCODED_URLS[os.platform()]) {
+                        console.error(`❌ No download URL for platform ${os.platform()}`);
+                        console.log('💡 Falling back to Chrome for Testing...');
+                        const { install } = require('@puppeteer/browsers');
+                        const BUILD_ID = '147.0.7727.50';
+                        if (fs.existsSync(DOWNLOAD_ROOT)) {
+                            fs.rmSync(DOWNLOAD_ROOT, { recursive: true, force: true });
+                        }
+                        const chromeStartTime = Date.now();
+                        const result = await install({
+                            cacheDir: DOWNLOAD_ROOT,
+                            browser: 'chrome',
+                            buildId: BUILD_ID,
+                            unpack: true,
+                            baseUrl: isGlobal ? undefined : 'https://npmmirror.com/mirrors/chrome-for-testing',
+                            downloadProgressCallback: (downloadedBytes, totalBytes) => {
+                                showProgress(downloadedBytes, totalBytes, chromeStartTime, 'Chrome   ');
+                            }
+                        });
+                        process.stdout.write('\n');
+                        console.log('✅ Chrome for Testing downloaded (fallback)!');
+                        console.log(`📂 Install Path: ${result.path}`);
+                        console.log('✨ All Setup Completed! Exiting...');
+                        process.exit(0);
+                    }
+
+                    console.log('📦 Using hardcoded download URL (API fallback)');
+                }
+
+                // 清理旧版本
+                if (fs.existsSync(FC_TARGET_DIR)) {
+                    fs.rmSync(FC_TARGET_DIR, { recursive: true, force: true });
+                }
+                fs.mkdirSync(FC_TARGET_DIR, { recursive: true });
+
+                // 下载
+                const zipPath = path.join(FC_TARGET_DIR, '..', 'fc-temp.zip');
+                const fcStartTime = Date.now();
+                await downloadFile(downloadUrl, zipPath, 'FP-Chrome ');
+
+                // 解压
+                await extractZip(zipPath, FC_TARGET_DIR);
+
+                // 清理 zip
+                if (fs.existsSync(zipPath)) fs.unlinkSync(zipPath);
+
+                // 写入版本文件
+                fs.writeFileSync(FC_VERSION_FILE, FC_VERSION);
+
+                process.stdout.write('\n');
+                console.log('✅ fingerprint-chromium downloaded successfully!');
+                console.log(`📂 Install Path: ${FC_TARGET_DIR}`);
+            }
+        }
 
         console.log('✨ All Setup Completed! Exiting...');
         process.exit(0);

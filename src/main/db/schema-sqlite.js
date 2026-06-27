@@ -9,6 +9,7 @@ const profiles = sqliteTable('profiles', {
     preProxyOverride: text('pre_proxy_override').default('default'),
     debugPort: int('debug_port'),
     customArgs: text('custom_args').default(''),
+    ignoreCertErrors: int('ignore_cert_errors').default(0),
     isSetup: int('is_setup').default(0),
     createdAt: int('created_at').notNull(),
     fingerprint: text('fingerprint').notNull(),
@@ -27,6 +28,7 @@ CREATE TABLE IF NOT EXISTS profiles (
     pre_proxy_override TEXT DEFAULT 'default',
     debug_port INTEGER,
     custom_args TEXT DEFAULT '',
+    ignore_cert_errors INTEGER DEFAULT 0,
     is_setup INTEGER DEFAULT 0,
     created_at INTEGER NOT NULL,
     fingerprint TEXT NOT NULL

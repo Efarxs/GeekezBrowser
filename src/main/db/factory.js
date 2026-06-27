@@ -21,6 +21,9 @@ async function createDatabase(dbConfig, dataPath) {
             // 自动建表
             sqlite.exec(CREATE_TABLE_SQL);
 
+            // 迁移：添加 ignore_cert_errors 列（已有表时静默忽略）
+            try { sqlite.exec('ALTER TABLE profiles ADD COLUMN ignore_cert_errors INTEGER DEFAULT 0'); } catch {}
+
             const db = drizzle({ client: sqlite });
 
             return {
@@ -42,6 +45,9 @@ async function createDatabase(dbConfig, dataPath) {
             // 自动建表
             await pool.query(CREATE_TABLE_SQL);
 
+            // 迁移：添加 ignore_cert_errors 列（已有表时静默忽略）
+            try { await pool.query('ALTER TABLE profiles ADD COLUMN IF NOT EXISTS ignore_cert_errors INTEGER DEFAULT 0'); } catch {}
+
             return {
                 db,
                 profiles,
@@ -60,6 +66,9 @@ async function createDatabase(dbConfig, dataPath) {
 
             // 自动建表
             await pool.query(CREATE_TABLE_SQL);
+
+            // 迁移：添加 ignore_cert_errors 列（已有表时静默忽略）
+            try { await pool.query('ALTER TABLE profiles ADD COLUMN ignore_cert_errors INT DEFAULT 0'); } catch {}
 
             return {
                 db,

@@ -2,7 +2,7 @@ const fs = require('fs');
 const path = require('path');
 
 const BUNDLED_BASENAMES = {
-    darwin: ['Google Chrome for Testing'],
+    darwin: ['Google Chrome for Testing', 'Google Chrome'],
     linux: ['chrome', 'google-chrome', 'chromium', 'chromium-browser'],
     win32: ['chrome.exe']
 };
@@ -32,14 +32,18 @@ function scoreBundledCandidate(filePath, platform = process.platform) {
 
     if (platform === 'darwin') {
         if (filePath.endsWith(path.join('Contents', 'MacOS', 'Google Chrome for Testing'))) score += 200;
+        if (filePath.endsWith(path.join('Contents', 'MacOS', 'Google Chrome'))) score += 180;
         if (normalized.includes('google chrome for testing.app')) score += 100;
+        if (normalized.includes('fingerprint-chromium')) score += 300;
     } else if (platform === 'linux') {
         if (path.basename(filePath) === 'chrome') score += 200;
         if (normalized.includes('chrome-linux')) score += 100;
         if (normalized.includes('chrome-for-testing')) score += 50;
+        if (normalized.includes('fingerprint-chromium')) score += 300;
     } else if (platform === 'win32') {
         if (path.basename(filePath).toLowerCase() === 'chrome.exe') score += 200;
         if (normalized.includes('chrome-win')) score += 100;
+        if (normalized.includes('fingerprint-chromium')) score += 300;
     }
 
     return score;
@@ -140,6 +144,10 @@ function listStandardChromiumCandidates(platform = process.platform, env = proce
 }
 
 function resolveChromiumPath({ basePath, platform = process.platform, env = process.env } = {}) {
+    // Priority 0: fingerprint-chromium (engine-level fingerprint spoofing)
+    const fcPath = findBundledChromiumPath(path.join(basePath, 'chrome', 'fingerprint-chromium'), platform);
+    if (fcPath) return fcPath;
+
     const bundledPath = findBundledChromiumPath(basePath, platform);
     if (bundledPath) return bundledPath;
 

@@ -91,6 +91,14 @@
           </select>
         </template>
 
+        <div class="mt-10">
+          <label class="checkbox-label">
+            <input type="checkbox" v-model="form.ignoreCertErrors">
+            {{ $t('ignoreCertErrors') }}
+          </label>
+          <div class="hint-text">{{ $t('ignoreCertErrorsHint') }}</div>
+        </div>
+
         <div v-if="settings.enableCustomArgs" class="mt-10">
           <label class="label-tiny">{{ $t('customArgsLabel') }}</label>
           <textarea v-model="form.customArgs" rows="2" placeholder="--start-maximized" class="mono-text"></textarea>
@@ -141,7 +149,8 @@ const form = reactive({
   geolocation: null,
   customArgs: '',
   browserVersionPreset: 'none',
-  webglProfile: 'none'
+  webglProfile: 'none',
+  ignoreCertErrors: false
 });
 
 function parseBrowserVersionPreset(preset) {
@@ -316,7 +325,8 @@ async function handleSave() {
         customArgs: form.customArgs,
         browserType: browserPreset.browserType,
         browserMajorVersion: browserPreset.browserMajorVersion,
-        webglProfile: form.webglProfile
+        webglProfile: form.webglProfile,
+        ignoreCertErrors: form.ignoreCertErrors
       };
       // Strip Vue reactive proxies to avoid Electron IPC clone failures for geolocation and similar objects.
       const safePayload = JSON.parse(JSON.stringify(payload));
@@ -350,6 +360,15 @@ async function handleSave() {
   font-size: 10px;
   opacity: 0.5;
   margin-bottom: 8px;
+}
+
+.checkbox-label {
+  font-size: 12px;
+  font-weight: bold;
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  cursor: pointer;
 }
 
 .flex-row {

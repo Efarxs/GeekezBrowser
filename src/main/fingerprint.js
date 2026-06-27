@@ -768,7 +768,8 @@ function generateFingerprint(options = {}) {
     return fingerprint;
 }
 
-function getInjectScript(fp) {
+function getInjectScript(fp, options = {}) {
+    const { useFingerprintChromium = false } = options;
     const normalizedFp = generateFingerprint(fp || {});
     const fpJson = JSON.stringify(normalizedFp);
 
@@ -776,6 +777,7 @@ function getInjectScript(fp) {
     (function() {
         try {
             const fp = ${fpJson};
+            const _useFC = ${useFingerprintChromium ? 'true' : 'false'};
 
             const makeNative = (func, name) => {
                 const nativeStr = 'function ' + name + '() { [native code] }';
@@ -850,15 +852,20 @@ function getInjectScript(fp) {
                 defineValueGetter(window, 'outerHeight', screenHeight, 'get outerHeight');
             }
 
-            if (fp.hardwareConcurrency) {
-                defineValueGetter(Navigator.prototype, 'hardwareConcurrency', fp.hardwareConcurrency, 'get hardwareConcurrency');
-            }
+            // hardwareConcurrency / deviceMemory — fingerprint-chromium 通过 CLI flags 处理
+            if (!_useFC) {
+                if (fp.hardwareConcurrency) {
+                    defineValueGetter(Navigator.prototype, 'hardwareConcurrency', fp.hardwareConcurrency, 'get hardwareConcurrency');
+                }
 
-            if (fp.deviceMemory) {
-                defineValueGetter(Navigator.prototype, 'deviceMemory', fp.deviceMemory, 'get deviceMemory');
+                if (fp.deviceMemory) {
+                    defineValueGetter(Navigator.prototype, 'deviceMemory', fp.deviceMemory, 'get deviceMemory');
+                }
             }
 
             // --- 3. UA and User-Agent Client Hints spoof ---
+            // fingerprint-chromium 通过 --fingerprint-platform/brand/seed 在引擎级处理
+            if (!_useFC) {
             const enableUaSpoof = fp.uaMode !== 'none';
             const targetUa = (enableUaSpoof && fp.userAgent) ? fp.userAgent : navigator.userAgent;
             const targetMeta = fp.userAgentMetadata || {};
@@ -918,6 +925,7 @@ function getInjectScript(fp) {
 
                 defineValueGetter(Navigator.prototype, 'userAgentData', uaData, 'get userAgentData');
             }
+            } // !_useFC — UA section end
 
             // --- 4. Geolocation ---
             if (fp.geolocation && typeof fp.geolocation.latitude === 'number' && typeof fp.geolocation.longitude === 'number') {
@@ -1015,6 +1023,8 @@ function getInjectScript(fp) {
             }
 
             // --- 6. Canvas and Audio noise ---
+            // fingerprint-chromium 通过 --fingerprint-canvas-noise / --fingerprint-audio-noise 处理
+            if (!_useFC) {
             try {
                 const originalGetImageData = CanvasRenderingContext2D.prototype.getImageData;
                 const hookedGetImageData = function getImageData(x, y, w, h) {
@@ -1051,11 +1061,14 @@ function getInjectScript(fp) {
                 };
                 AudioBuffer.prototype.getChannelData = makeNative(hookedGetChannelData, 'getChannelData');
             } catch (e) { }
+            } // !_useFC — Canvas + Audio section end
 
             // --- 7. WebGL spoof ---
+            // fingerprint-chromium 通过 --fingerprint-webgl-vendor/renderer 在引擎级拦截
             const enableWebglSpoof = !!(fp.webgl && !fp.webgl.disabled && fp.webglProfile !== 'none');
-            if (enableWebglSpoof || enableUaSpoof) {
             const webglInfo = fp.webgl || {};
+            if (!_useFC) {
+            if (enableWebglSpoof || enableUaSpoof) {
             const PATCHED_WEBGL_PROTO_KEY = '__geekezWebglPatched__';
             const debugExt = {
                 UNMASKED_VENDOR_WEBGL: 37445,
@@ -1193,8 +1206,10 @@ function getInjectScript(fp) {
                 hookCanvasContextFactory(window.HTMLCanvasElement && window.HTMLCanvasElement.prototype);
                 hookCanvasContextFactory(window.OffscreenCanvas && window.OffscreenCanvas.prototype);
             }
+            } // !_useFC — WebGL section end
 
             // --- 7.1 WebGPU alignment ---
+            // fingerprint-chromium 不处理 WebGPU，JS 层始终需要补充
             // Some detectors compare WebGL renderer with WebGPU adapter info.
             // Keep WebGPU adapter metadata aligned with selected WebGL profile.
             const patchGpuAdapter = (gpuObj) => {
@@ -1259,8 +1274,10 @@ function getInjectScript(fp) {
             }
 
             // --- 7.2 Worker realm bridge ---
+            // fingerprint-chromium 在引擎级处理 Worker 内的指纹
             // BrowserScan/PixelScan can read GPU/UA from dedicated workers.
             // Inject the same spoofing into worker contexts via constructor wrappers.
+            if (!_useFC) {
             try {
                 const buildWorkerBootstrap = (sourceUrl, isModule) => {
                     const payload = JSON.stringify({
@@ -1566,6 +1583,7 @@ function getInjectScript(fp) {
                 wrapWorkerConstructor('SharedWorker');
             } catch (e) { }
             }
+            } // !_useFC — Worker bridge section end
 
             // --- 8. WebRTC protection ---
             if (window.RTCPeerConnection) {

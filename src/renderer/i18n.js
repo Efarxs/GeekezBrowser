@@ -180,6 +180,8 @@ const enTranslations = {
     customArgsDisabled: "Custom launch arguments disabled",
     customArgsLabel: "Custom Launch Arguments",
     customArgsHint: "One argument per line or space-separated. Example: --start-maximized",
+    ignoreCertErrors: "Ignore SSL Certificate Errors",
+    ignoreCertErrorsHint: "Adds --ignore-certificate-errors to Chrome. Use when proxy or target site has SSL issues.",
     // API Server
     apiTitle: "🔌 API Server",
     apiDesc: "Enable REST API for external profile management (create, launch, edit, delete profiles)",
