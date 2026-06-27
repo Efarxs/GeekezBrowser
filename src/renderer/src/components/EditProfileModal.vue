@@ -91,14 +91,6 @@
           </div>
         </div>
 
-        <div class="mt-10">
-          <label class="checkbox-label">
-            <input type="checkbox" v-model="form.ignoreCertErrors">
-            {{ $t('ignoreCertErrors') }}
-          </label>
-          <div class="hint-text">{{ $t('ignoreCertErrorsHint') }}</div>
-        </div>
-
         <!-- Advanced Sections -->
         <div v-if="settings.enableRemoteDebugging" class="mt-10">
           <label class="label-tiny">Remote Debugging Port</label>
@@ -151,7 +143,6 @@ const form = reactive({
   customArgs: '',
   browserVersionPreset: 'none',
   webglProfile: 'none',
-  ignoreCertErrors: false
 });
 
 function parseBrowserVersionPreset(preset) {
@@ -232,7 +223,6 @@ watch(() => uiStore.editModalVisible, async (visible) => {
     form.resH = fp.screen?.height || 1080;
     form.debugPort = p.debugPort || null;
     form.customArgs = p.customArgs || '';
-    form.ignoreCertErrors = !!p.ignoreCertErrors;
     form.browserVersionPreset = toBrowserVersionPreset(fp.uaMode, fp.browserType, fp.browserMajorVersion);
     form.webglProfile = fp.webglProfile || fp.webgl?.profileId || 'none';
     
@@ -331,7 +321,7 @@ async function handleSave() {
       },
       debugPort: form.debugPort,
       customArgs: form.customArgs,
-      ignoreCertErrors: form.ignoreCertErrors
+      ignoreCertErrors: true
     };
 
     // 这一步彻底洗掉 Vue 的 Proxy 深度监控包装，防止 Electron 的原生底层报错 "An object could not be cloned"

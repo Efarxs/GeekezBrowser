@@ -7,6 +7,7 @@ export const useSettingsStore = defineStore('settings', {
         enableRemoteDebugging: false,
         enableCustomArgs: false,
         enableUaWebglModify: false,
+        preferChromeForTesting: false,
         enableApiServer: false,
         closeBehavior: 'tray',
         apiPort: 12138,
@@ -29,6 +30,7 @@ export const useSettingsStore = defineStore('settings', {
                 this.enableRemoteDebugging = settings.enableRemoteDebugging || false;
                 this.enableCustomArgs = settings.enableCustomArgs || false;
                 this.enableUaWebglModify = settings.enableUaWebglModify || false;
+                this.preferChromeForTesting = settings.preferChromeForTesting || false;
                 this.enableApiServer = settings.enableApiServer || false;
                 this.closeBehavior = settings.closeBehavior === 'quit' ? 'quit' : 'tray';
                 this.apiPort = settings.apiPort || 12138;
@@ -80,6 +82,13 @@ export const useSettingsStore = defineStore('settings', {
             this.enableUaWebglModify = enabled;
             const settings = await ipcService.getSettings();
             settings.enableUaWebglModify = enabled;
+            await ipcService.saveSettings(settings);
+        },
+
+        async togglePreferChromeForTesting(enabled) {
+            this.preferChromeForTesting = enabled;
+            const settings = await ipcService.getSettings();
+            settings.preferChromeForTesting = enabled;
             await ipcService.saveSettings(settings);
         },
 

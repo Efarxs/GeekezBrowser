@@ -1148,6 +1148,7 @@ function normalizeSettingsSnapshot(settings) {
     if (!['single', 'balance', 'failover'].includes(nextSettings.mode)) nextSettings.mode = 'single';
     nextSettings.lang = nextSettings.lang === 'en' ? 'en' : 'cn';
     nextSettings.enablePreProxy = !!nextSettings.enablePreProxy;
+    nextSettings.preferChromeForTesting = !!nextSettings.preferChromeForTesting;
     nextSettings.notify = !!nextSettings.notify;
     nextSettings.userExtensions = normalizeUserExtensions(nextSettings.userExtensions || []);
     nextSettings.closeBehavior = normalizeCloseBehavior(nextSettings.closeBehavior);
@@ -4634,6 +4635,7 @@ const launchProfileHandler = async (event, profileId, preferredLang, launchOptio
     const settings = await fs.readJson(SETTINGS_FILE).catch(() => ({
         enableRemoteDebugging: false,
         enableUaWebglModify: false,
+        preferChromeForTesting: false,
         userExtensions: [],
         preProxies: [],
         mode: 'single',
@@ -4896,8 +4898,10 @@ const launchProfileHandler = async (event, profileId, preferredLang, launchOptio
         }
 
         // 检测是否为 fingerprint-chromium 内核
+        // 设置项 preferChromeForTesting 或环境变量 USE_CHROME_FOR_TESTING 可强制使用 Chrome for Testing
+        const preferCft = !!settings.preferChromeForTesting || process.env.USE_CHROME_FOR_TESTING === '1';
         const chromePath = getChromiumPath();
-        const isFingerprintChromium = chromePath && chromePath.includes('fingerprint-chromium');
+        const isFingerprintChromium = !preferCft && chromePath && chromePath.includes('fingerprint-chromium');
         const chromiumVersion = getChromiumVersion(); // e.g., "148.0.7778.215"
 
         // 1. 生成 GeekEZ Guard 扩展
@@ -4937,8 +4941,6 @@ const launchProfileHandler = async (event, profileId, preferredLang, launchOptio
         const launchArgs = [
             `--user-data-dir=${userDataDir}`,
             `--window-size=${profile.fingerprint?.window?.width || 1280},${profile.fingerprint?.window?.height || 800}`,
-            '--no-sandbox',
-            '--disable-setuid-sandbox',
             '--disable-blink-features=AutomationControlled',
             `--disable-features=${disabledFeatures.join(',')}`,
             '--force-webrtc-ip-handling-policy=disable_non_proxied_udp',
@@ -5017,11 +5019,9 @@ const launchProfileHandler = async (event, profileId, preferredLang, launchOptio
             if (webgl?.unmaskedRenderer) console.log(`   WebGL: ${webgl.unmaskedVendor} / ${webgl.unmaskedRenderer}`);
         }
 
-        // SSL certificate errors
-        if (profile.ignoreCertErrors) {
-            launchArgs.push('--ignore-certificate-errors');
-            launchArgs.push('--ignore-certificate-errors-spki-list');
-        }
+        // SSL certificate errors (always enabled)
+        launchArgs.push('--ignore-certificate-errors');
+        launchArgs.push('--ignore-certificate-errors-spki-list');
 
         // 5. Remote Debugging Port (if enabled)
         const remoteDebugPort = normalizeDebugPort(profile.debugPort);
