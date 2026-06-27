@@ -1148,7 +1148,6 @@ function normalizeSettingsSnapshot(settings) {
     if (!['single', 'balance', 'failover'].includes(nextSettings.mode)) nextSettings.mode = 'single';
     nextSettings.lang = nextSettings.lang === 'en' ? 'en' : 'cn';
     nextSettings.enablePreProxy = !!nextSettings.enablePreProxy;
-    nextSettings.preferChromeForTesting = !!nextSettings.preferChromeForTesting;
     nextSettings.notify = !!nextSettings.notify;
     nextSettings.userExtensions = normalizeUserExtensions(nextSettings.userExtensions || []);
     nextSettings.closeBehavior = normalizeCloseBehavior(nextSettings.closeBehavior);
@@ -2096,14 +2095,13 @@ function forceKill(pid) {
     });
 }
 
-function getChromiumPath(preferChromeForTesting = false) {
+function getChromiumPath() {
     return resolveChromiumPathForApp({
         isDev,
         appPath: app.getAppPath(),
         resourcesPath: process.resourcesPath,
         platform: process.platform,
-        env: process.env,
-        preferChromeForTesting
+        env: process.env
     });
 }
 
@@ -4636,7 +4634,6 @@ const launchProfileHandler = async (event, profileId, preferredLang, launchOptio
     const settings = await fs.readJson(SETTINGS_FILE).catch(() => ({
         enableRemoteDebugging: false,
         enableUaWebglModify: false,
-        preferChromeForTesting: false,
         userExtensions: [],
         preProxies: [],
         mode: 'single',
@@ -4898,11 +4895,9 @@ const launchProfileHandler = async (event, profileId, preferredLang, launchOptio
             profile.fingerprint.languages = [];
         }
 
-        // 检测是否为 fingerprint-chromium 内核
-        // 设置项 preferChromeForTesting 或环境变量 USE_CHROME_FOR_TESTING 可强制使用 Chrome for Testing
-        const preferCft = !!settings.preferChromeForTesting || process.env.USE_CHROME_FOR_TESTING === '1';
-        const chromePath = getChromiumPath(preferCft);
-        const isFingerprintChromium = chromePath && chromePath.includes('fingerprint-chromium');
+        // fingerprint-chromium 是唯一内核
+        const chromePath = getChromiumPath();
+        const isFingerprintChromium = true;
         const chromiumVersion = getChromiumVersion(); // e.g., "148.0.7778.215"
 
         // 1. 生成 GeekEZ Guard 扩展
@@ -4980,6 +4975,7 @@ const launchProfileHandler = async (event, profileId, preferredLang, launchOptio
         // fingerprint-chromium 引擎级指纹伪装
         if (isFingerprintChromium) {
             const fpSeed = generateFingerprintSeed(profileId);
+            // --fingerprint=<seed> 是核心：seed 驱动所有指纹（WebGL, Canvas, Audio, UA, fonts 等）
             launchArgs.push(`--fingerprint=${fpSeed}`);
             launchArgs.push('--fingerprint-brand=Chrome');
 
@@ -4989,17 +4985,6 @@ const launchProfileHandler = async (event, profileId, preferredLang, launchOptio
                 : fpPlatform === 'Linux' || fpPlatform === 'linux' ? 'linux'
                 : 'windows';
             launchArgs.push(`--fingerprint-platform=${fcPlatform}`);
-
-            // WebGL（核心修复：引擎级拦截，JS 层无法绕过）
-            const webgl = profile.fingerprint?.webgl;
-            if (webgl && !webgl.disabled && profile.fingerprint?.webglProfile !== 'none') {
-                if (webgl.unmaskedVendor) launchArgs.push(`--fingerprint-webgl-vendor=${webgl.unmaskedVendor}`);
-                if (webgl.unmaskedRenderer) launchArgs.push(`--fingerprint-webgl-renderer=${webgl.unmaskedRenderer}`);
-            }
-
-            // Canvas / Audio 噪声（引擎级，与 Ant-Browser 一致）
-            launchArgs.push('--fingerprint-canvas-noise=true');
-            launchArgs.push('--fingerprint-audio-noise=true');
 
             // 硬件参数
             if (profile.fingerprint?.hardwareConcurrency) {
@@ -5014,10 +4999,11 @@ const launchProfileHandler = async (event, profileId, preferredLang, launchOptio
                 launchArgs.push(`--timezone=${profile.fingerprint.timezone}`);
             }
 
+            // 注意：Chrome 144+ 已移除 --fingerprint-webgl-vendor/renderer、--fingerprint-canvas-noise、--fingerprint-audio-noise
+            // WebGL/Canvas/Audio 噪声由 --fingerprint=<seed> 自动派生
             // 引擎已内置：navigator.webdriver=false, plugins, ClientRects, fonts
             console.log('🔒 fingerprint-chromium engine mode active');
             console.log(`   Seed: ${fpSeed}, Platform: ${fcPlatform}`);
-            if (webgl?.unmaskedRenderer) console.log(`   WebGL: ${webgl.unmaskedVendor} / ${webgl.unmaskedRenderer}`);
         }
 
         // 5. Remote Debugging Port (if enabled)

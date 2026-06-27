@@ -210,8 +210,6 @@ window.zhCN = {
     debugToggleHint: "启用后可为环境设置远程调试端口，用于 Puppeteer 或 DevTools 连接",
     argsToggle: "⚡ 自定义启动参数",
     argsToggleHint: "启用后可为每个环境添加自定义 Chrome 启动参数",
-    chromeForTestingToggle: "🌐 使用 Chrome for Testing 内核",
-    chromeForTestingToggleHint: "切换到 Chrome for Testing 内核（默认使用 fingerprint-chromium 以获得更好的指纹保护）",
     apiToggle: "🔌 API 服务",
     apiToggleHint: "启用后可通过 REST API 远程管理环境",
     closeBehaviorTitle: "🧷 关闭窗口行为",
