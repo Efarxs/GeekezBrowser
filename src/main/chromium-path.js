@@ -170,7 +170,38 @@ function getChromiumPath({ isDev, appPath, resourcesPath, platform = process.pla
     return resolveChromiumPath({ basePath, platform, env });
 }
 
+function getChromiumVersion({ isDev, appPath, resourcesPath, platform = process.platform } = {}) {
+    const basePath = isDev ? path.join(appPath, 'resources', 'puppeteer') : path.join(resourcesPath, 'puppeteer');
+
+    // Priority 1: fingerprint-chromium VERSION file
+    const fcVersionFile = path.join(basePath, 'chrome', 'fingerprint-chromium', 'VERSION');
+    try {
+        if (fs.existsSync(fcVersionFile)) {
+            const v = fs.readFileSync(fcVersionFile, 'utf8').trim();
+            if (/^\d+\.\d+\.\d+\.\d+$/.test(v)) return v;
+            // fingerprint-chromium uses non-standard version (e.g., "148.0.7778.215")
+            const m = v.match(/^(\d+\.\d+\.\d+\.\d+)/);
+            if (m) return m[1];
+        }
+    } catch (_) {}
+
+    // Priority 2: Chrome for Testing directory name (chrome/linux64-147.0.7727.50/)
+    try {
+        const chromeDir = path.join(basePath, 'chrome');
+        if (fs.existsSync(chromeDir)) {
+            const entries = fs.readdirSync(chromeDir);
+            for (const entry of entries) {
+                const m = entry.match(/(\d+\.\d+\.\d+\.\d+)$/);
+                if (m) return m[1];
+            }
+        }
+    } catch (_) {}
+
+    return null;
+}
+
 module.exports = {
     getChromiumPath,
+    getChromiumVersion,
     resolveChromiumPath
 };

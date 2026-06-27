@@ -12,7 +12,7 @@ const os = require('os');
 const crypto = require('crypto');
 const zlib = require('zlib');
 const { promisify } = require('util');
-const { getChromiumPath: resolveChromiumPathForApp } = require('./chromium-path');
+const { getChromiumPath: resolveChromiumPathForApp, getChromiumVersion: resolveChromiumVersionForApp } = require('./chromium-path');
 const { CLOSE_BEHAVIOR, normalizeCloseBehavior, resolveCloseBehavior } = require('./close-behavior');
 const { fetchLatestGitHubReleaseInfo } = require('./release-check');
 const { resolveXrayAssetName } = require('./xray-assets');
@@ -2102,6 +2102,15 @@ function getChromiumPath() {
         resourcesPath: process.resourcesPath,
         platform: process.platform,
         env: process.env
+    });
+}
+
+function getChromiumVersion() {
+    return resolveChromiumVersionForApp({
+        isDev,
+        appPath: app.getAppPath(),
+        resourcesPath: process.resourcesPath,
+        platform: process.platform
     });
 }
 
@@ -4889,9 +4898,10 @@ const launchProfileHandler = async (event, profileId, preferredLang, launchOptio
         // 检测是否为 fingerprint-chromium 内核
         const chromePath = getChromiumPath();
         const isFingerprintChromium = chromePath && chromePath.includes('fingerprint-chromium');
+        const chromiumVersion = getChromiumVersion(); // e.g., "148.0.7778.215"
 
         // 1. 生成 GeekEZ Guard 扩展
-        const extPath = await generateExtension(profileDir, profile.fingerprint, profileId, { useFingerprintChromium: isFingerprintChromium });
+        const extPath = await generateExtension(profileDir, profile.fingerprint, profileId, { useFingerprintChromium: isFingerprintChromium, browserVersion: chromiumVersion });
 
         // 2. 获取当前环境需要加载的用户扩展
         updateLaunchProgress(
@@ -5096,7 +5106,7 @@ const launchProfileHandler = async (event, profileId, preferredLang, launchOptio
             : targetLang;
         let runtimeFingerprint = profile.fingerprint;
         let geolocationScript = getGeolocationScript(runtimeFingerprint);
-        let fingerprintInjectScript = getInjectScript(runtimeFingerprint, { useFingerprintChromium: isFingerprintChromium });
+        let fingerprintInjectScript = getInjectScript(runtimeFingerprint, { useFingerprintChromium: isFingerprintChromium, browserVersion: chromiumVersion });
         // fingerprint-chromium 已在引擎级处理 WebGL，不需要 JS 层覆盖
         const enableWebglOverride = !isFingerprintChromium && !!(
             profile.fingerprint?.webglProfile !== 'none' &&
@@ -5402,7 +5412,7 @@ const launchProfileHandler = async (event, profileId, preferredLang, launchOptio
 
                 runtimeFingerprint = resolved.fingerprint;
                 geolocationScript = getGeolocationScript(runtimeFingerprint);
-                fingerprintInjectScript = getInjectScript(runtimeFingerprint, { useFingerprintChromium: isFingerprintChromium });
+                fingerprintInjectScript = getInjectScript(runtimeFingerprint, { useFingerprintChromium: isFingerprintChromium, browserVersion: chromiumVersion });
 
                 try {
                     const pages = await browser.pages();
