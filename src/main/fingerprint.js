@@ -11,7 +11,7 @@ const RESOLUTIONS = [
     { w: 1440, h: 900 }
 ];
 
-const BROWSER_MAJOR_VERSIONS = Array.from({ length: 19 }, (_, i) => 129 + i); // 129 - 147
+const BROWSER_MAJOR_VERSIONS = Array.from({ length: 20 }, (_, i) => 129 + i); // 129 - 148
 const BROWSER_TYPES = ['chrome', 'edge'];
 const UTLS_SIGNATURES = [
     'none',
@@ -28,6 +28,7 @@ const UTLS_SIGNATURES = [
     'hellorandomizednoalpn'
 ];
 const BROWSER_FULL_VERSION_POOL = [
+    '148.0.0.0',
     '147.0.0.0',
     '146.0.0.0',
     '145.0.0.0',
@@ -769,8 +770,19 @@ function generateFingerprint(options = {}) {
 }
 
 function getInjectScript(fp, options = {}) {
-    const { useFingerprintChromium = false } = options;
-    const normalizedFp = generateFingerprint(fp || {});
+    const { useFingerprintChromium = false, browserVersion } = options;
+
+    // If we detected the actual browser version, use it as the primary version
+    // to avoid UA version mismatch (e.g., bundled Chromium 148 but pool only has 147)
+    const fpWithVersion = { ...(fp || {}) };
+    if (browserVersion && !fpWithVersion.browserMajorVersion) {
+        const major = parseInt(String(browserVersion).split('.')[0], 10);
+        if (major >= 100 && major <= 200) {
+            fpWithVersion.browserMajorVersion = major;
+            fpWithVersion.browserFullVersion = browserVersion;
+        }
+    }
+    const normalizedFp = generateFingerprint(fpWithVersion);
     const fpJson = JSON.stringify(normalizedFp);
 
     return `
