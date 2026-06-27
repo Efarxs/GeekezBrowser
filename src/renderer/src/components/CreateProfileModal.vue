@@ -91,6 +91,13 @@
           </select>
         </template>
 
+        <label class="label-tiny">{{ $t('platformLabel') }}</label>
+        <select v-model="form.platform">
+          <option value="Win32">{{ $t('platformWin') }}</option>
+          <option value="MacIntel">{{ $t('platformMac') }}</option>
+          <option value="Linux x86_64">{{ $t('platformLinux') }}</option>
+        </select>
+
         <div v-if="settings.enableCustomArgs" class="mt-10">
           <label class="label-tiny">{{ $t('customArgsLabel') }}</label>
           <textarea v-model="form.customArgs" rows="2" placeholder="--start-maximized" class="mono-text"></textarea>
@@ -142,6 +149,7 @@ const form = reactive({
   customArgs: '',
   browserVersionPreset: 'none',
   webglProfile: 'none',
+  platform: 'Win32',
 });
 
 function parseBrowserVersionPreset(preset) {
@@ -247,7 +255,8 @@ watch(() => uiStore.addModalVisible, async (newVal) => {
       geolocation: null,
       customArgs: '',
       browserVersionPreset: 'none',
-      webglProfile: 'none'
+      webglProfile: 'none',
+      platform: 'Win32'
     });
     timezoneSearch.value = AUTO_TIMEZONE_LABEL;
     citySearch.value = 'Auto (IP Based)';
@@ -317,6 +326,7 @@ async function handleSave() {
         browserType: browserPreset.browserType,
         browserMajorVersion: browserPreset.browserMajorVersion,
         webglProfile: form.webglProfile,
+        platform: form.platform,
         ignoreCertErrors: true
       };
       // Strip Vue reactive proxies to avoid Electron IPC clone failures for geolocation and similar objects.
