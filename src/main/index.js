@@ -204,7 +204,11 @@ function createApiServer(port) {
         } catch (err) {
             console.error('API Error:', err);
             res.writeHead(err.status || err.statusCode || 500);
-            res.end(JSON.stringify({ success: false, error: err.message }));
+            const errPayload = { success: false, error: err.message };
+            if (err.code) errPayload.code = err.code;
+            if (err.detail) errPayload.detail = err.detail;
+            if (err.xrayLog) errPayload.xrayLog = err.xrayLog;
+            res.end(JSON.stringify(errPayload));
         }
     });
 
@@ -3295,6 +3299,7 @@ function createProxyStartupError(profileName, reason, xrayLogPath, lang = 'cn') 
     const err = new Error(summary);
     err.code = 'XRAY_STARTUP_FAILED';
     err.detail = extraReason;
+    if (logTail) err.xrayLog = logTail;
     return err;
 }
 

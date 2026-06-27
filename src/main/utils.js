@@ -441,8 +441,11 @@ function generateXrayConfig(mainProxyStr, localPort, preProxyConfig = null, prof
     outbounds.push({ protocol: "freedom", tag: "direct" });
 
     // Enable Mux (multiplexing) on proxy outbounds to reduce TCP connection overhead
+    // Mux only works with protocols that support it (vmess, vless, trojan, shadowsocks, etc.)
+    // Plain socks/http proxies cannot parse smux frames — skip them
+    const MUX_UNSUPPORTED = new Set(['freedom', 'blackhole', 'socks', 'http']);
     outbounds.forEach(ob => {
-        if (ob.protocol && ob.protocol !== 'freedom' && ob.protocol !== 'blackhole') {
+        if (ob.protocol && !MUX_UNSUPPORTED.has(ob.protocol)) {
             ob.mux = { enabled: true, concurrency: 8 };
         }
     });
