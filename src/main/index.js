@@ -2096,13 +2096,14 @@ function forceKill(pid) {
     });
 }
 
-function getChromiumPath() {
+function getChromiumPath(preferChromeForTesting = false) {
     return resolveChromiumPathForApp({
         isDev,
         appPath: app.getAppPath(),
         resourcesPath: process.resourcesPath,
         platform: process.platform,
-        env: process.env
+        env: process.env,
+        preferChromeForTesting
     });
 }
 
@@ -4900,8 +4901,8 @@ const launchProfileHandler = async (event, profileId, preferredLang, launchOptio
         // 检测是否为 fingerprint-chromium 内核
         // 设置项 preferChromeForTesting 或环境变量 USE_CHROME_FOR_TESTING 可强制使用 Chrome for Testing
         const preferCft = !!settings.preferChromeForTesting || process.env.USE_CHROME_FOR_TESTING === '1';
-        const chromePath = getChromiumPath();
-        const isFingerprintChromium = !preferCft && chromePath && chromePath.includes('fingerprint-chromium');
+        const chromePath = getChromiumPath(preferCft);
+        const isFingerprintChromium = chromePath && chromePath.includes('fingerprint-chromium');
         const chromiumVersion = getChromiumVersion(); // e.g., "148.0.7778.215"
 
         // 1. 生成 GeekEZ Guard 扩展
@@ -4996,9 +4997,9 @@ const launchProfileHandler = async (event, profileId, preferredLang, launchOptio
                 if (webgl.unmaskedRenderer) launchArgs.push(`--fingerprint-webgl-renderer=${webgl.unmaskedRenderer}`);
             }
 
-            // Canvas / Audio 噪声
-            launchArgs.push('--fingerprint-canvas-noise');
-            launchArgs.push('--fingerprint-audio-noise');
+            // Canvas / Audio 噪声（引擎级，与 Ant-Browser 一致）
+            launchArgs.push('--fingerprint-canvas-noise=true');
+            launchArgs.push('--fingerprint-audio-noise=true');
 
             // 硬件参数
             if (profile.fingerprint?.hardwareConcurrency) {
@@ -5018,10 +5019,6 @@ const launchProfileHandler = async (event, profileId, preferredLang, launchOptio
             console.log(`   Seed: ${fpSeed}, Platform: ${fcPlatform}`);
             if (webgl?.unmaskedRenderer) console.log(`   WebGL: ${webgl.unmaskedVendor} / ${webgl.unmaskedRenderer}`);
         }
-
-        // SSL certificate errors (always enabled)
-        launchArgs.push('--ignore-certificate-errors');
-        launchArgs.push('--ignore-certificate-errors-spki-list');
 
         // 5. Remote Debugging Port (if enabled)
         const remoteDebugPort = normalizeDebugPort(profile.debugPort);
