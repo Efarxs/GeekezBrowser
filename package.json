@@ -1,6 +1,6 @@
 {
   "name": "geekez-browser",
-  "version": "1.5.5-beta",
+  "version": "1.6.0-beta",
   "description": "Stealthy Anti-Detect Browser for E-Commerce",
   "main": "out/main/index.js",
   "author": "EchoHS",
@@ -117,8 +117,6 @@
     "js-yaml": "^4.1.1",
     "pinia": "^3.0.4",
     "puppeteer": "^24.40.0",
-    "puppeteer-extra": "^3.3.6",
-    "puppeteer-extra-plugin-stealth": "^2.11.2",
     "socks-proxy-agent": "^10.0.0",
     "tcp-ping": "^0.1.1",
     "tree-kill": "^1.2.2",

@@ -183,6 +183,8 @@ window.zhCN = {
     customArgsDisabled: "自定义启动参数已禁用",
     customArgsLabel: "自定义启动参数",
     customArgsHint: "每行一个参数或空格分隔。示例：--start-maximized",
+    ignoreCertErrors: "忽略 SSL 证书错误",
+    ignoreCertErrorsHint: "添加 --ignore-certificate-errors 启动参数，适用于代理或目标网站存在 SSL 问题时使用。",
     // API 服务
     apiTitle: "🔌 API 服务",
     apiDesc: "启用 REST API 以便外部管理环境（创建、启动、编辑、删除）",

@@ -1187,6 +1187,15 @@ function isAutoIpBasedCityValue(value) {
         normalized === '自动 (基于 ip)';
 }
 
+// 生成确定性指纹 seed（基于 profile ID，同一 profile 每次相同）
+function generateFingerprintSeed(profileId) {
+    let hash = 0;
+    for (let i = 0; i < profileId.length; i++) {
+        hash = ((hash << 5) - hash + profileId.charCodeAt(i)) | 0;
+    }
+    return Math.abs(hash) % 2147483647 + 1;
+}
+
 function hasValidGeolocation(geo) {
     return !!geo &&
         typeof geo.latitude === 'number' &&
@@ -1688,6 +1697,7 @@ async function buildProfileFromInput(rawData, profiles, settings, existingProfil
         preProxyOverride: firstDefined(data.preProxyOverride, existingProfile?.preProxyOverride, 'default'),
         debugPort,
         customArgs: normalizedCustomArgs,
+        ignoreCertErrors: firstDefined(data.ignoreCertErrors, existingProfile?.ignoreCertErrors, false),
         isSetup: existingProfile?.isSetup || false,
         createdAt: existingProfile?.createdAt || Date.now()
     };
@@ -2613,7 +2623,7 @@ function notifyUIRefresh() {
     refreshTrayMenu().catch(() => { });
 }
 
-async function generateExtension(profilePath, fingerprint, profileId) {
+async function generateExtension(profilePath, fingerprint, profileId, options = {}) {
     const extDir = path.join(profilePath, 'extension');
     await fs.ensureDir(extDir);
 
@@ -2655,7 +2665,7 @@ async function generateExtension(profilePath, fingerprint, profileId) {
         action: { default_popup: "popup.html" }
     };
     const geoScriptContent = getGeolocationScript(fingerprint);
-    const scriptContent = getInjectScript(fingerprint);
+    const scriptContent = getInjectScript(fingerprint, options);
     await fs.writeJson(path.join(extDir, 'manifest.json'), manifest);
     await fs.writeFile(path.join(extDir, 'geo.js'), geoScriptContent);
     await fs.writeFile(path.join(extDir, 'content.js'), scriptContent);
@@ -4876,8 +4886,12 @@ const launchProfileHandler = async (event, profileId, preferredLang, launchOptio
             profile.fingerprint.languages = [];
         }
 
+        // 检测是否为 fingerprint-chromium 内核
+        const chromePath = getChromiumPath();
+        const isFingerprintChromium = chromePath && chromePath.includes('fingerprint-chromium');
+
         // 1. 生成 GeekEZ Guard 扩展
-        const extPath = await generateExtension(profileDir, profile.fingerprint, profileId);
+        const extPath = await generateExtension(profileDir, profile.fingerprint, profileId, { useFingerprintChromium: isFingerprintChromium });
 
         // 2. 获取当前环境需要加载的用户扩展
         updateLaunchProgress(
@@ -4941,12 +4955,62 @@ const launchProfileHandler = async (event, profileId, preferredLang, launchOptio
             launchArgs.unshift('--no-proxy-server');
         }
 
-        if (profile.fingerprint?.userAgent) {
+        // fingerprint-chromium 通过 --fingerprint-platform/brand 处理 UA，不需要 --user-agent
+        if (!isFingerprintChromium && profile.fingerprint?.userAgent) {
             launchArgs.push(`--user-agent=${profile.fingerprint.userAgent}`);
         }
         if (hasLanguageOverride) {
             launchArgs.push(`--lang=${targetLang}`);
             launchArgs.push(`--accept-lang=${targetLang}`);
+        }
+
+        // fingerprint-chromium 引擎级指纹伪装
+        if (isFingerprintChromium) {
+            const fpSeed = generateFingerprintSeed(profileId);
+            launchArgs.push(`--fingerprint=${fpSeed}`);
+            launchArgs.push('--fingerprint-brand=Chrome');
+
+            // 平台（与 fingerprint.platform 一致）
+            const fpPlatform = profile.fingerprint?.platform || 'windows';
+            const fcPlatform = fpPlatform === 'MacIntel' || fpPlatform === 'macos' ? 'macos'
+                : fpPlatform === 'Linux' || fpPlatform === 'linux' ? 'linux'
+                : 'windows';
+            launchArgs.push(`--fingerprint-platform=${fcPlatform}`);
+
+            // WebGL（核心修复：引擎级拦截，JS 层无法绕过）
+            const webgl = profile.fingerprint?.webgl;
+            if (webgl && !webgl.disabled && profile.fingerprint?.webglProfile !== 'none') {
+                if (webgl.unmaskedVendor) launchArgs.push(`--fingerprint-webgl-vendor=${webgl.unmaskedVendor}`);
+                if (webgl.unmaskedRenderer) launchArgs.push(`--fingerprint-webgl-renderer=${webgl.unmaskedRenderer}`);
+            }
+
+            // Canvas / Audio 噪声
+            launchArgs.push('--fingerprint-canvas-noise');
+            launchArgs.push('--fingerprint-audio-noise');
+
+            // 硬件参数
+            if (profile.fingerprint?.hardwareConcurrency) {
+                launchArgs.push(`--fingerprint-hardware-concurrency=${profile.fingerprint.hardwareConcurrency}`);
+            }
+            if (profile.fingerprint?.deviceMemory) {
+                launchArgs.push(`--fingerprint-device-memory=${profile.fingerprint.deviceMemory}`);
+            }
+
+            // 时区（引擎级，替代 env.TZ）
+            if (profile.fingerprint?.timezone && !isAutoTimezoneValue(profile.fingerprint.timezone)) {
+                launchArgs.push(`--timezone=${profile.fingerprint.timezone}`);
+            }
+
+            // 引擎已内置：navigator.webdriver=false, plugins, ClientRects, fonts
+            console.log('🔒 fingerprint-chromium engine mode active');
+            console.log(`   Seed: ${fpSeed}, Platform: ${fcPlatform}`);
+            if (webgl?.unmaskedRenderer) console.log(`   WebGL: ${webgl.unmaskedVendor} / ${webgl.unmaskedRenderer}`);
+        }
+
+        // SSL certificate errors
+        if (profile.ignoreCertErrors) {
+            launchArgs.push('--ignore-certificate-errors');
+            launchArgs.push('--ignore-certificate-errors-spki-list');
         }
 
         // 5. Remote Debugging Port (if enabled)
@@ -4994,7 +5058,6 @@ const launchProfileHandler = async (event, profileId, preferredLang, launchOptio
             { step: 8, profileName: progressProfileName }
         );
         // 5. 启动浏览器
-        const chromePath = getChromiumPath();
         if (!chromePath) {
             if (xrayProcess && xrayProcess.pid) {
                 await forceKill(xrayProcess.pid);
@@ -5002,9 +5065,9 @@ const launchProfileHandler = async (event, profileId, preferredLang, launchOptio
             throw new Error("Chrome binary not found.");
         }
 
-        // 时区设置
+        // 时区设置（fingerprint-chromium 通过 --timezone 处理，不需要 env.TZ）
         const env = { ...process.env };
-        if (profile.fingerprint?.timezone && !isAutoTimezoneValue(profile.fingerprint.timezone)) {
+        if (!isFingerprintChromium && profile.fingerprint?.timezone && !isAutoTimezoneValue(profile.fingerprint.timezone)) {
             env.TZ = profile.fingerprint.timezone;
         }
 
@@ -5033,8 +5096,9 @@ const launchProfileHandler = async (event, profileId, preferredLang, launchOptio
             : targetLang;
         let runtimeFingerprint = profile.fingerprint;
         let geolocationScript = getGeolocationScript(runtimeFingerprint);
-        let fingerprintInjectScript = getInjectScript(runtimeFingerprint);
-        const enableWebglOverride = !!(
+        let fingerprintInjectScript = getInjectScript(runtimeFingerprint, { useFingerprintChromium: isFingerprintChromium });
+        // fingerprint-chromium 已在引擎级处理 WebGL，不需要 JS 层覆盖
+        const enableWebglOverride = !isFingerprintChromium && !!(
             profile.fingerprint?.webglProfile !== 'none' &&
             profile.fingerprint?.webgl &&
             !profile.fingerprint?.webgl?.disabled
@@ -5338,7 +5402,7 @@ const launchProfileHandler = async (event, profileId, preferredLang, launchOptio
 
                 runtimeFingerprint = resolved.fingerprint;
                 geolocationScript = getGeolocationScript(runtimeFingerprint);
-                fingerprintInjectScript = getInjectScript(runtimeFingerprint);
+                fingerprintInjectScript = getInjectScript(runtimeFingerprint, { useFingerprintChromium: isFingerprintChromium });
 
                 try {
                     const pages = await browser.pages();
