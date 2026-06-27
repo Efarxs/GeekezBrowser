@@ -1,97 +1,63 @@
-const initSqlJs = require('sql.js');
 const fs = require('fs-extra');
 const path = require('path');
+const { eq, like, or, asc, desc, sql } = require('drizzle-orm');
 
-const DB_FILE_NAME = 'profiles.db';
 const JSON_FILE_NAME = 'profiles.json';
 const JSON_BACKUP_NAME = 'profiles.json.bak';
 
 class ProfileDB {
-    constructor(dataPath) {
+    /**
+     * @param {{ db: object, profiles: object, type: string, close: () => void }} conn
+     * @param {string} dataPath - 数据目录（用于 JSON 迁移）
+     */
+    constructor(conn, dataPath) {
+        this.db = conn.db;
+        this.table = conn.profiles;
+        this.type = conn.type;
+        this._close = conn.close;
         this.dataPath = dataPath;
-        this.dbPath = path.join(dataPath, DB_FILE_NAME);
-        this.jsonPath = path.join(dataPath, JSON_FILE_NAME);
-        this.db = null;
-        this.SQL = null;
     }
 
     async init() {
-        this.SQL = await initSqlJs();
-
-        if (fs.existsSync(this.dbPath)) {
-            const buffer = fs.readFileSync(this.dbPath);
-            this.db = new this.SQL.Database(buffer);
-        } else {
-            this.db = new this.SQL.Database();
-            this._createSchema();
-            await this._migrateFromJson();
-        }
-    }
-
-    _createSchema() {
-        this.db.run(`
-            CREATE TABLE IF NOT EXISTS profiles (
-                id TEXT PRIMARY KEY,
-                name TEXT NOT NULL,
-                proxy_str TEXT DEFAULT '',
-                tags TEXT DEFAULT '[]',
-                notes TEXT DEFAULT '',
-                pre_proxy_override TEXT DEFAULT 'default',
-                debug_port INTEGER,
-                custom_args TEXT DEFAULT '',
-                is_setup INTEGER DEFAULT 0,
-                created_at INTEGER NOT NULL,
-                fingerprint TEXT NOT NULL
-            );
-        `);
-        this.db.run('CREATE INDEX IF NOT EXISTS idx_profiles_name ON profiles(name);');
-        this.db.run('CREATE INDEX IF NOT EXISTS idx_profiles_created ON profiles(created_at);');
-        this._persist();
-    }
-
-    _persist() {
-        const data = this.db.export();
-        const buffer = Buffer.from(data);
-        fs.writeFileSync(this.dbPath, buffer);
+        await this._migrateFromJson();
     }
 
     async _migrateFromJson() {
-        if (!fs.existsSync(this.jsonPath)) return;
+        const jsonPath = path.join(this.dataPath, JSON_FILE_NAME);
+        const jsonBakPath = path.join(this.dataPath, JSON_BACKUP_NAME);
+        if (!fs.existsSync(jsonPath)) return;
+
         try {
-            const stat = fs.statSync(this.jsonPath);
+            const stat = fs.statSync(jsonPath);
             if (!stat || stat.size === 0) return;
 
-            const profiles = await fs.readJson(this.jsonPath);
+            const profiles = await fs.readJson(jsonPath);
             if (!Array.isArray(profiles) || profiles.length === 0) return;
 
-            this.db.run('BEGIN TRANSACTION');
-            const stmt = this.db.prepare(`
-                INSERT OR REPLACE INTO profiles
-                (id, name, proxy_str, tags, notes, pre_proxy_override, debug_port, custom_args, is_setup, created_at, fingerprint)
-                VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
-            `);
-
-            for (const p of profiles) {
-                stmt.run([
-                    p.id,
-                    p.name || '',
-                    p.proxyStr || '',
-                    JSON.stringify(p.tags || []),
-                    p.notes || '',
-                    p.preProxyOverride || 'default',
-                    p.debugPort || null,
-                    p.customArgs || '',
-                    p.isSetup ? 1 : 0,
-                    p.createdAt || Date.now(),
-                    JSON.stringify(p.fingerprint || {})
-                ]);
+            // 检查是否已有数据，避免重复迁移
+            const existing = await this.getAll();
+            if (existing.length > 0) {
+                // 已有数据，直接备份 JSON
+                fs.renameSync(jsonPath, jsonBakPath);
+                return;
             }
-            stmt.free();
-            this.db.run('COMMIT');
-            this._persist();
 
-            fs.renameSync(this.jsonPath, path.join(this.dataPath, JSON_BACKUP_NAME));
-            console.log(`Migrated ${profiles.length} profiles from JSON to SQLite`);
+            await this.importBatch(profiles.map(p => ({
+                id: p.id,
+                name: p.name || '',
+                proxyStr: p.proxyStr || '',
+                tags: p.tags || [],
+                notes: p.notes || '',
+                preProxyOverride: p.preProxyOverride || 'default',
+                debugPort: p.debugPort || null,
+                customArgs: p.customArgs || '',
+                isSetup: p.isSetup || false,
+                createdAt: p.createdAt || Date.now(),
+                fingerprint: p.fingerprint || {},
+            })));
+
+            fs.renameSync(jsonPath, jsonBakPath);
+            console.log(`Migrated ${profiles.length} profiles from JSON to database`);
         } catch (e) {
             console.error('Migration from profiles.json failed:', e.message);
         }
@@ -101,209 +67,164 @@ class ProfileDB {
         return {
             id: row.id,
             name: row.name,
-            proxyStr: row.proxy_str,
-            tags: JSON.parse(row.tags || '[]'),
-            notes: row.notes,
-            preProxyOverride: row.pre_proxy_override,
-            debugPort: row.debug_port,
-            customArgs: row.custom_args,
-            isSetup: !!row.is_setup,
-            createdAt: row.created_at,
-            fingerprint: JSON.parse(row.fingerprint || '{}')
+            proxyStr: row.proxyStr || '',
+            tags: typeof row.tags === 'string' ? JSON.parse(row.tags || '[]') : (row.tags || []),
+            notes: row.notes || '',
+            preProxyOverride: row.preProxyOverride || 'default',
+            debugPort: row.debugPort || null,
+            customArgs: row.customArgs || '',
+            isSetup: !!row.isSetup,
+            createdAt: row.createdAt,
+            fingerprint: typeof row.fingerprint === 'string' ? JSON.parse(row.fingerprint || '{}') : (row.fingerprint || {}),
         };
     }
 
-    getAll() {
-        const stmt = this.db.prepare('SELECT * FROM profiles ORDER BY created_at ASC');
-        const results = [];
-        while (stmt.step()) {
-            results.push(this._rowToProfile(stmt.getAsObject()));
-        }
-        stmt.free();
-        return results;
+    _toDbValues(profile) {
+        return {
+            id: profile.id,
+            name: profile.name || '',
+            proxyStr: profile.proxyStr || '',
+            tags: typeof profile.tags === 'string' ? profile.tags : JSON.stringify(profile.tags || []),
+            notes: profile.notes || '',
+            preProxyOverride: profile.preProxyOverride || 'default',
+            debugPort: profile.debugPort || null,
+            customArgs: profile.customArgs || '',
+            isSetup: profile.isSetup ? 1 : 0,
+            createdAt: profile.createdAt || Date.now(),
+            fingerprint: typeof profile.fingerprint === 'string' ? profile.fingerprint : JSON.stringify(profile.fingerprint || {}),
+        };
     }
 
-    getById(id) {
-        const stmt = this.db.prepare('SELECT * FROM profiles WHERE id = ?');
-        stmt.bind([id]);
-        let profile = null;
-        if (stmt.step()) {
-            profile = this._rowToProfile(stmt.getAsObject());
-        }
-        stmt.free();
-        return profile;
+    async getAll() {
+        const rows = await this.db.select().from(this.table).orderBy(asc(this.table.createdAt));
+        return rows.map(r => this._rowToProfile(r));
     }
 
-    getByName(name) {
-        const stmt = this.db.prepare('SELECT * FROM profiles WHERE name = ?');
-        stmt.bind([name]);
-        let profile = null;
-        if (stmt.step()) {
-            profile = this._rowToProfile(stmt.getAsObject());
-        }
-        stmt.free();
-        return profile;
+    async getById(id) {
+        const rows = await this.db.select().from(this.table).where(eq(this.table.id, id)).limit(1);
+        return rows[0] ? this._rowToProfile(rows[0]) : null;
     }
 
-    nameExists(name, excludeId = null) {
+    async getByName(name) {
+        const rows = await this.db.select().from(this.table).where(eq(this.table.name, name)).limit(1);
+        return rows[0] ? this._rowToProfile(rows[0]) : null;
+    }
+
+    async nameExists(name, excludeId = null) {
         if (excludeId) {
-            const stmt = this.db.prepare('SELECT COUNT(*) as cnt FROM profiles WHERE name = ? AND id != ?');
-            stmt.bind([name, excludeId]);
-            stmt.step();
-            const cnt = stmt.getAsObject().cnt;
-            stmt.free();
-            return cnt > 0;
+            const rows = await this.db.select({ cnt: sql`count(*)`.mapWith(Number) })
+                .from(this.table)
+                .where(sql`${this.table.name} = ${name} AND ${this.table.id} != ${excludeId}`);
+            return (rows[0]?.cnt || 0) > 0;
         }
-        const stmt = this.db.prepare('SELECT COUNT(*) as cnt FROM profiles WHERE name = ?');
-        stmt.bind([name]);
-        stmt.step();
-        const cnt = stmt.getAsObject().cnt;
-        stmt.free();
-        return cnt > 0;
+        const rows = await this.db.select({ cnt: sql`count(*)`.mapWith(Number) })
+            .from(this.table)
+            .where(eq(this.table.name, name));
+        return (rows[0]?.cnt || 0) > 0;
     }
 
-    getPaged(page = 1, pageSize = 20, search = '', tag = '', sortOrder = 'DESC') {
-        const whereClauses = [];
-        const params = [];
+    async getPaged(page = 1, pageSize = 20, search = '', tag = '', sortOrder = 'DESC') {
+        const conditions = [];
 
         if (search) {
-            whereClauses.push('(name LIKE ? OR proxy_str LIKE ? OR tags LIKE ?)');
             const sp = `%${search}%`;
-            params.push(sp, sp, sp);
+            conditions.push(
+                or(
+                    like(this.table.name, sp),
+                    like(this.table.proxyStr, sp),
+                    like(this.table.tags, sp)
+                )
+            );
         }
         if (tag) {
-            whereClauses.push('tags LIKE ?');
-            params.push(`%"${tag}"%`);
+            conditions.push(like(this.table.tags, `%"${tag}"%`));
         }
 
-        const where = whereClauses.length > 0 ? 'WHERE ' + whereClauses.join(' AND ') : '';
+        const where = conditions.length > 0 ? sql`${conditions.reduce((a, b) => sql`${a} AND ${b}`)}` : undefined;
 
-        const countStmt = this.db.prepare(`SELECT COUNT(*) as cnt FROM profiles ${where}`);
-        countStmt.bind(params);
-        countStmt.step();
-        const totalCount = countStmt.getAsObject().cnt;
-        countStmt.free();
+        // Count
+        const countRows = await this.db.select({ cnt: sql`count(*)`.mapWith(Number) })
+            .from(this.table)
+            .where(where);
+        const totalCount = countRows[0]?.cnt || 0;
 
-        const dir = sortOrder === 'ASC' ? 'ASC' : 'DESC';
+        // Data
+        const orderFn = sortOrder === 'ASC' ? asc : desc;
         const offset = (page - 1) * pageSize;
-        const dataStmt = this.db.prepare(`SELECT * FROM profiles ${where} ORDER BY created_at ${dir} LIMIT ? OFFSET ?`);
-        dataStmt.bind([...params, pageSize, offset]);
-        const items = [];
-        while (dataStmt.step()) {
-            items.push(this._rowToProfile(dataStmt.getAsObject()));
-        }
-        dataStmt.free();
 
-        return { items, totalCount, page, pageSize, totalPages: Math.ceil(totalCount / pageSize) };
+        const query = this.db.select().from(this.table).where(where);
+        const rows = await query.orderBy(orderFn(this.table.createdAt)).limit(pageSize).offset(offset);
+
+        return {
+            items: rows.map(r => this._rowToProfile(r)),
+            totalCount,
+            page,
+            pageSize,
+            totalPages: Math.ceil(totalCount / pageSize),
+        };
     }
 
-    insert(profile) {
-        this.db.run(`
-            INSERT INTO profiles (id, name, proxy_str, tags, notes, pre_proxy_override, debug_port, custom_args, is_setup, created_at, fingerprint)
-            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
-        `, [
-            profile.id,
-            profile.name || '',
-            profile.proxyStr || '',
-            JSON.stringify(profile.tags || []),
-            profile.notes || '',
-            profile.preProxyOverride || 'default',
-            profile.debugPort || null,
-            profile.customArgs || '',
-            profile.isSetup ? 1 : 0,
-            profile.createdAt || Date.now(),
-            JSON.stringify(profile.fingerprint || {})
-        ]);
-        this._persist();
+    async insert(profile) {
+        await this.db.insert(this.table).values(this._toDbValues(profile));
     }
 
-    update(id, profile) {
-        this.db.run(`
-            UPDATE profiles SET
-                name = ?, proxy_str = ?, tags = ?, notes = ?, pre_proxy_override = ?,
-                debug_port = ?, custom_args = ?, is_setup = ?, fingerprint = ?
-            WHERE id = ?
-        `, [
-            profile.name || '',
-            profile.proxyStr || '',
-            JSON.stringify(profile.tags || []),
-            profile.notes || '',
-            profile.preProxyOverride || 'default',
-            profile.debugPort || null,
-            profile.customArgs || '',
-            profile.isSetup ? 1 : 0,
-            JSON.stringify(profile.fingerprint || {}),
-            id
-        ]);
-        this._persist();
+    async update(id, profile) {
+        const values = this._toDbValues(profile);
+        // 不更新 id 和 created_at
+        delete values.id;
+        delete values.createdAt;
+        await this.db.update(this.table).set(values).where(eq(this.table.id, id));
     }
 
-    delete(id) {
-        this.db.run('DELETE FROM profiles WHERE id = ?', [id]);
-        this._persist();
+    async delete(id) {
+        await this.db.delete(this.table).where(eq(this.table.id, id));
     }
 
-    upsert(profile) {
-        const existing = this.getById(profile.id);
+    async upsert(profile) {
+        const existing = await this.getById(profile.id);
         if (existing) {
-            this.update(profile.id, profile);
+            await this.update(profile.id, profile);
         } else {
-            this.insert(profile);
+            await this.insert(profile);
         }
     }
 
-    importBatch(profiles) {
-        this.db.run('BEGIN TRANSACTION');
-        for (const p of profiles) {
-            const existing = this.getById(p.id);
-            if (existing) {
-                this.update(p.id, p);
-            } else {
-                this.db.run(`
-                    INSERT INTO profiles (id, name, proxy_str, tags, notes, pre_proxy_override, debug_port, custom_args, is_setup, created_at, fingerprint)
-                    VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
-                `, [
-                    p.id,
-                    p.name || '',
-                    p.proxyStr || '',
-                    JSON.stringify(p.tags || []),
-                    p.notes || '',
-                    p.preProxyOverride || 'default',
-                    p.debugPort || null,
-                    p.customArgs || '',
-                    p.isSetup ? 1 : 0,
-                    p.createdAt || Date.now(),
-                    JSON.stringify(p.fingerprint || {})
-                ]);
+    async importBatch(profiles) {
+        // Drizzle transaction
+        await this.db.transaction(async (tx) => {
+            for (const p of profiles) {
+                const existing = await tx.select().from(this.table).where(eq(this.table.id, p.id)).limit(1);
+                if (existing.length > 0) {
+                    const values = this._toDbValues(p);
+                    delete values.id;
+                    delete values.createdAt;
+                    await tx.update(this.table).set(values).where(eq(this.table.id, p.id));
+                } else {
+                    await tx.insert(this.table).values(this._toDbValues(p));
+                }
             }
-        }
-        this.db.run('COMMIT');
-        this._persist();
+        });
     }
 
-    getAllTags() {
-        const stmt = this.db.prepare('SELECT tags FROM profiles');
+    async getAllTags() {
+        const rows = await this.db.select({ tags: this.table.tags }).from(this.table);
         const tagSet = new Set();
-        while (stmt.step()) {
-            const row = stmt.getAsObject();
+        for (const row of rows) {
             try {
-                const tags = JSON.parse(row.tags || '[]');
+                const tags = typeof row.tags === 'string' ? JSON.parse(row.tags || '[]') : (row.tags || []);
                 tags.forEach(t => { if (t) tagSet.add(t); });
             } catch { /* ignore */ }
         }
-        stmt.free();
         return Array.from(tagSet).sort((a, b) => a.localeCompare(b));
     }
 
-    exportAll() {
+    async exportAll() {
         return this.getAll();
     }
 
     close() {
-        if (this.db) {
-            this._persist();
-            this.db.close();
-            this.db = null;
+        if (this._close) {
+            this._close();
         }
     }
 }

@@ -18,9 +18,10 @@ const { fetchLatestGitHubReleaseInfo } = require('./release-check');
 const { resolveXrayAssetName } = require('./xray-assets');
 const gzip = promisify(zlib.gzip);
 const gunzip = promisify(zlib.gunzip);
-const initSqlJs = require('sql.js');
 const { SocksClient } = require('socks');
 const { ProfileDB } = require('./profile-db');
+const { getDbConfig } = require('./db/config');
+const { createDatabase } = require('./db/factory');
 
 const uuidv4 = () => crypto.randomUUID();
 
@@ -101,7 +102,7 @@ const DATA_PATH = getCustomDataPath();
 const TRASH_PATH = path.join(app.getPath('userData'), '_Trash_Bin');
 const PROFILES_FILE = path.join(DATA_PATH, 'profiles.json');
 const SETTINGS_FILE = path.join(DATA_PATH, 'settings.json');
-const profileDB = new ProfileDB(DATA_PATH);
+let profileDB = null;
 const USER_EXTENSIONS_DIR = path.join(DATA_PATH, '_extensions');
 
 fs.ensureDirSync(DATA_PATH);
@@ -1689,10 +1690,10 @@ async function handleApiRequest(method, pathname, body, params, context = {}) {
     const settings = fs.existsSync(SETTINGS_FILE) ? await fs.readJson(SETTINGS_FILE) : {};
 
     // Helper: Find profile by ID or Name
-    const findProfile = (idOrName) => {
-        const byId = profileDB.getById(idOrName);
+    const findProfile = async (idOrName) => {
+        const byId = await profileDB.getById(idOrName);
         if (byId) return byId;
-        return profileDB.getByName(idOrName);
+        return await profileDB.getByName(idOrName);
     };
 
     const resolveRemoteDebugPortForProfile = async (profileId, fallbackPort = null) => {
@@ -1701,7 +1702,7 @@ async function handleApiRequest(method, pathname, body, params, context = {}) {
         const fromFallback = normalizeDebugPort(fallbackPort);
         if (fromFallback) return fromFallback;
 
-        const latest = profileDB.getById(profileId);
+        const latest = await profileDB.getById(profileId);
         return normalizeDebugPort(latest?.debugPort);
     };
 
@@ -1712,7 +1713,7 @@ async function handleApiRequest(method, pathname, body, params, context = {}) {
 
     // GET /api/profiles
     if (method === 'GET' && pathname === '/api/profiles') {
-        const profiles = profileDB.getAll();
+        const profiles = await profileDB.getAll();
         const tagFilter = (params.get('tag') || '').trim().toLowerCase();
         const filteredProfiles = tagFilter
             ? profiles.filter(profile => (profile.tags || []).some(tag => (tag || '').toLowerCase() === tagFilter))
@@ -1723,7 +1724,7 @@ async function handleApiRequest(method, pathname, body, params, context = {}) {
     // GET /api/profiles/:idOrName
     const profileMatch = pathname.match(/^\/api\/profiles\/([^\/]+)$/);
     if (method === 'GET' && profileMatch) {
-        const profile = findProfile(decodeURIComponent(profileMatch[1]));
+        const profile = await findProfile(decodeURIComponent(profileMatch[1]));
         if (!profile) return { status: 404, data: { success: false, error: 'Profile not found' } };
         return { success: true, profile: { ...profile, running: !!activeProcesses[profile.id] } };
     }
@@ -1731,9 +1732,9 @@ async function handleApiRequest(method, pathname, body, params, context = {}) {
     // POST /api/profiles - Create with unique name
     if (method === 'POST' && pathname === '/api/profiles') {
         const data = parseApiBody(body);
-        const allProfiles = profileDB.getAll();
+        const allProfiles = await profileDB.getAll();
         const newProfile = await buildProfileFromInput(data, allProfiles, settings);
-        profileDB.insert(newProfile);
+        await profileDB.insert(newProfile);
         notifyUIRefresh();
         return {
             success: true,
@@ -1744,15 +1745,15 @@ async function handleApiRequest(method, pathname, body, params, context = {}) {
 
     // PUT /api/profiles/:idOrName - Edit
     if (method === 'PUT' && profileMatch) {
-        const profile = findProfile(decodeURIComponent(profileMatch[1]));
+        const profile = await findProfile(decodeURIComponent(profileMatch[1]));
         if (!profile) return { status: 404, data: { success: false, error: 'Profile not found' } };
         if (activeProcesses[profile.id] || launchingProfiles.has(profile.id)) {
             return { status: 409, data: { success: false, error: 'Cannot edit a running or launching profile. Please stop the browser first.' } };
         }
         const data = parseApiBody(body);
-        const otherProfiles = profileDB.getAll().filter(p => p.id !== profile.id);
+        const otherProfiles = (await profileDB.getAll()).filter(p => p.id !== profile.id);
         const rebuilt = await buildProfileFromInput(data, otherProfiles, settings, profile);
-        profileDB.update(profile.id, rebuilt);
+        await profileDB.update(profile.id, rebuilt);
         notifyUIRefresh();
         return {
             success: true,
@@ -1763,15 +1764,15 @@ async function handleApiRequest(method, pathname, body, params, context = {}) {
 
     // DELETE /api/profiles/:idOrName
     if (method === 'DELETE' && profileMatch) {
-        const profile = findProfile(decodeURIComponent(profileMatch[1]));
+        const profile = await findProfile(decodeURIComponent(profileMatch[1]));
         if (!profile) return { status: 404, data: { success: false, error: 'Profile not found' } };
         if (activeProcesses[profile.id] || launchingProfiles.has(profile.id)) {
             return { status: 409, data: { success: false, error: 'Cannot delete a running or launching profile. Please stop the browser first.' } };
         }
 
         // 事务性删除：先保存快照，删 DB，再删目录；目录删除失败则回滚 DB
-        const snapshot = profileDB.getById(profile.id);
-        profileDB.delete(profile.id);
+        const snapshot = await profileDB.getById(profile.id);
+        await profileDB.delete(profile.id);
 
         const profileDir = path.join(DATA_PATH, profile.id);
         let dirDeleted = false;
@@ -1802,7 +1803,7 @@ async function handleApiRequest(method, pathname, body, params, context = {}) {
         }
 
         if (!dirDeleted) {
-            profileDB.insert(snapshot);
+            await profileDB.insert(snapshot);
             return { status: 500, data: { success: false, error: 'Failed to delete profile directory. Profile data has been restored.' } };
         }
 
@@ -1992,7 +1993,7 @@ async function handleApiRequest(method, pathname, body, params, context = {}) {
                             fingerprint: item.fingerprint || await generateFingerprint({}),
                             createdAt: Date.now()
                         };
-                        profileDB.insert(newProfile);
+                        await profileDB.insert(newProfile);
                         imported++;
                     }
                     notifyUIRefresh();
@@ -2013,7 +2014,7 @@ async function handleApiRequest(method, pathname, body, params, context = {}) {
                 for (const profile of backupData.profiles || []) {
                     const name = generateUniqueName(profile.name);
                     const newProfile = { ...profile, id: uuidv4(), name };
-                    profileDB.insert(newProfile);
+                    await profileDB.insert(newProfile);
                     imported++;
                 }
                 notifyUIRefresh();
@@ -2201,7 +2202,7 @@ app.on('second-instance', () => {
 });
 
 async function readAllProfilesSafe() {
-    try { return profileDB.getAll(); } catch { return []; }
+    try { return await profileDB.getAll(); } catch { return []; }
 }
 
 function quitApplication() {
@@ -3016,6 +3017,11 @@ document.addEventListener('DOMContentLoaded', async () => {
 }
 
 app.whenReady().then(async () => {
+    // 初始化数据库（根据 settings.json 中的 database 配置选择驱动）
+    const initSettings = readSettingsSync();
+    const dbConfig = getDbConfig(initSettings);
+    const dbConn = await createDatabase(dbConfig, DATA_PATH);
+    profileDB = new ProfileDB(dbConn, DATA_PATH);
     await profileDB.init();
     cachedCloseBehavior = normalizeCloseBehavior(readSettingsSync().closeBehavior);
     createWindow();
@@ -3602,31 +3608,31 @@ ipcMain.handle('get-profile-runtime-state', () => ({
     runningIds: Object.keys(activeProcesses),
     launchingIds: Array.from(launchingProfiles)
 }));
-ipcMain.handle('get-profiles', async () => { return profileDB.getAll(); });
+ipcMain.handle('get-profiles', async () => { return await profileDB.getAll(); });
 ipcMain.handle('get-profiles-paged', async (event, { page, pageSize, search, tag, sortOrder } = {}) => {
-    return profileDB.getPaged(page || 1, pageSize || 20, search || '', tag || '', sortOrder);
+    return await profileDB.getPaged(page || 1, pageSize || 20, search || '', tag || '', sortOrder);
 });
-ipcMain.handle('get-all-tags', async () => { return profileDB.getAllTags(); });
+ipcMain.handle('get-all-tags', async () => { return await profileDB.getAllTags(); });
 ipcMain.handle('update-profile', async (event, updatedProfile) => {
     if (activeProcesses[updatedProfile.id] || launchingProfiles.has(updatedProfile.id)) {
         throw new Error('Cannot edit a running or launching profile. Please stop the browser first.');
     }
-    const existing = profileDB.getById(updatedProfile.id);
+    const existing = await profileDB.getById(updatedProfile.id);
     if (!existing) return false;
 
     const settings = fs.existsSync(SETTINGS_FILE) ? await fs.readJson(SETTINGS_FILE) : {};
-    const allProfiles = profileDB.getAll();
+    const allProfiles = await profileDB.getAll();
     const others = allProfiles.filter(p => p.id !== updatedProfile.id);
     const rebuilt = await buildProfileFromInput(updatedProfile, others, settings, existing);
-    profileDB.update(updatedProfile.id, rebuilt);
+    await profileDB.update(updatedProfile.id, rebuilt);
     notifyUIRefresh();
     return true;
 });
 ipcMain.handle('save-profile', async (event, data) => {
-    const allProfiles = profileDB.getAll();
+    const allProfiles = await profileDB.getAll();
     const settings = fs.existsSync(SETTINGS_FILE) ? await fs.readJson(SETTINGS_FILE) : {};
     const newProfile = await buildProfileFromInput(data, allProfiles, settings);
-    profileDB.insert(newProfile);
+    await profileDB.insert(newProfile);
     notifyUIRefresh();
     return newProfile;
 });
@@ -3636,8 +3642,8 @@ ipcMain.handle('delete-profile', async (event, id) => {
     }
 
     // 事务性删除：先保存快照，删 DB，再删目录；目录删除失败则回滚 DB
-    const snapshot = profileDB.getById(id);
-    profileDB.delete(id);
+    const snapshot = await profileDB.getById(id);
+    await profileDB.delete(id);
 
     const profileDir = path.join(DATA_PATH, id);
     let dirDeleted = false;
@@ -3676,7 +3682,7 @@ ipcMain.handle('delete-profile', async (event, id) => {
     // 目录删除全部失败，回滚 DB 记录
     if (!dirDeleted) {
         console.warn(`Directory cleanup failed, rolling back DB record: ${id}`);
-        profileDB.insert(snapshot);
+        await profileDB.insert(snapshot);
         throw new Error('Failed to delete profile directory. Profile data has been restored.');
     }
 
@@ -3962,7 +3968,7 @@ ipcMain.handle('set-data-directory', async (e, { newPath, migrate }) => {
             }
 
             // 迁移所有环境数据目录
-            const profiles = profileDB.getAll();
+            const profiles = await profileDB.getAll();
             for (const profile of profiles) {
                 const oldDir = path.join(DATA_PATH, profile.id);
                 const newDir = path.join(newPath, profile.id);
@@ -4100,13 +4106,13 @@ async function writeEncryptedPasswords(pwFile, passwords, profileId) {
 
 // 获取用于选择器的环境列表
 ipcMain.handle('get-export-profiles', async () => {
-    const profiles = profileDB.getAll();
+    const profiles = await profileDB.getAll();
     return profiles.map(p => ({ id: p.id, name: p.name, tags: p.tags || [] }));
 });
 
 // 导出选定环境 (精简版，不含浏览器数据)
 ipcMain.handle('export-selected-data', async (e, { type, profileIds }) => {
-    const allProfiles = profileDB.getAll();
+    const allProfiles = await profileDB.getAll();
     const settings = fs.existsSync(SETTINGS_FILE) ? await fs.readJson(SETTINGS_FILE) : { preProxies: [], subscriptions: [] };
 
     // 过滤选中的环境
@@ -4162,7 +4168,7 @@ ipcMain.handle('export-full-backup', async (e, { profileIds, password, filePath 
         }
         
         currentImportProgress = { percent: 5, message: 'Preparing Profiles...', processing: true };
-        const allProfiles = profileDB.getAll();
+        const allProfiles = await profileDB.getAll();
         const settings = fs.existsSync(SETTINGS_FILE) ? await fs.readJson(SETTINGS_FILE) : { preProxies: [], subscriptions: [] };
 
         const selectedProfiles = allProfiles
@@ -4319,7 +4325,7 @@ ipcMain.handle('import-full-backup', async (e, { filePath, password }) => {
 
         // 还原 profiles
         currentImportProgress = { percent: 40, message: 'Restoring Profiles...', processing: true };
-        profileDB.importBatch(backupData.profiles || []);
+        await profileDB.importBatch(backupData.profiles || []);
         const importedCount = (backupData.profiles || []).length;
 
         // 还原代理和订阅
@@ -4453,7 +4459,7 @@ ipcMain.handle('import-data', async () => {
                         if (!p.id) p.id = uuidv4();
                         return p;
                     });
-                    profileDB.importBatch(profilesToImport);
+                    await profileDB.importBatch(profilesToImport);
                     updated = true;
                 }
                 if (Array.isArray(data.preProxies) || Array.isArray(data.subscriptions)) {
@@ -4476,7 +4482,7 @@ ipcMain.handle('import-data', async () => {
             } else if (data.name && data.proxyStr && data.fingerprint) {
                 // 单个环境导入
                 const newProfile = { ...data, id: uuidv4(), isSetup: false, createdAt: Date.now() };
-                profileDB.insert(newProfile);
+                await profileDB.insert(newProfile);
                 updated = true;
             }
             return updated;
@@ -4490,7 +4496,7 @@ ipcMain.handle('import-data', async () => {
 
 // 保留旧的 export-data 用于向后兼容 (deprecated)
 ipcMain.handle('export-data', async (e, type) => {
-    const profiles = profileDB.getAll();
+    const profiles = await profileDB.getAll();
     const settings = fs.existsSync(SETTINGS_FILE) ? await fs.readJson(SETTINGS_FILE) : { preProxies: [], subscriptions: [] };
 
     // 清理 fingerprint
@@ -4607,7 +4613,7 @@ const launchProfileHandler = async (event, profileId, preferredLang, launchOptio
     }));
     const uiLang = preferredLang === 'en' ? 'en' : (settings.lang === 'en' ? 'en' : 'cn');
 
-    const profiles = profileDB.getAll();
+    const profiles = await profileDB.getAll();
     const profileIndex = profiles.findIndex(p => p.id === profileId);
     const profile = profileIndex > -1 ? profiles[profileIndex] : null;
     if (!profile) throw new Error('Profile not found');
@@ -4625,7 +4631,7 @@ const launchProfileHandler = async (event, profileId, preferredLang, launchOptio
     // Auto-assign a stable remote debugging port when feature is enabled and no explicit port exists.
     if (settings.enableRemoteDebugging && !normalizeDebugPort(profile.debugPort)) {
         profile.debugPort = await allocateDebugPortIfNeeded(settings, profiles, null);
-        profileDB.update(profile.id, profile);
+        await profileDB.update(profile.id, profile);
     }
 
     const useDirectNetwork = isDirectProxy(profile.proxyStr);
