@@ -93,6 +93,10 @@ const displayScreen = computed(() => {
 });
 
 const quickUpdatePreProxy = async (val) => {
+    if (props.isRunning || props.isLaunching) {
+        uiStore.showAlert(t('mustStopFirst'));
+        return;
+    }
     const p = profileStore.profiles.find(x => x.id === props.profile.id);
     if (p) {
         const previous = p.preProxyOverride || 'default';
@@ -120,10 +124,18 @@ const launch = async () => {
 };
 
 const edit = () => {
+    if (props.isRunning || props.isLaunching) {
+        uiStore.showAlert(t('runningNoEdit'));
+        return;
+    }
     uiStore.openEditModal(props.profile.id);
 };
 
 const remove = () => {
+    if (props.isRunning || props.isLaunching) {
+        uiStore.showAlert(t('runningNoDelete'));
+        return;
+    }
     const msg = window.t('confirmDel') || 'Confirm delete?';
     uiStore.showConfirm(msg, async () => {
         await profileStore.deleteProfile(props.profile.id);

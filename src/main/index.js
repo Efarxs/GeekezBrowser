@@ -1746,6 +1746,9 @@ async function handleApiRequest(method, pathname, body, params, context = {}) {
     if (method === 'PUT' && profileMatch) {
         const profile = findProfile(decodeURIComponent(profileMatch[1]));
         if (!profile) return { status: 404, data: { success: false, error: 'Profile not found' } };
+        if (activeProcesses[profile.id] || launchingProfiles.has(profile.id)) {
+            return { status: 409, data: { success: false, error: 'Cannot edit a running or launching profile. Please stop the browser first.' } };
+        }
         const data = parseApiBody(body);
         const otherProfiles = profileDB.getAll().filter(p => p.id !== profile.id);
         const rebuilt = await buildProfileFromInput(data, otherProfiles, settings, profile);
@@ -1762,21 +1765,47 @@ async function handleApiRequest(method, pathname, body, params, context = {}) {
     if (method === 'DELETE' && profileMatch) {
         const profile = findProfile(decodeURIComponent(profileMatch[1]));
         if (!profile) return { status: 404, data: { success: false, error: 'Profile not found' } };
-        // Stop running process if active
-        if (activeProcesses[profile.id]) {
-            await stopRunningProfile(profile.id, { refreshMenu: false });
-            await new Promise(r => setTimeout(r, 1000));
+        if (activeProcesses[profile.id] || launchingProfiles.has(profile.id)) {
+            return { status: 409, data: { success: false, error: 'Cannot delete a running or launching profile. Please stop the browser first.' } };
         }
+
+        // 事务性删除：先保存快照，删 DB，再删目录；目录删除失败则回滚 DB
+        const snapshot = profileDB.getById(profile.id);
         profileDB.delete(profile.id);
-        // Delete profile directory
+
         const profileDir = path.join(DATA_PATH, profile.id);
-        if (fs.existsSync(profileDir)) {
+        let dirDeleted = false;
+        for (let attempt = 1; attempt <= 3; attempt++) {
             try {
-                await fs.remove(profileDir);
+                if (fs.existsSync(profileDir)) {
+                    await fs.remove(profileDir);
+                    dirDeleted = true;
+                    break;
+                } else {
+                    dirDeleted = true;
+                    break;
+                }
             } catch (e) {
-                console.warn('Failed to delete profile directory via API:', e.message);
+                console.warn(`API delete attempt ${attempt} failed:`, e.message);
+                if (attempt < 3) await new Promise(r => setTimeout(r, 500 * attempt));
             }
         }
+
+        if (!dirDeleted && fs.existsSync(profileDir)) {
+            const trashDest = path.join(TRASH_PATH, `${profile.id}_${Date.now()}`);
+            try {
+                await fs.move(profileDir, trashDest);
+                dirDeleted = true;
+            } catch (e) {
+                console.warn('API delete: failed to move to trash:', e.message);
+            }
+        }
+
+        if (!dirDeleted) {
+            profileDB.insert(snapshot);
+            return { status: 500, data: { success: false, error: 'Failed to delete profile directory. Profile data has been restored.' } };
+        }
+
         notifyUIRefresh();
         return { success: true, message: 'Profile deleted' };
     }
@@ -3579,6 +3608,9 @@ ipcMain.handle('get-profiles-paged', async (event, { page, pageSize, search, tag
 });
 ipcMain.handle('get-all-tags', async () => { return profileDB.getAllTags(); });
 ipcMain.handle('update-profile', async (event, updatedProfile) => {
+    if (activeProcesses[updatedProfile.id] || launchingProfiles.has(updatedProfile.id)) {
+        throw new Error('Cannot edit a running or launching profile. Please stop the browser first.');
+    }
     const existing = profileDB.getById(updatedProfile.id);
     if (!existing) return false;
 
@@ -3599,54 +3631,56 @@ ipcMain.handle('save-profile', async (event, data) => {
     return newProfile;
 });
 ipcMain.handle('delete-profile', async (event, id) => {
-    // 关闭正在运行的进程
-    if (activeProcesses[id]) {
-        await stopRunningProfile(id, { refreshMenu: false });
-        // Windows 需要更长的等待时间让文件释放
-        await new Promise(r => setTimeout(r, 1000));
+    if (activeProcesses[id] || launchingProfiles.has(id)) {
+        throw new Error('Cannot delete a running or launching profile. Please stop the browser first.');
     }
 
+    // 事务性删除：先保存快照，删 DB，再删目录；目录删除失败则回滚 DB
+    const snapshot = profileDB.getById(id);
     profileDB.delete(id);
-    notifyUIRefresh();
 
-    // 永久删除 profile 文件夹（带重试机制）
     const profileDir = path.join(DATA_PATH, id);
-    let deleted = false;
+    let dirDeleted = false;
 
-    // 尝试删除 3 次
     for (let attempt = 1; attempt <= 3; attempt++) {
         try {
             if (fs.existsSync(profileDir)) {
-                // 使用 fs-extra 的 remove，它会递归删除
                 await fs.remove(profileDir);
                 console.log(`Deleted profile folder: ${profileDir}`);
-                deleted = true;
+                dirDeleted = true;
                 break;
             } else {
-                deleted = true;
+                dirDeleted = true;
                 break;
             }
         } catch (err) {
             console.error(`Delete attempt ${attempt} failed:`, err.message);
             if (attempt < 3) {
-                // 等待后重试
                 await new Promise(r => setTimeout(r, 500 * attempt));
             }
         }
     }
 
-    // 如果删除失败，移到回收站作为后备方案
-    if (!deleted && fs.existsSync(profileDir)) {
+    if (!dirDeleted && fs.existsSync(profileDir)) {
         console.warn(`Failed to delete, moving to trash: ${profileDir}`);
         const trashDest = path.join(TRASH_PATH, `${id}_${Date.now()}`);
         try {
             await fs.move(profileDir, trashDest);
             console.log(`Moved to trash: ${trashDest}`);
+            dirDeleted = true;
         } catch (err) {
             console.error(`Failed to move to trash:`, err);
         }
     }
 
+    // 目录删除全部失败，回滚 DB 记录
+    if (!dirDeleted) {
+        console.warn(`Directory cleanup failed, rolling back DB record: ${id}`);
+        profileDB.insert(snapshot);
+        throw new Error('Failed to delete profile directory. Profile data has been restored.');
+    }
+
+    notifyUIRefresh();
     return true;
 });
 ipcMain.handle('get-settings', async () => {

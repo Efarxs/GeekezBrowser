@@ -208,10 +208,23 @@ const handleBatchLaunch = async () => {
 };
 
 const handleBatchDelete = () => {
-    const ids = [...profileStore.selectedIds];
-    if (ids.length === 0) return;
-    uiStore.showConfirm(`${t('batchDeleteConfirm')} (${ids.length})`, async () => {
-        const results = await profileService.deleteBatch(ids);
+    const allIds = [...profileStore.selectedIds];
+    if (allIds.length === 0) return;
+
+    const safeIds = allIds.filter(id => !profileStore.isRunning(id) && !profileStore.isLaunching(id));
+    const skippedCount = allIds.length - safeIds.length;
+
+    if (safeIds.length === 0) {
+        uiStore.showAlert(t('runningNoDelete'));
+        return;
+    }
+
+    const confirmMsg = skippedCount > 0
+        ? `${t('batchDeleteConfirm')} (${safeIds.length}), ${t('batchDeleteSkipped')}: ${skippedCount}`
+        : `${t('batchDeleteConfirm')} (${safeIds.length})`;
+
+    uiStore.showConfirm(confirmMsg, async () => {
+        const results = await profileService.deleteBatch(safeIds);
         const failed = results.filter(item => !item.success);
         await profileStore.loadProfiles();
         profileStore.clearSelection();
