@@ -5,7 +5,7 @@
   "main": "out/main/index.js",
   "author": "EchoHS",
   "scripts": {
-    "dev": "electron-vite dev",
+    "dev": "chcp 65001 >nul && electron-vite dev",
     "check:no-watermark": "node scripts/check-no-watermark.js",
     "prebuild": "npm run check:no-watermark",
     "build": "electron-vite build",

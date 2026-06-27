@@ -790,6 +790,9 @@ function getInjectScript(fp, options = {}) {
         try {
             const fp = ${fpJson};
             const _useFC = ${useFingerprintChromium ? 'true' : 'false'};
+            // Per-session random noise for Canvas/Audio (varies each launch, prevents constant-hash detection)
+            const _sessionCanvasNoise = { r: (Math.random() * 6 - 3) | 0, g: (Math.random() * 6 - 3) | 0, b: (Math.random() * 6 - 3) | 0, a: (Math.random() * 6 - 3) | 0 };
+            const _sessionAudioNoise = Math.random() * 0.000001;
 
             const makeNative = (func, name) => {
                 const nativeStr = 'function ' + name + '() { [native code] }';
@@ -1035,25 +1038,27 @@ function getInjectScript(fp, options = {}) {
             }
 
             // --- 6. Canvas and Audio noise ---
-            // fingerprint-chromium 通过 --fingerprint-canvas-noise / --fingerprint-audio-noise 处理
-            if (!_useFC) {
+            // fingerprint-chromium 引擎级 noise 是确定性的（per seed），会被检测为 constant
+            // 无论是否使用 fingerprint-chromium，都应用 JS 层噪声：
+            //   - 非 FC：使用 profile 级确定性噪声
+            //   - FC 模式：引擎已加确定性噪声，JS 层叠加 per-session 随机噪声，防止被检测为 constant
             try {
                 const originalGetImageData = CanvasRenderingContext2D.prototype.getImageData;
                 const hookedGetImageData = function getImageData(x, y, w, h) {
                     const imageData = originalGetImageData.apply(this, arguments);
-                    if (fp.noiseSeed) {
-                        const modulus = 41 + (fp.noiseSeed % 23);
-                        const noiseR = fp.canvasNoise ? (fp.canvasNoise.r || 0) : 0;
-                        const noiseG = fp.canvasNoise ? (fp.canvasNoise.g || 0) : 0;
-                        const noiseB = fp.canvasNoise ? (fp.canvasNoise.b || 0) : 0;
-                        const noiseA = fp.canvasNoise ? (fp.canvasNoise.a || 0) : 0;
-                        for (let i = 0; i < imageData.data.length; i += 4) {
-                            if ((i + fp.noiseSeed) % modulus === 0) {
-                                imageData.data[i]     = Math.max(0, Math.min(255, imageData.data[i]     + noiseR));
-                                imageData.data[i + 1] = Math.max(0, Math.min(255, imageData.data[i + 1] + noiseG));
-                                imageData.data[i + 2] = Math.max(0, Math.min(255, imageData.data[i + 2] + noiseB));
-                                imageData.data[i + 3] = Math.max(0, Math.min(255, imageData.data[i + 3] + noiseA));
-                            }
+                    const seed = fp.noiseSeed || 1;
+                    const modulus = 41 + (seed % 23);
+                    const cn = fp.canvasNoise || {};
+                    const noiseR = _useFC ? _sessionCanvasNoise.r : (cn.r || 0);
+                    const noiseG = _useFC ? _sessionCanvasNoise.g : (cn.g || 0);
+                    const noiseB = _useFC ? _sessionCanvasNoise.b : (cn.b || 0);
+                    const noiseA = _useFC ? _sessionCanvasNoise.a : (cn.a || 0);
+                    for (let i = 0; i < imageData.data.length; i += 4) {
+                        if ((i + seed) % modulus === 0) {
+                            imageData.data[i]     = Math.max(0, Math.min(255, imageData.data[i]     + noiseR));
+                            imageData.data[i + 1] = Math.max(0, Math.min(255, imageData.data[i + 1] + noiseG));
+                            imageData.data[i + 2] = Math.max(0, Math.min(255, imageData.data[i + 2] + noiseB));
+                            imageData.data[i + 3] = Math.max(0, Math.min(255, imageData.data[i + 3] + noiseA));
                         }
                     }
                     return imageData;
@@ -1065,7 +1070,7 @@ function getInjectScript(fp, options = {}) {
                 const originalGetChannelData = AudioBuffer.prototype.getChannelData;
                 const hookedGetChannelData = function getChannelData(channel) {
                     const results = originalGetChannelData.apply(this, arguments);
-                    const noise = fp.audioNoise || 0.0000001;
+                    const noise = _useFC ? _sessionAudioNoise : (fp.audioNoise || 0.0000001);
                     for (let i = 0; i < 100 && i < results.length; i++) {
                         results[i] = results[i] + noise;
                     }
@@ -1073,7 +1078,6 @@ function getInjectScript(fp, options = {}) {
                 };
                 AudioBuffer.prototype.getChannelData = makeNative(hookedGetChannelData, 'getChannelData');
             } catch (e) { }
-            } // !_useFC — Canvas + Audio section end
 
             // --- 7. WebGL spoof ---
             // fingerprint-chromium 通过 --fingerprint-webgl-vendor/renderer 在引擎级拦截

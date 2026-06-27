@@ -207,6 +207,8 @@ const enTranslations = {
     debugToggleHint: "Enable remote debugging port for Puppeteer or DevTools connection",
     argsToggle: "⚡ Custom Launch Args",
     argsToggleHint: "Add custom Chrome launch arguments for each profile",
+    chromeForTestingToggle: "🌐 Use Chrome for Testing",
+    chromeForTestingToggleHint: "Switch to Chrome for Testing engine (default: fingerprint-chromium for better fingerprint protection)",
     apiToggle: "🔌 API Server",
     apiToggleHint: "Enable REST API for remote profile management",
     closeBehaviorTitle: "🧷 Window Close Behavior",
