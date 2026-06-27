@@ -4937,7 +4937,6 @@ const launchProfileHandler = async (event, profileId, preferredLang, launchOptio
         const launchArgs = [
             `--user-data-dir=${userDataDir}`,
             `--window-size=${profile.fingerprint?.window?.width || 1280},${profile.fingerprint?.window?.height || 800}`,
-            '--disable-blink-features=AutomationControlled',
             `--disable-features=${disabledFeatures.join(',')}`,
             '--force-webrtc-ip-handling-policy=disable_non_proxied_udp',
             `--disable-extensions-except=${extPaths}`,
