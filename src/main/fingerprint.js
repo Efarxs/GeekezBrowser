@@ -1713,4 +1713,103 @@ function getGeolocationScript(fp) {
     `;
 }
 
-export { generateFingerprint, getInjectScript, getGeolocationScript };
+function getWatermarkScript(profileName, watermarkStyle) {
+    const safeProfileName = (profileName || 'Profile').replace(/[<>"'&]/g, '');
+    const style = watermarkStyle || 'enhanced';
+
+    return `
+    (function() {
+        try {
+            if (window.__geekezWatermarkBootstrapped__) return;
+            window.__geekezWatermarkBootstrapped__ = true;
+            try { if (window !== window.top) return; } catch (e) { return; }
+
+            const watermarkStyle = ${JSON.stringify(style)};
+            const profileLabel = ${JSON.stringify(safeProfileName)};
+
+            function ensureStyleNode() {
+                try {
+                    if (document.getElementById('geekez-watermark-styles')) return;
+                    const styleNode = document.createElement('style');
+                    styleNode.id = 'geekez-watermark-styles';
+                    styleNode.textContent = '@keyframes geekez-pulse { 0%, 100% { box-shadow: 0 4px 15px rgba(102, 126, 234, 0.4); } 50% { box-shadow: 0 4px 25px rgba(102, 126, 234, 0.6); } } @keyframes geekez-rotate { from { transform: rotate(0deg); } to { transform: rotate(360deg); } }';
+                    (document.head || document.documentElement).appendChild(styleNode);
+                } catch (e) { }
+            }
+
+            function createWatermark() {
+                try {
+                    if (document.getElementById('geekez-watermark')) return;
+                    if (!document.body) {
+                        setTimeout(createWatermark, 50);
+                        return;
+                    }
+
+                    ensureStyleNode();
+
+                    if (watermarkStyle === 'banner') {
+                        const banner = document.createElement('div');
+                        banner.id = 'geekez-watermark';
+                        banner.style.cssText = 'position: fixed; top: 0; left: 0; right: 0; background: linear-gradient(135deg, rgba(102, 126, 234, 0.5), rgba(118, 75, 162, 0.5)); backdrop-filter: blur(10px); color: white; padding: 5px 20px; text-align: center; font-size: 12px; font-weight: 500; z-index: 2147483647; box-shadow: 0 2px 10px rgba(0,0,0,0.1); display: flex; align-items: center; justify-content: center; gap: 8px; font-family: monospace;';
+
+                        const icon = document.createElement('span');
+                        icon.textContent = '\\ud83d\\udd39';
+
+                        const text = document.createElement('span');
+                        text.textContent = '\\u73af\\u5883\\uff1a' + profileLabel;
+
+                        const closeBtn = document.createElement('button');
+                        closeBtn.textContent = '\\u00d7';
+                        closeBtn.style.cssText = 'position: absolute; right: 10px; background: rgba(255,255,255,0.2); border: none; color: white; width: 20px; height: 20px; border-radius: 50%; cursor: pointer; font-size: 16px; line-height: 1;';
+                        closeBtn.onclick = function() { banner.style.display = 'none'; };
+
+                        banner.appendChild(icon);
+                        banner.appendChild(text);
+                        banner.appendChild(closeBtn);
+                        document.body.appendChild(banner);
+                        return;
+                    }
+
+                    const watermark = document.createElement('div');
+                    watermark.id = 'geekez-watermark';
+                    watermark.style.cssText = 'position: fixed; bottom: 16px; right: 16px; background: linear-gradient(135deg, rgba(102, 126, 234, 0.5), rgba(118, 75, 162, 0.5)); backdrop-filter: blur(10px); color: white; padding: 10px 16px; border-radius: 8px; font-size: 15px; font-weight: 600; z-index: 2147483647; pointer-events: none; user-select: none; box-shadow: 0 4px 15px rgba(102, 126, 234, 0.4); display: flex; align-items: center; gap: 8px; font-family: monospace; animation: geekez-pulse 2s ease-in-out infinite;';
+
+                    const icon = document.createElement('span');
+                    icon.textContent = '\\ud83c\\udfaf';
+                    icon.style.cssText = 'font-size: 18px; animation: geekez-rotate 3s linear infinite;';
+
+                    const text = document.createElement('span');
+                    text.textContent = profileLabel;
+
+                    watermark.appendChild(icon);
+                    watermark.appendChild(text);
+                    document.body.appendChild(watermark);
+                } catch (e) { }
+            }
+
+            function scheduleWatermark() {
+                if (document.readyState === 'loading') {
+                    document.addEventListener('DOMContentLoaded', createWatermark, { once: true });
+                } else {
+                    createWatermark();
+                }
+                setTimeout(createWatermark, 250);
+                setTimeout(createWatermark, 1000);
+            }
+
+            scheduleWatermark();
+
+            try {
+                const observer = new MutationObserver(() => {
+                    if (!document.getElementById('geekez-watermark')) {
+                        createWatermark();
+                    }
+                });
+                observer.observe(document.documentElement || document, { childList: true, subtree: true });
+            } catch (e) { }
+        } catch (e) { }
+    })();
+    `;
+}
+
+export { generateFingerprint, getInjectScript, getGeolocationScript, getWatermarkScript };
