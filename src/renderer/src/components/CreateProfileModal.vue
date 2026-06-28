@@ -82,13 +82,6 @@
               {{ getOptionLabel(opt) }}
             </option>
           </select>
-
-          <label class="label-tiny">{{ $t('webglProfileLabel') }}</label>
-          <select v-model="form.webglProfile">
-            <option v-for="opt in webglProfileOptions" :key="opt.value" :value="opt.value">
-              {{ getOptionLabel(opt) }}
-            </option>
-          </select>
         </template>
 
         <label class="label-tiny">{{ $t('platformLabel') }}</label>
@@ -123,7 +116,6 @@ import { useProfileStore } from '../store/useProfileStore';
 import { getProxyRemark } from '../utils/helpers';
 import {
   browserVersionPresetOptions,
-  webglProfileOptions,
   getOptionLabel
 } from '../utils/fingerprintOptions';
 
@@ -148,7 +140,6 @@ const form = reactive({
   geolocation: null,
   customArgs: '',
   browserVersionPreset: 'none',
-  webglProfile: 'none',
   platform: 'Win32',
 });
 
@@ -255,7 +246,6 @@ watch(() => uiStore.addModalVisible, async (newVal) => {
       geolocation: null,
       customArgs: '',
       browserVersionPreset: 'none',
-      webglProfile: 'none',
       platform: 'Win32'
     });
     timezoneSearch.value = AUTO_TIMEZONE_LABEL;
@@ -325,7 +315,6 @@ async function handleSave() {
         customArgs: form.customArgs,
         browserType: browserPreset.browserType,
         browserMajorVersion: browserPreset.browserMajorVersion,
-        webglProfile: form.webglProfile,
         platform: form.platform,
         ignoreCertErrors: true
       };

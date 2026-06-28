@@ -264,6 +264,39 @@
 
                             <div style="height:1px; background:var(--border); margin:0 16px;"></div>
 
+                            <!-- Watermark Toggle -->
+                            <label class="dev-toggle-item" style="display:flex; align-items:center; gap:14px; padding:14px 16px; cursor:pointer; border-radius:8px; transition:all 0.2s;">
+                                <div class="toggle-switch" style="position:relative; width:44px; height:24px; flex-shrink:0;">
+                                    <input type="checkbox" :checked="settingsStore.enableWatermark"
+                                        style="opacity:0; width:0; height:0; position:absolute;"
+                                        @change="e => settingsStore.toggleWatermark(e.target.checked)">
+                                    <div class="toggle-track" :style="{ background: settingsStore.enableWatermark ? 'var(--accent)' : 'var(--border)' }"
+                                        style="position:absolute; inset:0; border-radius:12px; transition:0.3s;">
+                                    </div>
+                                    <div class="toggle-knob" :style="{ left: settingsStore.enableWatermark ? '22px' : '2px' }"
+                                        style="position:absolute; top:2px; width:20px; height:20px; background:#fff; border-radius:50%; transition:0.3s; box-shadow:0 2px 4px rgba(0,0,0,0.2);">
+                                    </div>
+                                </div>
+                                <div style="flex:1;">
+                                    <div style="font-size:13px; font-weight:500; color:var(--text-primary);"
+                                        data-i18n="watermarkToggle">{{ $t('watermarkToggle') }}</div>
+                                    <div style="font-size:11px; color:var(--text-secondary); opacity:0.8;"
+                                        data-i18n="watermarkToggleHint">{{ $t('watermarkToggleHint') }}</div>
+                                </div>
+                            </label>
+
+                            <!-- Watermark Style Selector -->
+                            <div v-if="settingsStore.enableWatermark" style="padding:4px 16px 14px 74px;">
+                                <select :value="settingsStore.watermarkStyle"
+                                    style="width:100%; max-width:260px; margin:0; font-size:12px; padding:7px 10px;"
+                                    @change="(e) => settingsStore.setWatermarkStyle(e.target.value)">
+                                    <option value="enhanced">{{ $t('watermarkStyleEnhanced') }}</option>
+                                    <option value="banner">{{ $t('watermarkStyleBanner') }}</option>
+                                </select>
+                            </div>
+
+                            <div style="height:1px; background:var(--border); margin:0 16px;"></div>
+
                             <!-- Window Close Behavior -->
                             <div style="padding:14px 16px;">
                                 <div style="font-size:13px; font-weight:500; color:var(--text-primary);"

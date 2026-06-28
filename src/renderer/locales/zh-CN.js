@@ -135,7 +135,6 @@ window.zhCN = {
     browserVersionPresetLabel: "UA选项",
     browserTypeLabel: "浏览器类型",
     browserMajorLabel: "浏览器主版本",
-    webglProfileLabel: "WebGL 档案",
     platformLabel: "操作系统",
     platformWin: "Windows",
     platformMac: "macOS",
@@ -232,5 +231,9 @@ window.zhCN = {
     launchingStatus: "启动中",
     launchingProfileTitle: "正在启动环境",
     launchingWarn: "环境启动中，请稍候，不要关闭软件。",
-    launchingStepLabel: "启动进度"
+    launchingStepLabel: "启动进度",
+    watermarkToggle: "🏷️ 环境水印",
+    watermarkToggleHint: "在浏览器窗口中显示当前环境名称的浮动标识",
+    watermarkStyleEnhanced: "🎯 右下角徽章",
+    watermarkStyleBanner: "🔹 顶部横幅"
 };

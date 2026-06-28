@@ -61,13 +61,6 @@
               {{ getOptionLabel(opt) }}
             </option>
           </select>
-
-          <label class="label-tiny">{{ $t('webglProfileLabel') }}</label>
-          <select v-model="form.webglProfile">
-            <option v-for="opt in webglProfileOptions" :key="opt.value" :value="opt.value">
-              {{ getOptionLabel(opt) }}
-            </option>
-          </select>
         </template>
 
         <label class="label-tiny">{{ $t('platformLabel') }}</label>
@@ -125,7 +118,6 @@ import { useUIStore } from '../store/useUIStore';
 import { useProfileStore } from '../store/useProfileStore';
 import {
   browserVersionPresetOptions,
-  webglProfileOptions,
   getOptionLabel
 } from '../utils/fingerprintOptions';
 
@@ -149,7 +141,6 @@ const form = reactive({
   debugPort: null,
   customArgs: '',
   browserVersionPreset: 'none',
-  webglProfile: 'none',
   platform: 'Win32',
 });
 
@@ -232,7 +223,6 @@ watch(() => uiStore.editModalVisible, async (visible) => {
     form.debugPort = p.debugPort || null;
     form.customArgs = p.customArgs || '';
     form.browserVersionPreset = toBrowserVersionPreset(fp.uaMode, fp.browserType, fp.browserMajorVersion);
-    form.webglProfile = fp.webglProfile || fp.webgl?.profileId || 'none';
     form.platform = fp.platform || 'Win32';
 
     // Timezone
@@ -314,7 +304,6 @@ async function handleSave() {
       uaMode: browserPreset.uaMode,
       browserType: browserPreset.browserType,
       browserMajorVersion: browserPreset.browserMajorVersion,
-      webglProfile: form.webglProfile,
       fingerprint: {
         ...(p.fingerprint || {}),
         screen: { width: form.resW, height: form.resH },
@@ -326,7 +315,6 @@ async function handleSave() {
         uaMode: browserPreset.uaMode,
         browserType: browserPreset.browserType,
         browserMajorVersion: browserPreset.browserMajorVersion,
-        webglProfile: form.webglProfile,
         platform: form.platform
       },
       debugPort: form.debugPort,

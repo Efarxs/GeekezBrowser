@@ -132,7 +132,6 @@ const enTranslations = {
     browserVersionPresetLabel: "UA Option",
     browserTypeLabel: "Browser Type",
     browserMajorLabel: "Browser Major Version",
-    webglProfileLabel: "WebGL Profile",
     platformLabel: "Operating System",
     platformWin: "Windows",
     platformMac: "macOS",
@@ -229,7 +228,11 @@ const enTranslations = {
     launchingStatus: "LAUNCHING",
     launchingProfileTitle: "Launching Profile",
     launchingWarn: "Please wait while the environment is starting. Do not close the application.",
-    launchingStepLabel: "Progress"
+    launchingStepLabel: "Progress",
+    watermarkToggle: "🏷️ Profile Watermark",
+    watermarkToggleHint: "Show a floating badge with the profile name in each browser window",
+    watermarkStyleEnhanced: "🎯 Bottom-right badge",
+    watermarkStyleBanner: "🔹 Top banner"
 };
 
 // Global i18n Manager
