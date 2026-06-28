@@ -67,7 +67,7 @@ async function createSocksProxyAgent(proxyUrl) {
 // Only disable if GPU compatibility issues occur
 
 import { generateXrayConfig, parseProxyLink, getProxyRemark } from './utils';
-import { generateFingerprint, getInjectScript, getGeolocationScript } from './fingerprint';
+import { generateFingerprint, getInjectScript, getGeolocationScript, getWatermarkScript } from './fingerprint';
 
 const isDev = !app.isPackaged;
 const RESOURCES_BIN = isDev ? path.join(app.getAppPath(), 'resources', 'bin') : path.join(process.resourcesPath, 'bin');
@@ -1146,7 +1146,7 @@ async function saveSettingsWithNormalizedExtensions(settings) {
 
 function normalizeSettingsSnapshot(settings) {
     const nextSettings = settings || {};
-    delete nextSettings.watermarkStyle;
+    if (!['enhanced', 'banner'].includes(nextSettings.watermarkStyle)) nextSettings.watermarkStyle = 'enhanced';
     if (!Array.isArray(nextSettings.preProxies)) nextSettings.preProxies = [];
     if (!Array.isArray(nextSettings.subscriptions)) nextSettings.subscriptions = [];
     if (!['single', 'balance', 'failover'].includes(nextSettings.mode)) nextSettings.mode = 'single';
@@ -5044,6 +5044,13 @@ const launchProfileHandler = async (event, profileId, preferredLang, launchOptio
         let runtimeFingerprint = profile.fingerprint;
         let geolocationScript = getGeolocationScript(runtimeFingerprint);
         let fingerprintInjectScript = getInjectScript(runtimeFingerprint);
+
+        const enableWatermark = settings.enableWatermark !== false;
+        const watermarkStyleSetting = settings.watermarkStyle || 'enhanced';
+        const watermarkScript = enableWatermark
+            ? getWatermarkScript(profile.name || profileId, watermarkStyleSetting)
+            : null;
+
         const enableWebglOverride = !!(
             profile.fingerprint?.webglProfile !== 'none' &&
             profile.fingerprint?.webgl &&
@@ -5161,6 +5168,11 @@ const launchProfileHandler = async (event, profileId, preferredLang, launchOptio
                 try {
                     await page.evaluateOnNewDocument(webglOverrideScript);
                 } catch (e) { }
+                if (watermarkScript) {
+                    try {
+                        await page.evaluateOnNewDocument(watermarkScript);
+                    } catch (e) { }
+                }
 
                 try {
                     await page.evaluate(geolocationScript);
@@ -5171,6 +5183,11 @@ const launchProfileHandler = async (event, profileId, preferredLang, launchOptio
                 try {
                     await page.evaluate(webglOverrideScript);
                 } catch (e) { }
+                if (watermarkScript) {
+                    try {
+                        await page.evaluate(watermarkScript);
+                    } catch (e) { }
+                }
 
                 const session = await page.createCDPSession();
                 try {
