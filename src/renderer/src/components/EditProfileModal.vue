@@ -61,14 +61,14 @@
               {{ getOptionLabel(opt) }}
             </option>
           </select>
-
-          <label class="label-tiny">{{ $t('webglProfileLabel') }}</label>
-          <select v-model="form.webglProfile">
-            <option v-for="opt in webglProfileOptions" :key="opt.value" :value="opt.value">
-              {{ getOptionLabel(opt) }}
-            </option>
-          </select>
         </template>
+
+        <label class="label-tiny">{{ $t('platformLabel') }}</label>
+        <select v-model="form.platform">
+          <option value="Win32">{{ $t('platformWin') }}</option>
+          <option value="MacIntel">{{ $t('platformMac') }}</option>
+          <option value="Linux x86_64">{{ $t('platformLinux') }}</option>
+        </select>
 
         <label class="label-tiny mt-10">{{ $t('proxyLink') }}</label>
         <textarea v-model="form.proxyStr" rows="4"></textarea>
@@ -118,7 +118,6 @@ import { useUIStore } from '../store/useUIStore';
 import { useProfileStore } from '../store/useProfileStore';
 import {
   browserVersionPresetOptions,
-  webglProfileOptions,
   getOptionLabel
 } from '../utils/fingerprintOptions';
 
@@ -142,7 +141,7 @@ const form = reactive({
   debugPort: null,
   customArgs: '',
   browserVersionPreset: 'none',
-  webglProfile: 'none',
+  platform: 'Win32',
 });
 
 function parseBrowserVersionPreset(preset) {
@@ -224,8 +223,8 @@ watch(() => uiStore.editModalVisible, async (visible) => {
     form.debugPort = p.debugPort || null;
     form.customArgs = p.customArgs || '';
     form.browserVersionPreset = toBrowserVersionPreset(fp.uaMode, fp.browserType, fp.browserMajorVersion);
-    form.webglProfile = fp.webglProfile || fp.webgl?.profileId || 'none';
-    
+    form.platform = fp.platform || 'Win32';
+
     // Timezone
     form.timezone = fp.timezone || 'Auto';
     timezoneSearch.value = form.timezone === 'Auto' ? AUTO_TIMEZONE_LABEL : form.timezone;
@@ -305,7 +304,6 @@ async function handleSave() {
       uaMode: browserPreset.uaMode,
       browserType: browserPreset.browserType,
       browserMajorVersion: browserPreset.browserMajorVersion,
-      webglProfile: form.webglProfile,
       fingerprint: {
         ...(p.fingerprint || {}),
         screen: { width: form.resW, height: form.resH },
@@ -317,7 +315,7 @@ async function handleSave() {
         uaMode: browserPreset.uaMode,
         browserType: browserPreset.browserType,
         browserMajorVersion: browserPreset.browserMajorVersion,
-        webglProfile: form.webglProfile
+        platform: form.platform
       },
       debugPort: form.debugPort,
       customArgs: form.customArgs,

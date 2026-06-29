@@ -7,7 +7,8 @@ export const useSettingsStore = defineStore('settings', {
         enableRemoteDebugging: false,
         enableCustomArgs: false,
         enableUaWebglModify: false,
-        preferChromeForTesting: false,
+        enableWatermark: true,
+        watermarkStyle: 'enhanced',
         enableApiServer: false,
         closeBehavior: 'tray',
         apiPort: 12138,
@@ -30,7 +31,8 @@ export const useSettingsStore = defineStore('settings', {
                 this.enableRemoteDebugging = settings.enableRemoteDebugging || false;
                 this.enableCustomArgs = settings.enableCustomArgs || false;
                 this.enableUaWebglModify = settings.enableUaWebglModify || false;
-                this.preferChromeForTesting = settings.preferChromeForTesting || false;
+                this.enableWatermark = settings.enableWatermark !== false;
+                this.watermarkStyle = settings.watermarkStyle || 'enhanced';
                 this.enableApiServer = settings.enableApiServer || false;
                 this.closeBehavior = settings.closeBehavior === 'quit' ? 'quit' : 'tray';
                 this.apiPort = settings.apiPort || 12138;
@@ -85,10 +87,17 @@ export const useSettingsStore = defineStore('settings', {
             await ipcService.saveSettings(settings);
         },
 
-        async togglePreferChromeForTesting(enabled) {
-            this.preferChromeForTesting = enabled;
+        async toggleWatermark(enabled) {
+            this.enableWatermark = enabled;
             const settings = await ipcService.getSettings();
-            settings.preferChromeForTesting = enabled;
+            settings.enableWatermark = enabled;
+            await ipcService.saveSettings(settings);
+        },
+
+        async setWatermarkStyle(style) {
+            this.watermarkStyle = style;
+            const settings = await ipcService.getSettings();
+            settings.watermarkStyle = style;
             await ipcService.saveSettings(settings);
         },
 

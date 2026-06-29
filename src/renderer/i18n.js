@@ -132,7 +132,10 @@ const enTranslations = {
     browserVersionPresetLabel: "UA Option",
     browserTypeLabel: "Browser Type",
     browserMajorLabel: "Browser Major Version",
-    webglProfileLabel: "WebGL Profile",
+    platformLabel: "Operating System",
+    platformWin: "Windows",
+    platformMac: "macOS",
+    platformLinux: "Linux",
     tlsClientHelloLabel: "TLS ClientHello (uTLS)",
     locationLabel: "Location (Geo)",
     geoAuto: "Auto (IP Based)",
@@ -207,8 +210,6 @@ const enTranslations = {
     debugToggleHint: "Enable remote debugging port for Puppeteer or DevTools connection",
     argsToggle: "⚡ Custom Launch Args",
     argsToggleHint: "Add custom Chrome launch arguments for each profile",
-    chromeForTestingToggle: "🌐 Use Chrome for Testing",
-    chromeForTestingToggleHint: "Switch to Chrome for Testing engine (default: fingerprint-chromium for better fingerprint protection)",
     apiToggle: "🔌 API Server",
     apiToggleHint: "Enable REST API for remote profile management",
     closeBehaviorTitle: "🧷 Window Close Behavior",
@@ -227,7 +228,11 @@ const enTranslations = {
     launchingStatus: "LAUNCHING",
     launchingProfileTitle: "Launching Profile",
     launchingWarn: "Please wait while the environment is starting. Do not close the application.",
-    launchingStepLabel: "Progress"
+    launchingStepLabel: "Progress",
+    watermarkToggle: "🏷️ Profile Watermark",
+    watermarkToggleHint: "Show a floating badge with the profile name in each browser window",
+    watermarkStyleEnhanced: "🎯 Bottom-right badge",
+    watermarkStyleBanner: "🔹 Top banner"
 };
 
 // Global i18n Manager

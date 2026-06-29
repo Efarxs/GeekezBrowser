@@ -135,7 +135,10 @@ window.zhCN = {
     browserVersionPresetLabel: "UA选项",
     browserTypeLabel: "浏览器类型",
     browserMajorLabel: "浏览器主版本",
-    webglProfileLabel: "WebGL 档案",
+    platformLabel: "操作系统",
+    platformWin: "Windows",
+    platformMac: "macOS",
+    platformLinux: "Linux",
     tlsClientHelloLabel: "TLS ClientHello (uTLS)",
     locationLabel: "地理位置 (Geo Location)",
     geoAuto: "自动 (基于IP)",
@@ -210,8 +213,6 @@ window.zhCN = {
     debugToggleHint: "启用后可为环境设置远程调试端口，用于 Puppeteer 或 DevTools 连接",
     argsToggle: "⚡ 自定义启动参数",
     argsToggleHint: "启用后可为每个环境添加自定义 Chrome 启动参数",
-    chromeForTestingToggle: "🌐 使用 Chrome for Testing 内核",
-    chromeForTestingToggleHint: "切换到 Chrome for Testing 内核（默认使用 fingerprint-chromium 以获得更好的指纹保护）",
     apiToggle: "🔌 API 服务",
     apiToggleHint: "启用后可通过 REST API 远程管理环境",
     closeBehaviorTitle: "🧷 关闭窗口行为",
@@ -230,5 +231,9 @@ window.zhCN = {
     launchingStatus: "启动中",
     launchingProfileTitle: "正在启动环境",
     launchingWarn: "环境启动中，请稍候，不要关闭软件。",
-    launchingStepLabel: "启动进度"
+    launchingStepLabel: "启动进度",
+    watermarkToggle: "🏷️ 环境水印",
+    watermarkToggleHint: "在浏览器窗口中显示当前环境名称的浮动标识",
+    watermarkStyleEnhanced: "🎯 右下角徽章",
+    watermarkStyleBanner: "🔹 顶部横幅"
 };

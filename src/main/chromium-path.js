@@ -2,13 +2,13 @@ const fs = require('fs');
 const path = require('path');
 
 const BUNDLED_BASENAMES = {
-    darwin: ['Google Chrome for Testing', 'Google Chrome'],
+    darwin: ['Google Chrome'],
     linux: ['chrome', 'google-chrome', 'chromium', 'chromium-browser'],
     win32: ['chrome.exe']
 };
 
 const PATH_CANDIDATES = {
-    darwin: ['Google Chrome for Testing', 'Google Chrome'],
+    darwin: ['Google Chrome'],
     linux: ['google-chrome-stable', 'google-chrome', 'chromium-browser', 'chromium', 'chrome'],
     win32: ['chrome.exe', 'chrome']
 };
@@ -31,14 +31,11 @@ function scoreBundledCandidate(filePath, platform = process.platform) {
     let score = 0;
 
     if (platform === 'darwin') {
-        if (filePath.endsWith(path.join('Contents', 'MacOS', 'Google Chrome for Testing'))) score += 200;
         if (filePath.endsWith(path.join('Contents', 'MacOS', 'Google Chrome'))) score += 180;
-        if (normalized.includes('google chrome for testing.app')) score += 100;
         if (normalized.includes('fingerprint-chromium')) score += 300;
     } else if (platform === 'linux') {
         if (path.basename(filePath) === 'chrome') score += 200;
         if (normalized.includes('chrome-linux')) score += 100;
-        if (normalized.includes('chrome-for-testing')) score += 50;
         if (normalized.includes('fingerprint-chromium')) score += 300;
     } else if (platform === 'win32') {
         if (path.basename(filePath).toLowerCase() === 'chrome.exe') score += 200;
@@ -115,9 +112,7 @@ function listStandardChromiumCandidates(platform = process.platform, env = proce
 
     if (platform === 'darwin') {
         return [
-            '/Applications/Google Chrome for Testing.app/Contents/MacOS/Google Chrome for Testing',
             '/Applications/Google Chrome.app/Contents/MacOS/Google Chrome',
-            homeDir ? path.join(homeDir, 'Applications', 'Google Chrome for Testing.app', 'Contents', 'MacOS', 'Google Chrome for Testing') : null,
             homeDir ? path.join(homeDir, 'Applications', 'Google Chrome.app', 'Contents', 'MacOS', 'Google Chrome') : null
         ].filter(Boolean);
     }
@@ -143,24 +138,21 @@ function listStandardChromiumCandidates(platform = process.platform, env = proce
     ].filter(Boolean);
 }
 
-function resolveChromiumPath({ basePath, platform = process.platform, env = process.env, preferChromeForTesting = false } = {}) {
-    // Priority 0: fingerprint-chromium (engine-level fingerprint spoofing)
-    // Skip if preferChromeForTesting is set
-    if (!preferChromeForTesting) {
-        const fcPath = findBundledChromiumPath(path.join(basePath, 'chrome', 'fingerprint-chromium'), platform);
-        if (fcPath) return fcPath;
-    }
+function resolveChromiumPath({ basePath, platform = process.platform, env = process.env } = {}) {
+    // Priority 1: fingerprint-chromium (engine-level fingerprint spoofing)
+    const fcPath = findBundledChromiumPath(path.join(basePath, 'chrome', 'fingerprint-chromium'), platform);
+    if (fcPath) return fcPath;
 
-    const bundledPath = findBundledChromiumPath(basePath, platform);
-    if (bundledPath) return bundledPath;
-
+    // Priority 2: Environment variable override
     for (const candidate of listExplicitChromiumCandidates(env)) {
         if (isExecutableFile(candidate, platform)) return candidate;
     }
 
+    // Priority 3: System PATH
     const pathCandidate = findExecutableInPath(PATH_CANDIDATES[platform] || [], platform, env);
     if (pathCandidate) return pathCandidate;
 
+    // Priority 4: Standard install locations
     for (const candidate of listStandardChromiumCandidates(platform, env)) {
         if (isExecutableFile(candidate, platform)) return candidate;
     }
@@ -168,9 +160,9 @@ function resolveChromiumPath({ basePath, platform = process.platform, env = proc
     return null;
 }
 
-function getChromiumPath({ isDev, appPath, resourcesPath, platform = process.platform, env = process.env, preferChromeForTesting = false } = {}) {
+function getChromiumPath({ isDev, appPath, resourcesPath, platform = process.platform, env = process.env } = {}) {
     const basePath = isDev ? path.join(appPath, 'resources', 'puppeteer') : path.join(resourcesPath, 'puppeteer');
-    return resolveChromiumPath({ basePath, platform, env, preferChromeForTesting });
+    return resolveChromiumPath({ basePath, platform, env });
 }
 
 function getChromiumVersion({ isDev, appPath, resourcesPath, platform = process.platform } = {}) {
@@ -188,7 +180,7 @@ function getChromiumVersion({ isDev, appPath, resourcesPath, platform = process.
         }
     } catch (_) {}
 
-    // Priority 2: Chrome for Testing directory name (chrome/linux64-147.0.7727.50/)
+    // Priority 2: Fallback directory name scan
     try {
         const chromeDir = path.join(basePath, 'chrome');
         if (fs.existsSync(chromeDir)) {

@@ -22,36 +22,42 @@ jobs:
             os: darwin
             arch: arm64
             xray_asset: Xray-macos-arm64-v8a.zip
+            fc_asset: ungoogled-chromium_148.0.7778.215-1.1_macos.dmg
             build_cmd: npm run build:mac
           # macOS x64
           - platform: macos-15-intel
             os: darwin
             arch: x64
             xray_asset: Xray-macos-64.zip
+            fc_asset: ungoogled-chromium_148.0.7778.215-1.1_macos.dmg
             build_cmd: npm run build:mac
           # Windows x64
           - platform: windows-latest
             os: win32
             arch: x64
             xray_asset: Xray-windows-64.zip
+            fc_asset: ungoogled-chromium_148.0.7778.215-1.1_windows_x64.zip
             build_cmd: npm run build && npx electron-builder --win nsis zip --x64
           # Windows ARM64
           - platform: windows-latest
             os: win32
             arch: arm64
             xray_asset: Xray-windows-arm64-v8a.zip
+            fc_asset: ungoogled-chromium_148.0.7778.215-1.1_windows_x64.zip
             build_cmd: npm run build && npx electron-builder --win nsis zip --arm64
           # Linux x64
           - platform: ubuntu-latest
             os: linux
             arch: x64
             xray_asset: Xray-linux-64.zip
+            fc_asset: ungoogled-chromium-148.0.7778.215-1-x86_64_linux.tar.xz
             build_cmd: npm run build:linux
           # Linux ARM64
           - platform: ubuntu-24.04-arm
             os: linux
             arch: arm64
             xray_asset: Xray-linux-arm64-v8a.zip
+            fc_asset: ungoogled-chromium-148.0.7778.215-1-x86_64_linux.tar.xz
             build_cmd: npm run build && npx electron-builder --linux --arm64
 
     runs-on: ${{ matrix.platform }}
@@ -88,8 +94,25 @@ jobs:
           rm -f "$BIN_DIR"/{LICENSE,README.md}
           [ "${{ matrix.os }}" != "win32" ] && chmod +x "$BIN_DIR/xray" || true
 
-      - name: Download Chrome
-        run: npx @puppeteer/browsers install chrome@147.0.7727.50 --path resources/puppeteer
+      - name: Download fingerprint-chromium
+        shell: bash
+        run: |
+          FC_VERSION="148.0.7778.215"
+          FC_DIR="resources/puppeteer/chrome/fingerprint-chromium"
+          mkdir -p "$FC_DIR"
+          FC_URL="https://github.com/adryfish/fingerprint-chromium/releases/download/${FC_VERSION}/${{ matrix.fc_asset }}"
+          curl -sL -o fc-temp.zip "$FC_URL"
+          if [[ "${{ matrix.fc_asset }}" == *.zip ]]; then
+            unzip -o fc-temp.zip -d "$FC_DIR/" && rm fc-temp.zip
+          elif [[ "${{ matrix.fc_asset }}" == *.tar.xz ]]; then
+            tar -xf fc-temp.zip -C "$FC_DIR/" && rm fc-temp.zip
+          elif [[ "${{ matrix.fc_asset }}" == *.dmg ]]; then
+            hdiutil attach fc-temp.zip -mountpoint /tmp/fc-dmg -nobrowse -quiet
+            cp -R /tmp/fc-dmg/*.app "$FC_DIR/" 2>/dev/null || cp -R /tmp/fc-dmg/* "$FC_DIR/"
+            hdiutil detach /tmp/fc-dmg -quiet
+            rm fc-temp.zip
+          fi
+          echo "$FC_VERSION" > "$FC_DIR/VERSION"
 
       - name: Build
         run: ${{ matrix.build_cmd }}
