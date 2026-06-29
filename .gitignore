@@ -14,3 +14,4 @@ tools/
 out/
 *.log
 *.exe
+package-lock.json
