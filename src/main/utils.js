@@ -292,8 +292,8 @@ function parseProxyLink(link, tag) {
 
             outbound.protocol = "socks";
 
-            // Remove socks:// or socks5://
-            let cleanLink = link.replace(/^socks5?:\/\//, '');
+            // Remove socks://, socks5://, or socks5h://
+            let cleanLink = link.replace(/^socks(?:5h?)?:\/\//, '');
 
             // Extract remark if exists (after #)
             const hashIndex = cleanLink.indexOf('#');
