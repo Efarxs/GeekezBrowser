@@ -292,8 +292,8 @@ function parseProxyLink(link, tag) {
 
             outbound.protocol = "socks";
 
-            // Remove socks:// or socks5://
-            let cleanLink = link.replace(/^socks5?:\/\//, '');
+            // Remove socks://, socks5://, or socks5h://
+            let cleanLink = link.replace(/^socks(?:5h?)?:\/\//, '');
 
             // Extract remark if exists (after #)
             const hashIndex = cleanLink.indexOf('#');
@@ -440,9 +440,10 @@ function generateXrayConfig(mainProxyStr, localPort, preProxyConfig = null, prof
     outbounds.push(mainOutbound);
     outbounds.push({ protocol: "freedom", tag: "direct" });
 
-    // Enable Mux (multiplexing) on proxy outbounds to reduce TCP connection overhead
+    // Enable Mux (multiplexing) only on proxy protocols that support smux frames.
+    const MUX_UNSUPPORTED = new Set(['freedom', 'blackhole', 'socks', 'http']);
     outbounds.forEach(ob => {
-        if (ob.protocol && ob.protocol !== 'freedom' && ob.protocol !== 'blackhole') {
+        if (ob.protocol && !MUX_UNSUPPORTED.has(ob.protocol)) {
             ob.mux = { enabled: true, concurrency: 8 };
         }
     });
