@@ -46,6 +46,7 @@ import { computed } from 'vue';
 import { useUIStore } from '../store/useUIStore';
 import { useProfileStore } from '../store/useProfileStore';
 import { profileService } from '../services/profile.service';
+import { getProxyProtocol } from '../utils/helpers';
 
 const uiStore = useUIStore();
 const profileStore = useProfileStore();
@@ -80,8 +81,7 @@ const stringToColor = (str) => {
 };
 
 const displayProto = computed(() => {
-    if (!props.profile.proxyStr) return 'N/A';
-    return (props.profile.proxyStr.split('://')[0] || 'UNK').toUpperCase();
+    return getProxyProtocol(props.profile.proxyStr);
 });
 
 const displayScreen = computed(() => {

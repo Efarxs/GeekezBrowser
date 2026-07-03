@@ -141,7 +141,7 @@
 import { ref, computed, onMounted } from 'vue';
 import { useUIStore } from '../store/useUIStore';
 import { useProxyStore } from '../store/useProxyStore';
-import { getProxyRemark } from '../utils/helpers';
+import { getProxyProtocol, getProxyRemark } from '../utils/helpers';
 
 const uiStore = useUIStore();
 const proxyStore = useProxyStore();
@@ -178,7 +178,7 @@ const handleNodeToggle = (id) => {
 };
 
 const getNodeProto = (url) => {
-    return (url.split('://')[0] || 'UNK').toUpperCase();
+    return getProxyProtocol(url);
 };
 
 const getLatencyText = (node) => {

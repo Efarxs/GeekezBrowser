@@ -54,6 +54,13 @@ export function getProxyRemark(link) {
     return '';
 }
 
+export function getProxyProtocol(link) {
+    const raw = String(link || '').trim();
+    if (!raw) return 'N/A';
+    if (raw.startsWith('ssh://') || /^ssh\s+/i.test(raw)) return 'SSH';
+    return (raw.split('://')[0] || 'UNK').toUpperCase();
+}
+
 /**
  * 简单的文本转颜色生成器
  */
