@@ -6,6 +6,7 @@ const path = require('path');
 const { parseSshProxyConfig } = require('./ssh-tunnel');
 
 const DEFAULT_DOWNLOAD_BASE_URL = 'http://api.3o9.cn/geekez/gost-ssh-tunnel';
+const GOST_SSH_TUNNEL_VERSION = '0.2.0';
 
 function getGostSshTunnelAssetName() {
     const exeName = process.platform === 'win32' ? 'gost-ssh-tunnel.exe' : 'gost-ssh-tunnel';
@@ -51,6 +52,32 @@ function downloadFile(url, dest) {
     });
 }
 
+function getBinaryVersion(binaryPath) {
+    return new Promise((resolve) => {
+        if (!binaryPath || !fs.existsSync(binaryPath)) return resolve('');
+        try {
+            const proc = spawn(binaryPath, ['-version'], {
+                windowsHide: true,
+                stdio: ['ignore', 'pipe', 'pipe']
+            });
+            let output = '';
+            proc.stdout.on('data', (chunk) => output += chunk.toString());
+            proc.stderr.on('data', (chunk) => output += chunk.toString());
+            proc.once('error', () => resolve(''));
+            proc.once('close', () => resolve(output.trim()));
+        } catch (e) {
+            resolve('');
+        }
+    });
+}
+
+async function isExpectedBinary(binaryPath) {
+    if (!binaryPath || !fs.existsSync(binaryPath)) return false;
+    const stat = await fs.stat(binaryPath);
+    if (!stat.isFile() || stat.size <= 0) return false;
+    return (await getBinaryVersion(binaryPath)) === GOST_SSH_TUNNEL_VERSION;
+}
+
 async function ensureGostSshTunnelBinary(options = {}) {
     const {
         bundledBinDir,
@@ -59,7 +86,7 @@ async function ensureGostSshTunnelBinary(options = {}) {
     } = options;
 
     const bundledPath = bundledBinDir ? getGostSshTunnelBinary(bundledBinDir) : '';
-    if (bundledPath && fs.existsSync(bundledPath)) return bundledPath;
+    if (bundledPath && await isExpectedBinary(bundledPath)) return bundledPath;
 
     if (!cacheDir) {
         throw new Error('gost ssh tunnel cache dir is required');
@@ -68,7 +95,7 @@ async function ensureGostSshTunnelBinary(options = {}) {
     const { platformArch, exeName } = getGostSshTunnelAssetName();
     const targetDir = path.join(cacheDir, platformArch);
     const targetPath = path.join(targetDir, exeName);
-    if (fs.existsSync(targetPath)) return targetPath;
+    if (await isExpectedBinary(targetPath)) return targetPath;
 
     await fs.ensureDir(targetDir);
     const tempPath = `${targetPath}.download`;

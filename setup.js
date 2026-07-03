@@ -14,6 +14,7 @@ const BIN_DIR = path.join(RESOURCES_BIN, PLATFORM_ARCH);
 const GH_PROXY = 'https://gh-proxy.com/';
 const XRAY_API_URL = 'https://api.github.com/repos/XTLS/Xray-core/releases/latest';
 const GOST_SSH_BASE_URL = process.env.GEEKEZ_GOST_SSH_BASE_URL || 'http://api.3o9.cn/geekez/gost-ssh-tunnel';
+const GOST_SSH_VERSION = '0.2.0';
 
 // --- 辅助工具：格式化字节 ---
 function formatBytes(bytes) {
@@ -92,6 +93,22 @@ function getInstalledXrayVersion(binaryPath) {
                 const match = output.match(/Xray\s+v?(\d+\.\d+\.\d+)/i);
                 resolve(match ? match[1] : '');
             });
+        } catch (e) {
+            resolve('');
+        }
+    });
+}
+
+function getBinaryVersion(binaryPath) {
+    return new Promise((resolve) => {
+        if (!fs.existsSync(binaryPath)) return resolve('');
+        try {
+            const proc = spawn(binaryPath, ['-version'], { windowsHide: true });
+            let output = '';
+            proc.stdout.on('data', d => output += d.toString());
+            proc.stderr.on('data', d => output += d.toString());
+            proc.on('error', () => resolve(''));
+            proc.on('close', () => resolve(output.trim()));
         } catch (e) {
             resolve('');
         }
@@ -289,9 +306,16 @@ async function main() {
         let needGostDownload = true;
         if (fs.existsSync(gostInfo.binaryPath)) {
             const stat = fs.statSync(gostInfo.binaryPath);
-            if (stat.isFile() && stat.size > 0) {
-                console.log(`✅ gost-ssh-tunnel already installed, skipping download. (${PLATFORM_ARCH})`);
+            const installedGostVersion = stat.isFile() && stat.size > 0
+                ? await getBinaryVersion(gostInfo.binaryPath)
+                : '';
+            if (installedGostVersion === GOST_SSH_VERSION) {
+                console.log(`✅ gost-ssh-tunnel ${GOST_SSH_VERSION} already installed, skipping download. (${PLATFORM_ARCH})`);
                 needGostDownload = false;
+            } else if (installedGostVersion) {
+                console.log(`🔁 gost-ssh-tunnel ${installedGostVersion} found, updating to ${GOST_SSH_VERSION}.`);
+            } else {
+                console.log(`🔁 gost-ssh-tunnel found without version, updating to ${GOST_SSH_VERSION}.`);
             }
         }
 

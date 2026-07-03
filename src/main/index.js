@@ -3430,19 +3430,23 @@ async function startSshTunnelWithFallback(proxyStr, localPort, options = {}) {
         workDir = app.getPath('userData'),
         probeOptions = {},
         preferredLang = 'cn',
-        tunnelLogPath = null
+        tunnelLogPath = null,
+        gostLogPath: configuredGostLogPath = null
     } = options;
 
     const probe = async (tunnel, processRef = null) => {
+        const portReadyTimeoutMs = tunnel?.type === 'gost-ssh' ? 15000 : 2500;
         appendProxyTunnelLog(tunnelLogPath, 'ssh.probe.port.wait', {
             backend: tunnel?.type || 'unknown',
-            localPort
+            localPort,
+            timeoutMs: portReadyTimeoutMs
         });
-        const ready = await waitForLocalPortReady(localPort, 2500);
+        const ready = await waitForLocalPortReady(localPort, portReadyTimeoutMs);
         if (!ready) {
             appendProxyTunnelLog(tunnelLogPath, 'ssh.probe.port.failed', {
                 backend: tunnel?.type || 'unknown',
-                localPort
+                localPort,
+                timeoutMs: portReadyTimeoutMs
             });
             throw new Error(preferredLang === 'en'
                 ? `SSH local SOCKS port ${localPort} was not ready in time`
@@ -3473,9 +3477,11 @@ async function startSshTunnelWithFallback(proxyStr, localPort, options = {}) {
     };
 
     let gostTunnel = null;
+    let gostLogPath = null;
     try {
         const configPath = path.join(workDir, `gost_ssh_${localPort}.json`);
-        const logPath = path.join(workDir, `gost_ssh_${localPort}.log`);
+        const logPath = configuredGostLogPath || path.join(workDir, 'gost_ssh.log');
+        gostLogPath = logPath;
         appendProxyTunnelLog(tunnelLogPath, 'ssh.gost.start', {
             localPort,
             configPath,
@@ -3501,7 +3507,8 @@ async function startSshTunnelWithFallback(proxyStr, localPort, options = {}) {
         }
         appendProxyTunnelLog(tunnelLogPath, 'ssh.gost.fallback', {
             localPort,
-            reason: err?.message || String(err || 'unknown')
+            reason: err?.message || String(err || 'unknown'),
+            logTail: readFileTailSafe(gostLogPath, 1200)
         });
         console.warn(`[SSH Tunnel] gost backend failed, falling back to ssh2: ${err?.message || err}`);
     }
@@ -3706,6 +3713,7 @@ async function runProxyLatencyTest(proxyStr) {
                     workDir: app.getPath('userData'),
                     preferredLang: 'cn',
                     tunnelLogPath,
+                    gostLogPath: path.join(app.getPath('userData'), 'gost_ssh_test.log'),
                     probeOptions: {
                         fastReadyTimeoutMs: 2600,
                         fastProbeTimeoutMs: 1000,
@@ -5059,7 +5067,8 @@ const launchProfileHandler = async (event, profileId, preferredLang, launchOptio
                 workDir: profileDir,
                 preferredLang,
                 probeOptions: sshProbeOptions,
-                tunnelLogPath
+                tunnelLogPath,
+                gostLogPath: path.join(profileDir, 'gost_ssh.log')
             });
             sshTunnel = startedSshTunnel.tunnel;
 
