@@ -13,6 +13,7 @@ export default defineConfig({
           'close-behavior': resolve(__dirname, 'src/main/close-behavior.js'),
           'xray-assets': resolve(__dirname, 'src/main/xray-assets.js'),
           'ssh-tunnel': resolve(__dirname, 'src/main/ssh-tunnel.js'),
+          'gost-ssh-tunnel': resolve(__dirname, 'src/main/gost-ssh-tunnel.js'),
           'release-check': resolve(__dirname, 'src/main/release-check.js'),
           'profile-db': resolve(__dirname, 'src/main/profile-db.js'),
           'db/config': resolve(__dirname, 'src/main/db/config.js'),

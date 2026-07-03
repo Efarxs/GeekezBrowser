@@ -17,6 +17,7 @@ const { CLOSE_BEHAVIOR, normalizeCloseBehavior, resolveCloseBehavior } = require
 const { fetchLatestGitHubReleaseInfo } = require('./release-check');
 const { resolveXrayAssetName } = require('./xray-assets');
 const { isSshProxyString, parseSshProxyConfig, startSshSocksTunnel } = require('./ssh-tunnel');
+const { startGostSshTunnel } = require('./gost-ssh-tunnel');
 const gzip = promisify(zlib.gzip);
 const gunzip = promisify(zlib.gunzip);
 const { SocksClient } = require('socks');
@@ -3427,6 +3428,61 @@ async function waitForProxyChainReady(socksPort, processRef = null, options = {}
     return { ...slowResult, phase: 'slow' };
 }
 
+async function startSshTunnelWithFallback(proxyStr, localPort, options = {}) {
+    const {
+        workDir = app.getPath('userData'),
+        probeOptions = {},
+        preferredLang = 'cn'
+    } = options;
+
+    const probe = async (tunnel, processRef = null) => {
+        const ready = await waitForLocalPortReady(localPort, 2500);
+        if (!ready) {
+            throw new Error(preferredLang === 'en'
+                ? `SSH local SOCKS port ${localPort} was not ready in time`
+                : `SSH本地SOCKS端口 ${localPort} 未及时就绪`);
+        }
+
+        const proxyUsable = await waitForProxyChainReady(localPort, processRef, probeOptions);
+        if (!proxyUsable.success) {
+            const probeSummary = summarizeProbeDetails(proxyUsable.details, 3);
+            throw new Error(probeSummary || proxyUsable.msg || 'proxy probe failed');
+        }
+        return proxyUsable;
+    };
+
+    let gostTunnel = null;
+    try {
+        const configPath = path.join(workDir, `gost_ssh_${localPort}.json`);
+        const logPath = path.join(workDir, `gost_ssh_${localPort}.log`);
+        gostTunnel = await startGostSshTunnel(proxyStr, localPort, {
+            binDir: BIN_DIR,
+            cacheDir: path.join(app.getPath('userData'), 'bin', 'gost-ssh-tunnel'),
+            configPath,
+            logPath,
+            cwd: BIN_DIR
+        });
+        const proxyUsable = await probe(gostTunnel, null);
+        return { tunnel: gostTunnel, proxyUsable, backend: 'gost' };
+    } catch (err) {
+        if (gostTunnel) {
+            try { await gostTunnel.close(); } catch (e) { }
+        }
+        console.warn(`[SSH Tunnel] gost backend failed, falling back to ssh2: ${err?.message || err}`);
+    }
+
+    const ssh2Tunnel = await startSshSocksTunnel(proxyStr, localPort);
+    try {
+        const proxyUsable = await probe(ssh2Tunnel, null);
+        return { tunnel: ssh2Tunnel, proxyUsable, backend: 'ssh2' };
+    } catch (err) {
+        try { await ssh2Tunnel.close(); } catch (e) { }
+        throw new Error(preferredLang === 'en'
+            ? `SSH tunnel is unavailable: ${err?.message || err}`
+            : `SSH隧道不可用：${err?.message || err}`);
+    }
+}
+
 function createProxyStartupError(profileName, reason, xrayLogPath, lang = 'cn') {
     const displayName = profileName || '当前环境';
     const summary = lang === 'en'
@@ -3599,13 +3655,19 @@ async function runProxyLatencyTest(proxyStr) {
     try {
         if (isSshProxyString(proxyStr)) {
             try {
-                sshTunnel = await startSshSocksTunnel(proxyStr, tempPort);
+                const started = await startSshTunnelWithFallback(proxyStr, tempPort, {
+                    workDir: app.getPath('userData'),
+                    preferredLang: 'cn',
+                    probeOptions: {
+                        fastReadyTimeoutMs: 2600,
+                        fastProbeTimeoutMs: 1000,
+                        slowReadyTimeoutMs: 4200,
+                        slowProbeTimeoutMs: 1800
+                    }
+                });
+                sshTunnel = started.tunnel;
             } catch (err) {
                 return { success: false, msg: `SSH Err: ${err.message || err}` };
-            }
-            const ready = await waitForLocalPortReady(tempPort, 2500);
-            if (!ready) {
-                return { success: false, msg: 'SSH local SOCKS port not ready' };
             }
             return await measureSocksConnectLatency(tempPort, 4000);
         }
@@ -4902,20 +4964,27 @@ const launchProfileHandler = async (event, profileId, preferredLang, launchOptio
                 { step: 4, profileName: progressProfileName }
             );
             localPort = await getAvailablePort();
-            sshTunnel = await startSshSocksTunnel(profile.proxyStr, localPort);
+            const sshProbeOptions = {
+                fastReadyTimeoutMs: 2600,
+                fastProbeTimeoutMs: 1000,
+                slowReadyTimeoutMs: 4200,
+                slowProbeTimeoutMs: 1800
+            };
+            const startedSshTunnel = await startSshTunnelWithFallback(profile.proxyStr, localPort, {
+                workDir: profileDir,
+                preferredLang,
+                probeOptions: sshProbeOptions
+            });
+            sshTunnel = startedSshTunnel.tunnel;
 
             updateLaunchProgress(
                 40,
-                preferredLang === 'en' ? 'Waiting for SSH local proxy port...' : '正在等待SSH本地代理端口就绪...',
+                preferredLang === 'en'
+                    ? `SSH tunnel ready (${startedSshTunnel.backend})`
+                    : `SSH隧道已就绪（${startedSshTunnel.backend}）`,
                 true,
                 { step: 4, profileName: progressProfileName }
             );
-            const ready = await waitForLocalPortReady(localPort, 2500);
-            if (!ready) {
-                throw new Error(preferredLang === 'en'
-                    ? `SSH local SOCKS port ${localPort} was not ready in time`
-                    : `SSH本地SOCKS端口 ${localPort} 未及时就绪`);
-            }
 
             updateLaunchProgress(
                 48,
@@ -4923,16 +4992,7 @@ const launchProfileHandler = async (event, profileId, preferredLang, launchOptio
                 true,
                 { step: 5, profileName: progressProfileName }
             );
-            const proxyUsable = await waitForProxyChainReady(
-                localPort,
-                null,
-                {
-                    fastReadyTimeoutMs: 2600,
-                    fastProbeTimeoutMs: 1000,
-                    slowReadyTimeoutMs: 4200,
-                    slowProbeTimeoutMs: 1800
-                }
-            );
+            const proxyUsable = startedSshTunnel.proxyUsable;
             if (!proxyUsable.success) {
                 const probeSummary = summarizeProbeDetails(proxyUsable.details, 3);
                 throw new Error(preferredLang === 'en'
