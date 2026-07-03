@@ -1,7 +1,9 @@
 const fs = require('fs');
 const path = require('path');
 const https = require('https');
+const http = require('http');
 const os = require('os');
+const { spawn } = require('child_process');
 const readline = require('readline'); // 引入 readline 用于控制光标
 const { resolveXrayAssetName } = require('./src/main/xray-assets');
 
@@ -11,6 +13,7 @@ const PLATFORM_ARCH = `${os.platform()}-${os.arch()}`; // e.g., darwin-arm64, wi
 const BIN_DIR = path.join(RESOURCES_BIN, PLATFORM_ARCH);
 const GH_PROXY = 'https://gh-proxy.com/';
 const XRAY_API_URL = 'https://api.github.com/repos/XTLS/Xray-core/releases/latest';
+const GOST_SSH_BASE_URL = process.env.GEEKEZ_GOST_SSH_BASE_URL || 'http://api.3o9.cn/geekez/gost-ssh-tunnel';
 
 // --- 辅助工具：格式化字节 ---
 function formatBytes(bytes) {
@@ -63,6 +66,36 @@ function getPlatformInfo() {
     }
 
     return { xrayAsset, exeName };
+}
+
+function getGostSshTunnelInfo() {
+    const exeName = os.platform() === 'win32' ? 'gost-ssh-tunnel.exe' : 'gost-ssh-tunnel';
+    const binaryPath = path.join(BIN_DIR, exeName);
+    const downloadUrl = `${GOST_SSH_BASE_URL.replace(/\/+$/, '')}/${PLATFORM_ARCH}/${exeName}`;
+    return { exeName, binaryPath, downloadUrl };
+}
+
+function normalizeVersion(value) {
+    return String(value || '').trim().replace(/^v/i, '');
+}
+
+function getInstalledXrayVersion(binaryPath) {
+    return new Promise((resolve) => {
+        if (!fs.existsSync(binaryPath)) return resolve('');
+        try {
+            const proc = spawn(binaryPath, ['-version'], { windowsHide: true });
+            let output = '';
+            proc.stdout.on('data', d => output += d.toString());
+            proc.stderr.on('data', d => output += d.toString());
+            proc.on('error', () => resolve(''));
+            proc.on('close', () => {
+                const match = output.match(/Xray\s+v?(\d+\.\d+\.\d+)/i);
+                resolve(match ? match[1] : '');
+            });
+        } catch (e) {
+            resolve('');
+        }
+    });
 }
 
 function checkNetwork() {
@@ -126,7 +159,8 @@ function getLatestXrayVersion(useProxy = false) {
 // 支持进度显示的下载函数
 function downloadFile(url, dest, label = 'Downloading') {
     return new Promise((resolve, reject) => {
-        const req = https.get(url, (response) => {
+        const client = String(url).startsWith('http:') ? http : https;
+        const req = client.get(url, (response) => {
             // 处理重定向
             if (response.statusCode >= 300 && response.statusCode < 400 && response.headers.location) {
                 downloadFile(response.headers.location, dest, label).then(resolve).catch(reject);
@@ -195,47 +229,83 @@ async function main() {
 
         console.log(`🌍 Network: ${isGlobal ? 'Global' : 'CN (Mirror)'}`);
 
+        const xrayBinaryPath = path.join(BIN_DIR, exeName);
+        const installedXrayVersion = await getInstalledXrayVersion(xrayBinaryPath);
+
         // Get latest Xray version from GitHub
         let xrayVersion;
+        let shouldDownloadXray = true;
         try {
             console.log('🔍 Fetching latest Xray version...');
             xrayVersion = await getLatestXrayVersion(!isGlobal);
             console.log(`📦 Latest version: ${xrayVersion}`);
+            if (installedXrayVersion && normalizeVersion(installedXrayVersion) === normalizeVersion(xrayVersion)) {
+                console.log(`✅ Xray ${installedXrayVersion} already installed, skipping download.`);
+                shouldDownloadXray = false;
+            }
         } catch (e) {
-            console.log('⚠️  Failed to get latest version, using fallback: v26.3.27');
-            xrayVersion = 'v26.3.27';
+            if (installedXrayVersion) {
+                console.log(`⚠️  Failed to get latest Xray version, using installed Xray ${installedXrayVersion}.`);
+                shouldDownloadXray = false;
+            } else {
+                console.log('⚠️  Failed to get latest version, using fallback: v26.3.27');
+                xrayVersion = 'v26.3.27';
+            }
         }
 
-        const baseUrl = `https://github.com/XTLS/Xray-core/releases/download/${xrayVersion}/${xrayAsset}`;
-        const downloadUrl = isGlobal ? baseUrl : (GH_PROXY + baseUrl);
+        if (shouldDownloadXray) {
+            const baseUrl = `https://github.com/XTLS/Xray-core/releases/download/${xrayVersion}/${xrayAsset}`;
+            const downloadUrl = isGlobal ? baseUrl : (GH_PROXY + baseUrl);
 
-        process.stdout.write(`⬇️  Downloading Xray (${xrayVersion})...\n`);
+            process.stdout.write(`⬇️  Downloading Xray (${xrayVersion})...\n`);
 
-        // 这里的 Label 用于进度条前缀
-        await downloadFile(downloadUrl, zipPath, 'Xray Core');
+            // 这里的 Label 用于进度条前缀
+            await downloadFile(downloadUrl, zipPath, 'Xray Core');
 
-        await extractZip(zipPath, BIN_DIR);
-        fs.unlinkSync(zipPath);
+            await extractZip(zipPath, BIN_DIR);
+            fs.unlinkSync(zipPath);
 
-        // Move shared resources (geoip.dat, geosite.dat) to common bin directory for asset loading
-        const sharedFiles = ['geoip.dat', 'geosite.dat', 'LICENSE', 'README.md'];
-        sharedFiles.forEach(file => {
-            const srcPath = path.join(BIN_DIR, file);
-            const destPath = path.join(RESOURCES_BIN, file);
-            if (fs.existsSync(srcPath)) {
-                // Only copy if not exists or source is newer
-                if (!fs.existsSync(destPath)) {
-                    fs.copyFileSync(srcPath, destPath);
+            // Move shared resources (geoip.dat, geosite.dat) to common bin directory for asset loading
+            const sharedFiles = ['geoip.dat', 'geosite.dat', 'LICENSE', 'README.md'];
+            sharedFiles.forEach(file => {
+                const srcPath = path.join(BIN_DIR, file);
+                const destPath = path.join(RESOURCES_BIN, file);
+                if (fs.existsSync(srcPath)) {
+                    // Only copy if not exists or source is newer
+                    if (!fs.existsSync(destPath)) {
+                        fs.copyFileSync(srcPath, destPath);
+                    }
+                    // Remove from platform dir to save space
+                    fs.unlinkSync(srcPath);
                 }
-                // Remove from platform dir to save space
-                fs.unlinkSync(srcPath);
+            });
+
+            if (os.platform() !== 'win32') fs.chmodSync(path.join(BIN_DIR, exeName), '755');
+            console.log(`✅ Xray Updated Successfully! (Platform: ${PLATFORM_ARCH})`);
+        }
+
+        // 2. 准备精简 Go SSH 隧道 sidecar（运行时也会自动下载，这里提前准备，避免首次启动等待）
+        const gostInfo = getGostSshTunnelInfo();
+        let needGostDownload = true;
+        if (fs.existsSync(gostInfo.binaryPath)) {
+            const stat = fs.statSync(gostInfo.binaryPath);
+            if (stat.isFile() && stat.size > 0) {
+                console.log(`✅ gost-ssh-tunnel already installed, skipping download. (${PLATFORM_ARCH})`);
+                needGostDownload = false;
             }
-        });
+        }
 
-        if (os.platform() !== 'win32') fs.chmodSync(path.join(BIN_DIR, exeName), '755');
-        console.log(`✅ Xray Updated Successfully! (Platform: ${PLATFORM_ARCH})`);
+        if (needGostDownload) {
+            const tempPath = `${gostInfo.binaryPath}.download`;
+            try { if (fs.existsSync(tempPath)) fs.unlinkSync(tempPath); } catch (e) { }
+            process.stdout.write(`⬇️  Downloading gost-ssh-tunnel (${PLATFORM_ARCH})...\n`);
+            await downloadFile(gostInfo.downloadUrl, tempPath, 'GOST-SSH ');
+            fs.renameSync(tempPath, gostInfo.binaryPath);
+            if (os.platform() !== 'win32') fs.chmodSync(gostInfo.binaryPath, '755');
+            console.log(`✅ gost-ssh-tunnel installed successfully! (Platform: ${PLATFORM_ARCH})`);
+        }
 
-        // 2. 准备浏览器内核（fingerprint-chromium 148，固定版本）
+        // 3. 准备浏览器内核（fingerprint-chromium 148，固定版本）
         const DOWNLOAD_ROOT = path.join(__dirname, 'resources', 'puppeteer');
         const FC_VERSION = '148.0.7778.215';
         const FC_TARGET_DIR = path.join(DOWNLOAD_ROOT, 'chrome', 'fingerprint-chromium');

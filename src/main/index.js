@@ -2326,6 +2326,14 @@ async function cleanupProfileRuntime(profileId, options = {}) {
     const proc = activeProcesses[profileId];
     if (!proc) return false;
 
+    appendProxyTunnelLog(proc.tunnelLogPath, 'runtime.cleanup.start', {
+        profileId,
+        closeBrowser,
+        killXray,
+        hasXray: !!proc.xrayPid,
+        hasSshTunnel: !!proc.sshTunnel
+    });
+
     delete activeProcesses[profileId];
     launchingProfiles.delete(profileId);
 
@@ -2337,9 +2345,19 @@ async function cleanupProfileRuntime(profileId, options = {}) {
     }
     if (proc.sshTunnel && typeof proc.sshTunnel.close === 'function') {
         try { await proc.sshTunnel.close(); } catch (e) { }
+        appendProxyTunnelLog(proc.tunnelLogPath, 'ssh.close', {
+            profileId,
+            backend: proc.sshTunnel.type || 'unknown'
+        });
     }
     if (killXray) {
         await forceKill(proc.xrayPid);
+        if (proc.xrayPid) {
+            appendProxyTunnelLog(proc.tunnelLogPath, 'xray.close', {
+                profileId,
+                pid: proc.xrayPid
+            });
+        }
     }
 
     if (broadcast) {
@@ -2348,6 +2366,7 @@ async function cleanupProfileRuntime(profileId, options = {}) {
     if (refreshMenu) {
         refreshTrayMenu().catch(() => { });
     }
+    appendProxyTunnelLog(proc.tunnelLogPath, 'runtime.cleanup.done', { profileId });
     return true;
 }
 
@@ -3301,6 +3320,43 @@ function readFileTailSafe(filePath, maxLength = 500) {
     }
 }
 
+function redactTunnelLogValue(value) {
+    if (value === undefined || value === null) return value;
+    const text = String(value);
+    return text
+        .replace(/(ssh:\/\/[^:\s/@]+:)([^@\s]+)(@)/ig, '$1***$3')
+        .replace(/(\bpassword["']?\s*[:=]\s*["']?)([^"',\s]+)/ig, '$1***')
+        .replace(/(\bpass["']?\s*[:=]\s*["']?)([^"',\s]+)/ig, '$1***');
+}
+
+function sanitizeTunnelLogDetails(details = {}) {
+    if (!details || typeof details !== 'object') return details;
+    const safe = {};
+    for (const [key, value] of Object.entries(details)) {
+        if (/pass(word)?|privateKey/i.test(key)) {
+            safe[key] = value ? '***' : value;
+        } else if (typeof value === 'string') {
+            safe[key] = redactTunnelLogValue(value);
+        } else {
+            safe[key] = value;
+        }
+    }
+    return safe;
+}
+
+function appendProxyTunnelLog(logPath, event, details = {}) {
+    if (!logPath) return;
+    try {
+        fs.ensureDirSync(path.dirname(logPath));
+        const line = JSON.stringify({
+            ts: new Date().toISOString(),
+            event,
+            ...sanitizeTunnelLogDetails(details)
+        });
+        fs.appendFileSync(logPath, `${line}\n`, 'utf8');
+    } catch (e) { }
+}
+
 function sleep(ms) {
     return new Promise((resolve) => setTimeout(resolve, ms));
 }
@@ -3432,22 +3488,46 @@ async function startSshTunnelWithFallback(proxyStr, localPort, options = {}) {
     const {
         workDir = app.getPath('userData'),
         probeOptions = {},
-        preferredLang = 'cn'
+        preferredLang = 'cn',
+        tunnelLogPath = null
     } = options;
 
     const probe = async (tunnel, processRef = null) => {
+        appendProxyTunnelLog(tunnelLogPath, 'ssh.probe.port.wait', {
+            backend: tunnel?.type || 'unknown',
+            localPort
+        });
         const ready = await waitForLocalPortReady(localPort, 2500);
         if (!ready) {
+            appendProxyTunnelLog(tunnelLogPath, 'ssh.probe.port.failed', {
+                backend: tunnel?.type || 'unknown',
+                localPort
+            });
             throw new Error(preferredLang === 'en'
                 ? `SSH local SOCKS port ${localPort} was not ready in time`
                 : `SSH本地SOCKS端口 ${localPort} 未及时就绪`);
         }
 
+        appendProxyTunnelLog(tunnelLogPath, 'ssh.probe.chain.start', {
+            backend: tunnel?.type || 'unknown',
+            localPort
+        });
         const proxyUsable = await waitForProxyChainReady(localPort, processRef, probeOptions);
         if (!proxyUsable.success) {
             const probeSummary = summarizeProbeDetails(proxyUsable.details, 3);
+            appendProxyTunnelLog(tunnelLogPath, 'ssh.probe.chain.failed', {
+                backend: tunnel?.type || 'unknown',
+                localPort,
+                phase: proxyUsable.phase,
+                reason: probeSummary || proxyUsable.msg || 'proxy probe failed'
+            });
             throw new Error(probeSummary || proxyUsable.msg || 'proxy probe failed');
         }
+        appendProxyTunnelLog(tunnelLogPath, 'ssh.probe.chain.ready', {
+            backend: tunnel?.type || 'unknown',
+            localPort,
+            phase: proxyUsable.phase
+        });
         return proxyUsable;
     };
 
@@ -3455,6 +3535,11 @@ async function startSshTunnelWithFallback(proxyStr, localPort, options = {}) {
     try {
         const configPath = path.join(workDir, `gost_ssh_${localPort}.json`);
         const logPath = path.join(workDir, `gost_ssh_${localPort}.log`);
+        appendProxyTunnelLog(tunnelLogPath, 'ssh.gost.start', {
+            localPort,
+            configPath,
+            logPath
+        });
         gostTunnel = await startGostSshTunnel(proxyStr, localPort, {
             binDir: BIN_DIR,
             cacheDir: path.join(app.getPath('userData'), 'bin', 'gost-ssh-tunnel'),
@@ -3463,20 +3548,35 @@ async function startSshTunnelWithFallback(proxyStr, localPort, options = {}) {
             cwd: BIN_DIR
         });
         const proxyUsable = await probe(gostTunnel, null);
+        appendProxyTunnelLog(tunnelLogPath, 'ssh.gost.ready', {
+            localPort,
+            pid: gostTunnel.pid,
+            logPath
+        });
         return { tunnel: gostTunnel, proxyUsable, backend: 'gost' };
     } catch (err) {
         if (gostTunnel) {
             try { await gostTunnel.close(); } catch (e) { }
         }
+        appendProxyTunnelLog(tunnelLogPath, 'ssh.gost.fallback', {
+            localPort,
+            reason: err?.message || String(err || 'unknown')
+        });
         console.warn(`[SSH Tunnel] gost backend failed, falling back to ssh2: ${err?.message || err}`);
     }
 
+    appendProxyTunnelLog(tunnelLogPath, 'ssh.ssh2.start', { localPort });
     const ssh2Tunnel = await startSshSocksTunnel(proxyStr, localPort);
     try {
         const proxyUsable = await probe(ssh2Tunnel, null);
+        appendProxyTunnelLog(tunnelLogPath, 'ssh.ssh2.ready', { localPort });
         return { tunnel: ssh2Tunnel, proxyUsable, backend: 'ssh2' };
     } catch (err) {
         try { await ssh2Tunnel.close(); } catch (e) { }
+        appendProxyTunnelLog(tunnelLogPath, 'ssh.ssh2.failed', {
+            localPort,
+            reason: err?.message || String(err || 'unknown')
+        });
         throw new Error(preferredLang === 'en'
             ? `SSH tunnel is unavailable: ${err?.message || err}`
             : `SSH隧道不可用：${err?.message || err}`);
@@ -3650,14 +3750,20 @@ async function measureSocksConnectLatency(socksPort, timeoutMs = 4000, customTar
 async function runProxyLatencyTest(proxyStr) {
     const tempPort = await getAvailablePort();
     const tempConfigPath = path.join(app.getPath('userData'), `test_config_${tempPort}.json`);
+    const tunnelLogPath = path.join(app.getPath('userData'), 'proxy_tunnel_test.log');
     let xrayProcess = null;
     let sshTunnel = null;
     try {
+        appendProxyTunnelLog(tunnelLogPath, 'test.start', {
+            localPort: tempPort,
+            proxyType: isSshProxyString(proxyStr) ? 'ssh' : 'xray'
+        });
         if (isSshProxyString(proxyStr)) {
             try {
                 const started = await startSshTunnelWithFallback(proxyStr, tempPort, {
                     workDir: app.getPath('userData'),
                     preferredLang: 'cn',
+                    tunnelLogPath,
                     probeOptions: {
                         fastReadyTimeoutMs: 2600,
                         fastProbeTimeoutMs: 1000,
@@ -3667,9 +3773,18 @@ async function runProxyLatencyTest(proxyStr) {
                 });
                 sshTunnel = started.tunnel;
             } catch (err) {
+                appendProxyTunnelLog(tunnelLogPath, 'test.ssh.failed', {
+                    localPort: tempPort,
+                    reason: err?.message || String(err || 'unknown')
+                });
                 return { success: false, msg: `SSH Err: ${err.message || err}` };
             }
-            return await measureSocksConnectLatency(tempPort, 4000);
+            const result = await measureSocksConnectLatency(tempPort, 4000);
+            appendProxyTunnelLog(tunnelLogPath, result.success ? 'test.ssh.ok' : 'test.ssh.unusable', {
+                localPort: tempPort,
+                msg: result.msg || ''
+            });
+            return result;
         }
 
         let outbound;
@@ -3698,6 +3813,11 @@ async function runProxyLatencyTest(proxyStr) {
         await fs.writeJson(tempConfigPath, config);
 
         xrayProcess = spawn(BIN_PATH, ['-c', tempConfigPath], { cwd: BIN_DIR, env: { ...process.env, 'XRAY_LOCATION_ASSET': RESOURCES_BIN }, stdio: ['ignore', 'pipe', 'pipe'], windowsHide: true });
+        appendProxyTunnelLog(tunnelLogPath, 'test.xray.spawned', {
+            localPort: tempPort,
+            pid: xrayProcess.pid,
+            configPath: tempConfigPath
+        });
         let xrayErr = '';
         xrayProcess.stderr.on('data', d => {
             const chunk = d.toString();
@@ -3708,10 +3828,19 @@ async function runProxyLatencyTest(proxyStr) {
 
         const ready = await waitForLocalPortReady(tempPort, 1500);
         if (!ready || xrayProcess.exitCode !== null) {
+            appendProxyTunnelLog(tunnelLogPath, 'test.xray.port.failed', {
+                localPort: tempPort,
+                exitCode: xrayProcess.exitCode,
+                stderr: xrayErr.substring(0, 500)
+            });
             return { success: false, msg: `Xray crashed: ${xrayErr.substring(0, 150) || 'unknown'}` };
         }
 
         const result = await measureSocksConnectLatency(tempPort, 4000);
+        appendProxyTunnelLog(tunnelLogPath, result.success ? 'test.xray.ok' : 'test.xray.unusable', {
+            localPort: tempPort,
+            msg: result.msg || ''
+        });
         if (!result.success && !result.xrayLog && xrayErr) {
             result.xrayLog = xrayErr.substring(0, 500);
         }
@@ -3722,10 +3851,18 @@ async function runProxyLatencyTest(proxyStr) {
     } catch (err) {
         if (xrayProcess) try { await forceKill(xrayProcess.pid); } catch (e) { }
         try { fs.unlinkSync(tempConfigPath); } catch (e) { }
+        appendProxyTunnelLog(tunnelLogPath, 'test.failed', {
+            localPort: tempPort,
+            reason: err?.message || String(err || 'unknown')
+        });
         return { success: false, msg: err.message };
     } finally {
         if (sshTunnel && typeof sshTunnel.close === 'function') {
             try { await sshTunnel.close(); } catch (e) { }
+            appendProxyTunnelLog(tunnelLogPath, 'test.ssh.closed', {
+                localPort: tempPort,
+                backend: sshTunnel.type || 'unknown'
+            });
         }
     }
 }
@@ -4919,9 +5056,15 @@ const launchProfileHandler = async (event, profileId, preferredLang, launchOptio
     try {
         const profileDir = path.join(DATA_PATH, profileId);
         const userDataDir = path.join(profileDir, 'browser_data');
+        const tunnelLogPath = path.join(profileDir, 'proxy_tunnel.log');
         fs.ensureDirSync(userDataDir);
 
         let localPort = null;
+        appendProxyTunnelLog(tunnelLogPath, 'runtime.launch.start', {
+            profileId,
+            profileName: profile.name,
+            proxyType: useSshProxy ? 'ssh' : (useDirectNetwork ? 'direct' : 'xray')
+        });
 
         updateLaunchProgress(
             20,
@@ -4973,7 +5116,8 @@ const launchProfileHandler = async (event, profileId, preferredLang, launchOptio
             const startedSshTunnel = await startSshTunnelWithFallback(profile.proxyStr, localPort, {
                 workDir: profileDir,
                 preferredLang,
-                probeOptions: sshProbeOptions
+                probeOptions: sshProbeOptions,
+                tunnelLogPath
             });
             sshTunnel = startedSshTunnel.tunnel;
 
@@ -5017,7 +5161,18 @@ const launchProfileHandler = async (event, profileId, preferredLang, launchOptio
             fs.writeJsonSync(xrayConfigPath, config);
             logFd = fs.openSync(xrayLogPath, 'a');
             const xrayLaunchStartedAt = Date.now();
+            appendProxyTunnelLog(tunnelLogPath, 'xray.start', {
+                profileId,
+                localPort,
+                configPath: xrayConfigPath,
+                logPath: xrayLogPath,
+                chained: !!activePreProxy
+            });
             xrayProcess = spawn(BIN_PATH, ['-c', xrayConfigPath], { cwd: BIN_DIR, env: { ...process.env, 'XRAY_LOCATION_ASSET': RESOURCES_BIN }, stdio: ['ignore', logFd, logFd], windowsHide: true });
+            appendProxyTunnelLog(tunnelLogPath, 'xray.spawned', {
+                profileId,
+                pid: xrayProcess.pid
+            });
             const preProxyLabel = activePreProxy?.remark || activePreProxy?.name || activePreProxy?.id || '';
             const preProxyCheckPromise = activePreProxy?.url
                 ? startPreProxyHealthCheck(activePreProxy.url)
@@ -5064,8 +5219,17 @@ const launchProfileHandler = async (event, profileId, preferredLang, launchOptio
                 const reason = exitCode !== null
                     ? `xray exited before ready (code: ${exitCode})`
                     : `xray socks port ${localPort} not ready within ${readyTimeoutMs}ms`;
+                appendProxyTunnelLog(tunnelLogPath, 'xray.port.failed', {
+                    profileId,
+                    localPort,
+                    reason
+                });
                 throw createProxyStartupError(profile.name, reason, xrayLogPath, uiLang);
             }
+            appendProxyTunnelLog(tunnelLogPath, 'xray.port.ready', {
+                profileId,
+                localPort
+            });
 
             // Xray may bind the local SOCKS port before the upstream proxy chain is fully usable.
             // Chained pre-proxy setups need a bit more warm-up budget before the first probe.
@@ -5104,6 +5268,12 @@ const launchProfileHandler = async (event, profileId, preferredLang, launchOptio
             );
             if (!proxyUsable.success) {
                 const probeSummary = summarizeProbeDetails(proxyUsable.details, 3);
+                appendProxyTunnelLog(tunnelLogPath, 'xray.probe.failed', {
+                    profileId,
+                    localPort,
+                    phase: proxyUsable.phase,
+                    reason: probeSummary || proxyUsable.msg || 'proxy chain not usable'
+                });
                 if (activePreProxy?.url) {
                     updateLaunchProgress(
                         56,
@@ -5128,6 +5298,11 @@ const launchProfileHandler = async (event, profileId, preferredLang, launchOptio
                     uiLang
                 );
             }
+            appendProxyTunnelLog(tunnelLogPath, 'xray.probe.ready', {
+                profileId,
+                localPort,
+                phase: proxyUsable.phase
+            });
         } else {
             updateLaunchProgress(
                 48,
@@ -5135,6 +5310,7 @@ const launchProfileHandler = async (event, profileId, preferredLang, launchOptio
                 true,
                 { step: 5, profileName: progressProfileName }
             );
+            appendProxyTunnelLog(tunnelLogPath, 'direct.ready', { profileId });
         }
 
         updateLaunchProgress(
@@ -5674,8 +5850,15 @@ const launchProfileHandler = async (event, profileId, preferredLang, launchOptio
             xrayPid: xrayProcess ? xrayProcess.pid : null,
             sshTunnel,
             browser,
+            tunnelLogPath,
             logFd: logFd  // 存储日志文件描述符，用于后续关闭
         };
+        appendProxyTunnelLog(tunnelLogPath, 'runtime.launch.ready', {
+            profileId,
+            localPort,
+            hasXray: !!xrayProcess,
+            sshBackend: sshTunnel?.type || ''
+        });
         launchingProfiles.delete(profileId);
         updateLaunchProgress(
             100,
@@ -5779,9 +5962,17 @@ const launchProfileHandler = async (event, profileId, preferredLang, launchOptio
 
         if (xrayProcess && xrayProcess.pid) {
             await forceKill(xrayProcess.pid);
+            appendProxyTunnelLog(tunnelLogPath, 'xray.close.error', {
+                profileId,
+                pid: xrayProcess.pid
+            });
         }
         if (sshTunnel && typeof sshTunnel.close === 'function') {
             try { await sshTunnel.close(); } catch (e) { }
+            appendProxyTunnelLog(tunnelLogPath, 'ssh.close.error', {
+                profileId,
+                backend: sshTunnel.type || 'unknown'
+            });
         }
 
         if (logFd !== undefined) {
@@ -5792,6 +5983,10 @@ const launchProfileHandler = async (event, profileId, preferredLang, launchOptio
 
         launchingProfiles.delete(profileId);
         delete activeProcesses[profileId];
+        appendProxyTunnelLog(tunnelLogPath, 'runtime.launch.failed', {
+            profileId,
+            reason: err?.message || String(err || 'unknown')
+        });
         if (!sender.isDestroyed()) {
             sender.send('profile-status', { id: profileId, status: 'stopped' });
         }
