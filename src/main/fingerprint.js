@@ -11,7 +11,7 @@ const RESOLUTIONS = [
     { w: 1440, h: 900 }
 ];
 
-const BROWSER_MAJOR_VERSIONS = Array.from({ length: 20 }, (_, i) => 129 + i); // 129 - 148
+const BROWSER_MAJOR_VERSIONS = [148];
 const BROWSER_TYPES = ['chrome', 'edge'];
 const UTLS_SIGNATURES = [
     'none',
@@ -28,26 +28,7 @@ const UTLS_SIGNATURES = [
     'hellorandomizednoalpn'
 ];
 const BROWSER_FULL_VERSION_POOL = [
-    '148.0.0.0',
-    '147.0.0.0',
-    '146.0.0.0',
-    '145.0.0.0',
-    '144.0.0.0',
-    '143.0.0.0',
-    '142.0.0.0',
-    '141.0.0.0',
-    '140.0.0.0',
-    '139.0.0.0',
-    '138.0.0.0',
-    '137.0.0.0',
-    '136.0.0.0',
-    '135.0.0.0',
-    '134.0.0.0',
-    '133.0.0.0',
-    '132.0.0.0',
-    '131.0.0.0',
-    '130.0.0.0',
-    '129.0.0.0'
+    '148.0.7778.215'
 ];
 const BROWSER_FULL_VERSION_BY_MAJOR = BROWSER_FULL_VERSION_POOL.reduce((acc, version) => {
     const major = String(version).split('.')[0];
@@ -773,7 +754,7 @@ function getInjectScript(fp, options = {}) {
     const { useFingerprintChromium = false, browserVersion } = options;
 
     // If we detected the actual browser version, use it as the primary version
-    // to avoid UA version mismatch (e.g., bundled Chromium 148 but pool only has 147)
+    // to avoid UA version mismatch when the bundled Chromium version changes.
     const fpWithVersion = { ...(fp || {}) };
     if (browserVersion && !fpWithVersion.browserMajorVersion) {
         const major = parseInt(String(browserVersion).split('.')[0], 10);
@@ -1035,7 +1016,8 @@ function getInjectScript(fp, options = {}) {
             }
 
             // --- 6. Canvas and Audio noise ---
-            // fingerprint-chromium 通过引擎级 --fingerprint-canvas-noise / --fingerprint-audio-noise 处理
+            // fingerprint-chromium 144+ 通过 --fingerprint seed 派生 Canvas/Audio 指纹。
+            // 如需禁用单项伪装，官方使用 --disable-spoofing=canvas,audio。
             // 不叠加 JS 层噪声，避免双层噪声被检测为异常
             if (!_useFC) {
             try {
@@ -1077,7 +1059,8 @@ function getInjectScript(fp, options = {}) {
             } // !_useFC — Canvas + Audio section end
 
             // --- 7. WebGL spoof ---
-            // fingerprint-chromium 通过 --fingerprint-webgl-vendor/renderer 在引擎级拦截
+            // fingerprint-chromium 144+ 已移除 --fingerprint-gpu-vendor/renderer。
+            // GPU 指纹由 --fingerprint seed 派生；禁用时使用 --disable-spoofing=gpu。
             const enableWebglSpoof = !!(fp.webgl && !fp.webgl.disabled && fp.webglProfile !== 'none');
             const webglInfo = fp.webgl || {};
             if (!_useFC) {

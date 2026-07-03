@@ -440,9 +440,10 @@ function generateXrayConfig(mainProxyStr, localPort, preProxyConfig = null, prof
     outbounds.push(mainOutbound);
     outbounds.push({ protocol: "freedom", tag: "direct" });
 
-    // Enable Mux (multiplexing) on proxy outbounds to reduce TCP connection overhead
+    // Enable Mux (multiplexing) only for protocols that support it reliably.
+    // Plain SOCKS/HTTP upstreams do not benefit from Xray mux and can fail with it.
     outbounds.forEach(ob => {
-        if (ob.protocol && ob.protocol !== 'freedom' && ob.protocol !== 'blackhole') {
+        if (ob.protocol && !['freedom', 'blackhole', 'socks', 'http'].includes(ob.protocol)) {
             ob.mux = { enabled: true, concurrency: 8 };
         }
     });

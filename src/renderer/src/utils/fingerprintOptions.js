@@ -10,22 +10,14 @@ export const browserTypeOptions = [
 
 export const browserMajorVersionOptions = [
     makeOption('auto', 'Auto Random', '自动随机'),
-    ...Array.from({ length: 19 }, (_, i) => {
-        const major = 147 - i;
-        return makeOption(major, `v${major}`, `v${major}`);
-    })
+    makeOption(148, 'v148', 'v148')
 ];
 
 export const browserVersionPresetOptions = [
     makeOption('none', 'No UA Modification', '不修改 UA'),
     makeOption('auto', 'Auto Random', '自动随机'),
-    ...Array.from({ length: 19 }, (_, i) => {
-        const major = 147 - i;
-        return [
-            makeOption(`chrome:${major}`, `Chrome v${major}`, `Chrome v${major}`),
-            makeOption(`edge:${major}`, `Edge v${major}`, `Edge v${major}`)
-        ];
-    }).flat()
+    makeOption('chrome:148', 'Chrome v148', 'Chrome v148'),
+    makeOption('edge:148', 'Edge v148', 'Edge v148')
 ];
 
 export const tlsClientHelloOptions = [

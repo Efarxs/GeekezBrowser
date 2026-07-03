@@ -682,7 +682,7 @@ function fetchTextWithRedirect(url, timeoutMs = 10000, redirectCount = 0) {
 
         const req = https.get(url, {
             headers: {
-                'User-Agent': 'Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/147.0.0.0 Safari/537.36',
+                'User-Agent': 'Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/148.0.7778.215 Safari/537.36',
                 'Accept-Language': 'zh-CN,zh;q=0.9,en;q=0.8'
             }
         }, (res) => {
@@ -1125,7 +1125,7 @@ async function patchKnownExtensionOnboarding(extensionDir, storeId = '') {
 }
 
 function buildChromeStoreCrxUrl(extensionId) {
-    return `https://clients2.google.com/service/update2/crx?response=redirect&prodversion=147.0.0.0&acceptformat=crx2,crx3&x=id%3D${extensionId}%26installsource%3Dondemand%26uc`;
+    return `https://clients2.google.com/service/update2/crx?response=redirect&prodversion=148.0.7778.215&acceptformat=crx2,crx3&x=id%3D${extensionId}%26installsource%3Dondemand%26uc`;
 }
 
 async function readSettingsForExtensionMutation() {
@@ -1592,6 +1592,41 @@ function normalizeFingerprint(data = {}) {
     };
 }
 
+function resolveFingerprintChromiumPlatform(platformValue) {
+    if (platformValue === 'MacIntel' || platformValue === 'macos') return 'macos';
+    if (platformValue === 'Linux' || platformValue === 'Linux x86_64' || platformValue === 'linux') return 'linux';
+    return 'windows';
+}
+
+function resolveFingerprintChromiumPlatformVersion(fingerprint = {}) {
+    const explicit = firstDefined(
+        fingerprint.platformVersion,
+        fingerprint.userAgentMetadata?.platformVersion
+    );
+    if (explicit !== undefined && explicit !== null && String(explicit).trim()) {
+        return String(explicit).trim();
+    }
+
+    const platform = resolveFingerprintChromiumPlatform(fingerprint.platform);
+    if (platform === 'macos') return '13.0.0';
+    if (platform === 'linux') return '6.0.0';
+    return '10.0.0';
+}
+
+function resolveFingerprintChromiumBrand(fingerprint = {}) {
+    return fingerprint.browserType === 'edge' ? 'Edge' : 'Chrome';
+}
+
+function resolveFingerprintChromiumBrandVersion(fingerprint = {}, fallbackVersion = '') {
+    const explicit = firstDefined(
+        fingerprint.browserFullVersion,
+        fingerprint.userAgentMetadata?.uaFullVersion,
+        fallbackVersion
+    );
+    if (explicit === undefined || explicit === null) return '';
+    return String(explicit).trim();
+}
+
 async function allocateDebugPortIfNeeded(settings, profiles, requestedPort) {
     const requested = normalizeDebugPort(requestedPort);
     if (requested) return requested;
@@ -1634,6 +1669,20 @@ async function buildProfileFromInput(rawData, profiles, settings, existingProfil
     // Flattened source above already merged nested fingerprint values.
     // Remove nested object to avoid stale fields (from edit payload spreads) overriding updates.
     delete mergedFingerprintSource.fingerprint;
+
+    const hasExplicitUaConfig = [
+        'uaMode',
+        'userAgent',
+        'userAgentMetadata',
+        'browserType',
+        'browserMajorVersion',
+        'browserFullVersion',
+        'secChUa',
+        'tlsClientHello'
+    ].some(key => hasOwn(data, key) || hasOwn(incomingFingerprint, key));
+    if (!existingProfile && !hasExplicitUaConfig) {
+        mergedFingerprintSource.uaMode = 'none';
+    }
 
     const requestedWebglProfile = firstDefined(
         data.webglProfile,
@@ -1833,7 +1882,7 @@ async function handleApiRequest(method, pathname, body, params, context = {}) {
     // GET /api/open/:idOrName - Launch profile
     const openMatch = pathname.match(/^\/api\/open\/([^\/]+)$/);
     if (method === 'GET' && openMatch) {
-        const profile = findProfile(decodeURIComponent(openMatch[1]));
+        const profile = await findProfile(decodeURIComponent(openMatch[1]));
         if (!profile) return { status: 404, data: { success: false, error: 'Profile not found' } };
         const launchOverrideArgs = resolveApiLaunchOverrideArgs(params);
         if (shouldStreamApiOpenRequest(context.req, params) && context.req && context.res) {
@@ -1893,7 +1942,7 @@ async function handleApiRequest(method, pathname, body, params, context = {}) {
     // POST /api/profiles/:idOrName/stop - Stop profile
     const stopMatch = pathname.match(/^\/api\/profiles\/([^\/]+)\/stop$/);
     if (method === 'POST' && stopMatch) {
-        const profile = findProfile(decodeURIComponent(stopMatch[1]));
+        const profile = await findProfile(decodeURIComponent(stopMatch[1]));
         if (!profile) return { status: 404, data: { success: false, error: 'Profile not found' } };
         const stopped = await stopRunningProfile(profile.id);
         if (!stopped) return { status: 404, data: { success: false, error: 'Profile not running' } };
@@ -2239,33 +2288,105 @@ function quitApplication() {
 }
 
 function broadcastProfileStopped(profileId) {
+    broadcastProfileStatus(profileId, 'stopped');
+}
+
+function broadcastProfileStatus(profileId, status) {
     const windows = BrowserWindow.getAllWindows();
     for (const win of windows) {
         try {
             if (!win || win.isDestroyed() || !win.webContents || win.webContents.isDestroyed()) continue;
-            win.webContents.send('profile-status', { id: profileId, status: 'stopped' });
-            win.webContents.send('profile-stopped', profileId);
+            win.webContents.send('profile-status', { id: profileId, status });
+            if (status === 'stopped') {
+                win.webContents.send('profile-stopped', profileId);
+            }
         } catch (e) { }
+    }
+}
+
+async function cleanupProfileRuntime(profileId, options = {}) {
+    const {
+        closeBrowser = false,
+        killXray = true,
+        refreshMenu = true,
+        broadcast = true
+    } = options;
+    const proc = activeProcesses[profileId];
+    if (!proc) return false;
+
+    delete activeProcesses[profileId];
+    launchingProfiles.delete(profileId);
+
+    if (proc.logFd !== undefined) {
+        try { fs.closeSync(proc.logFd); } catch (e) { }
+    }
+    if (closeBrowser && proc.browser) {
+        try { await proc.browser.close(); } catch (e) { }
+    }
+    if (killXray) {
+        await forceKill(proc.xrayPid);
+    }
+
+    if (broadcast) {
+        broadcastProfileStatus(profileId, 'stopped');
+    }
+    if (refreshMenu) {
+        refreshTrayMenu().catch(() => { });
+    }
+    return true;
+}
+
+async function reconcileActiveProcesses(options = {}) {
+    const { broadcast = true, refreshMenu = true } = options;
+    const profileIds = Object.keys(activeProcesses);
+    let cleaned = 0;
+
+    for (const profileId of profileIds) {
+        const proc = activeProcesses[profileId];
+        let connected = false;
+        try {
+            connected = !!(proc && proc.browser && proc.browser.isConnected());
+        } catch (e) {
+            connected = false;
+        }
+
+        if (!connected) {
+            // eslint-disable-next-line no-await-in-loop
+            const didClean = await cleanupProfileRuntime(profileId, {
+                closeBrowser: false,
+                killXray: true,
+                refreshMenu: false,
+                broadcast
+            });
+            if (didClean) cleaned++;
+        }
+    }
+
+    if (cleaned > 0 && refreshMenu) {
+        refreshTrayMenu().catch(() => { });
+    }
+    return cleaned;
+}
+
+let profileRuntimeWatchdog = null;
+function startProfileRuntimeWatchdog() {
+    if (profileRuntimeWatchdog) return;
+    profileRuntimeWatchdog = setInterval(() => {
+        reconcileActiveProcesses({ broadcast: true, refreshMenu: true }).catch(() => { });
+    }, 3000);
+    if (typeof profileRuntimeWatchdog.unref === 'function') {
+        profileRuntimeWatchdog.unref();
     }
 }
 
 async function stopRunningProfile(profileId, options = {}) {
     const { refreshMenu = true } = options;
-    const proc = activeProcesses[profileId];
-    if (!proc) return false;
-
-    await forceKill(proc.xrayPid);
-    try { await proc.browser.close(); } catch (e) { }
-    if (proc.logFd !== undefined) {
-        try { fs.closeSync(proc.logFd); } catch (e) { }
-    }
-
-    delete activeProcesses[profileId];
-    broadcastProfileStopped(profileId);
-    if (refreshMenu) {
-        refreshTrayMenu().catch(() => { });
-    }
-    return true;
+    return await cleanupProfileRuntime(profileId, {
+        closeBrowser: true,
+        killXray: true,
+        refreshMenu,
+        broadcast: true
+    });
 }
 
 async function stopAllRunningProfilesFromTray() {
@@ -4962,8 +5083,9 @@ const launchProfileHandler = async (event, profileId, preferredLang, launchOptio
             launchArgs.unshift('--no-proxy-server');
         }
 
+        const shouldSpoofUa = profile.fingerprint?.uaMode !== 'none';
         // fingerprint-chromium 通过 --fingerprint-platform/brand 处理 UA，不需要 --user-agent
-        if (!isFingerprintChromium && profile.fingerprint?.userAgent) {
+        if (shouldSpoofUa && !isFingerprintChromium && profile.fingerprint?.userAgent) {
             launchArgs.push(`--user-agent=${profile.fingerprint.userAgent}`);
         }
         if (hasLanguageOverride) {
@@ -4976,14 +5098,24 @@ const launchProfileHandler = async (event, profileId, preferredLang, launchOptio
             const fpSeed = generateFingerprintSeed(profileId);
             // --fingerprint=<seed> 是核心：seed 驱动所有指纹（WebGL, Canvas, Audio, UA, fonts 等）
             launchArgs.push(`--fingerprint=${fpSeed}`);
-            launchArgs.push('--fingerprint-brand=Chrome');
+            launchArgs.push('--disable-non-proxied-udp');
+
+            const fcBrand = resolveFingerprintChromiumBrand(profile.fingerprint);
+            launchArgs.push(`--fingerprint-brand=${fcBrand}`);
+            if (shouldSpoofUa) {
+                const fcBrandVersion = resolveFingerprintChromiumBrandVersion(profile.fingerprint, chromiumVersion);
+                if (fcBrandVersion) {
+                    launchArgs.push(`--fingerprint-brand-version=${fcBrandVersion}`);
+                }
+            }
 
             // 平台（与 fingerprint.platform 一致）
-            const fpPlatform = profile.fingerprint?.platform || 'windows';
-            const fcPlatform = fpPlatform === 'MacIntel' || fpPlatform === 'macos' ? 'macos'
-                : fpPlatform === 'Linux' || fpPlatform === 'linux' ? 'linux'
-                : 'windows';
+            const fcPlatform = resolveFingerprintChromiumPlatform(profile.fingerprint?.platform);
             launchArgs.push(`--fingerprint-platform=${fcPlatform}`);
+            const fcPlatformVersion = resolveFingerprintChromiumPlatformVersion(profile.fingerprint);
+            if (fcPlatformVersion) {
+                launchArgs.push(`--fingerprint-platform-version=${fcPlatformVersion}`);
+            }
 
             // 硬件参数
             if (profile.fingerprint?.hardwareConcurrency) {
@@ -5002,7 +5134,7 @@ const launchProfileHandler = async (event, profileId, preferredLang, launchOptio
             // WebGL/Canvas/Audio 噪声由 --fingerprint=<seed> 自动派生
             // 引擎已内置：navigator.webdriver=false, plugins, ClientRects, fonts
             console.log('🔒 fingerprint-chromium engine mode active');
-            console.log(`   Seed: ${fpSeed}, Platform: ${fcPlatform}`);
+            console.log(`   Seed: ${fpSeed}, Platform: ${fcPlatform}, Brand: ${fcBrand}`);
         }
 
         // 5. Remote Debugging Port (if enabled)
@@ -5261,7 +5393,7 @@ const launchProfileHandler = async (event, profileId, preferredLang, launchOptio
                     } catch (e) { }
                 }
 
-                if (profile.fingerprint?.userAgent) {
+                if (profile.fingerprint?.uaMode !== 'none' && profile.fingerprint?.userAgent) {
                     const payload = {
                         userAgent: profile.fingerprint.userAgent
                     };
