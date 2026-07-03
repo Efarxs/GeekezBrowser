@@ -16,6 +16,7 @@ const { getChromiumPath: resolveChromiumPathForApp } = require('./chromium-path'
 const { CLOSE_BEHAVIOR, normalizeCloseBehavior, resolveCloseBehavior } = require('./close-behavior');
 const { fetchLatestGitHubReleaseInfo } = require('./release-check');
 const { resolveXrayAssetName } = require('./xray-assets');
+const { isSshProxyString, parseSshProxyConfig, startSshSocksTunnel } = require('./ssh-tunnel');
 const gzip = promisify(zlib.gzip);
 const gunzip = promisify(zlib.gunzip);
 const { SocksClient } = require('socks');
@@ -1417,6 +1418,16 @@ function ensureProxyStrValid(proxyStr) {
     const raw = String(proxyStr || '').trim();
     if (!raw || isDirectProxy(raw)) return;
 
+    if (isSshProxyString(raw)) {
+        try {
+            parseSshProxyConfig(raw);
+            return;
+        } catch (err) {
+            const msg = String(err && err.message ? err.message : '');
+            throw new Error(`SSH代理配置错误：${msg || '格式不正确'}`);
+        }
+    }
+
     try {
         parseProxyLink(raw, 'proxy_validate');
     } catch (err) {
@@ -2229,33 +2240,108 @@ function quitApplication() {
 }
 
 function broadcastProfileStopped(profileId) {
+    broadcastProfileStatus(profileId, 'stopped');
+}
+
+function broadcastProfileStatus(profileId, status) {
     const windows = BrowserWindow.getAllWindows();
     for (const win of windows) {
         try {
             if (!win || win.isDestroyed() || !win.webContents || win.webContents.isDestroyed()) continue;
-            win.webContents.send('profile-status', { id: profileId, status: 'stopped' });
-            win.webContents.send('profile-stopped', profileId);
+            win.webContents.send('profile-status', { id: profileId, status });
+            if (status === 'stopped') {
+                win.webContents.send('profile-stopped', profileId);
+            }
         } catch (e) { }
+    }
+}
+
+async function cleanupProfileRuntime(profileId, options = {}) {
+    const {
+        closeBrowser = false,
+        killXray = true,
+        refreshMenu = true,
+        broadcast = true
+    } = options;
+    const proc = activeProcesses[profileId];
+    if (!proc) return false;
+
+    delete activeProcesses[profileId];
+    launchingProfiles.delete(profileId);
+
+    if (proc.logFd !== undefined) {
+        try { fs.closeSync(proc.logFd); } catch (e) { }
+    }
+    if (closeBrowser && proc.browser) {
+        try { await proc.browser.close(); } catch (e) { }
+    }
+    if (proc.sshTunnel && typeof proc.sshTunnel.close === 'function') {
+        try { await proc.sshTunnel.close(); } catch (e) { }
+    }
+    if (killXray) {
+        await forceKill(proc.xrayPid);
+    }
+
+    if (broadcast) {
+        broadcastProfileStatus(profileId, 'stopped');
+    }
+    if (refreshMenu) {
+        refreshTrayMenu().catch(() => { });
+    }
+    return true;
+}
+
+async function reconcileActiveProcesses(options = {}) {
+    const { broadcast = true, refreshMenu = true } = options;
+    const profileIds = Object.keys(activeProcesses);
+    let cleaned = 0;
+
+    for (const profileId of profileIds) {
+        const proc = activeProcesses[profileId];
+        let connected = false;
+        try {
+            connected = !!(proc && proc.browser && proc.browser.isConnected());
+        } catch (e) {
+            connected = false;
+        }
+
+        if (!connected) {
+            // eslint-disable-next-line no-await-in-loop
+            const didClean = await cleanupProfileRuntime(profileId, {
+                closeBrowser: false,
+                killXray: true,
+                refreshMenu: false,
+                broadcast
+            });
+            if (didClean) cleaned++;
+        }
+    }
+
+    if (cleaned > 0 && refreshMenu) {
+        refreshTrayMenu().catch(() => { });
+    }
+    return cleaned;
+}
+
+let profileRuntimeWatchdog = null;
+function startProfileRuntimeWatchdog() {
+    if (profileRuntimeWatchdog) return;
+    profileRuntimeWatchdog = setInterval(() => {
+        reconcileActiveProcesses({ broadcast: true, refreshMenu: true }).catch(() => { });
+    }, 3000);
+    if (typeof profileRuntimeWatchdog.unref === 'function') {
+        profileRuntimeWatchdog.unref();
     }
 }
 
 async function stopRunningProfile(profileId, options = {}) {
     const { refreshMenu = true } = options;
-    const proc = activeProcesses[profileId];
-    if (!proc) return false;
-
-    await forceKill(proc.xrayPid);
-    try { await proc.browser.close(); } catch (e) { }
-    if (proc.logFd !== undefined) {
-        try { fs.closeSync(proc.logFd); } catch (e) { }
-    }
-
-    delete activeProcesses[profileId];
-    broadcastProfileStopped(profileId);
-    if (refreshMenu) {
-        refreshTrayMenu().catch(() => { });
-    }
-    return true;
+    return await cleanupProfileRuntime(profileId, {
+        closeBrowser: true,
+        killXray: true,
+        refreshMenu,
+        broadcast: true
+    });
 }
 
 async function stopAllRunningProfilesFromTray() {
@@ -3451,7 +3537,21 @@ async function runProxyLatencyTest(proxyStr) {
     const tempPort = await getAvailablePort();
     const tempConfigPath = path.join(app.getPath('userData'), `test_config_${tempPort}.json`);
     let xrayProcess = null;
+    let sshTunnel = null;
     try {
+        if (isSshProxyString(proxyStr)) {
+            try {
+                sshTunnel = await startSshSocksTunnel(proxyStr, tempPort);
+            } catch (err) {
+                return { success: false, msg: `SSH Err: ${err.message || err}` };
+            }
+            const ready = await waitForLocalPortReady(tempPort, 2500);
+            if (!ready) {
+                return { success: false, msg: 'SSH local SOCKS port not ready' };
+            }
+            return await measureSocksConnectLatency(tempPort, 4000);
+        }
+
         let outbound;
         try {
             outbound = parseProxyLink(proxyStr, "proxy_test");
@@ -3503,6 +3603,10 @@ async function runProxyLatencyTest(proxyStr) {
         if (xrayProcess) try { await forceKill(xrayProcess.pid); } catch (e) { }
         try { fs.unlinkSync(tempConfigPath); } catch (e) { }
         return { success: false, msg: err.message };
+    } finally {
+        if (sshTunnel && typeof sshTunnel.close === 'function') {
+            try { await sshTunnel.close(); } catch (e) { }
+        }
     }
 }
 
@@ -4598,12 +4702,20 @@ const launchProfileHandler = async (event, profileId, preferredLang, launchOptio
                 }
                 return "环境已唤醒";
             } catch (e) {
-                await forceKill(proc.xrayPid);
-                delete activeProcesses[profileId];
+                await cleanupProfileRuntime(profileId, {
+                    closeBrowser: false,
+                    killXray: true,
+                    refreshMenu: true,
+                    broadcast: true
+                });
             }
         } else {
-            await forceKill(proc.xrayPid);
-            delete activeProcesses[profileId];
+            await cleanupProfileRuntime(profileId, {
+                closeBrowser: false,
+                killXray: true,
+                refreshMenu: true,
+                broadcast: true
+            });
         }
         if (activeProcesses[profileId]) return "环境已唤醒";
     }
@@ -4653,7 +4765,8 @@ const launchProfileHandler = async (event, profileId, preferredLang, launchOptio
         await profileDB.update(profile.id, profile);
     }
 
-    const useDirectNetwork = isDirectProxy(profile.proxyStr);
+    const useSshProxy = isSshProxyString(profile.proxyStr);
+    const useDirectNetwork = !useSshProxy && isDirectProxy(profile.proxyStr);
 
     // Pre-proxy settings (settings already loaded above)
     const override = profile.preProxyOverride || 'default';
@@ -4680,6 +4793,7 @@ const launchProfileHandler = async (event, profileId, preferredLang, launchOptio
     }
 
     let xrayProcess = null;
+    let sshTunnel = null;
     let logFd;
     let browser = null;
     try {
@@ -4714,9 +4828,60 @@ const launchProfileHandler = async (event, profileId, preferredLang, launchOptio
             await fs.writeJson(preferencesPath, preferences);
         } catch (e) { }
 
-        const shouldLaunchXray = (!useDirectNetwork) || !!activePreProxy;
+        if (useSshProxy && activePreProxy) {
+            throw new Error(preferredLang === 'en'
+                ? 'SSH proxy cannot be combined with pre-proxy yet. Please disable pre-proxy for this profile.'
+                : 'SSH代理暂不支持叠加前置代理，请先关闭该环境的前置代理。');
+        }
+
+        const shouldLaunchXray = !useSshProxy && ((!useDirectNetwork) || !!activePreProxy);
         let xrayLogPath = null;
-        if (shouldLaunchXray) {
+        if (useSshProxy) {
+            updateLaunchProgress(
+                32,
+                preferredLang === 'en' ? 'Starting SSH tunnel...' : '正在启动SSH隧道...',
+                true,
+                { step: 4, profileName: progressProfileName }
+            );
+            localPort = await getAvailablePort();
+            sshTunnel = await startSshSocksTunnel(profile.proxyStr, localPort);
+
+            updateLaunchProgress(
+                40,
+                preferredLang === 'en' ? 'Waiting for SSH local proxy port...' : '正在等待SSH本地代理端口就绪...',
+                true,
+                { step: 4, profileName: progressProfileName }
+            );
+            const ready = await waitForLocalPortReady(localPort, 2500);
+            if (!ready) {
+                throw new Error(preferredLang === 'en'
+                    ? `SSH local SOCKS port ${localPort} was not ready in time`
+                    : `SSH本地SOCKS端口 ${localPort} 未及时就绪`);
+            }
+
+            updateLaunchProgress(
+                48,
+                preferredLang === 'en' ? 'Checking SSH tunnel availability...' : '正在检测SSH隧道可用性...',
+                true,
+                { step: 5, profileName: progressProfileName }
+            );
+            const proxyUsable = await waitForProxyChainReady(
+                localPort,
+                null,
+                {
+                    fastReadyTimeoutMs: 2600,
+                    fastProbeTimeoutMs: 1000,
+                    slowReadyTimeoutMs: 4200,
+                    slowProbeTimeoutMs: 1800
+                }
+            );
+            if (!proxyUsable.success) {
+                const probeSummary = summarizeProbeDetails(proxyUsable.details, 3);
+                throw new Error(preferredLang === 'en'
+                    ? `SSH tunnel is unavailable: ${probeSummary || proxyUsable.msg || 'proxy probe failed'}`
+                    : `SSH隧道不可用：${probeSummary || proxyUsable.msg || '代理检测失败'}`);
+            }
+        } else if (shouldLaunchXray) {
             updateLaunchProgress(
                 32,
                 activePreProxy
@@ -5342,6 +5507,7 @@ const launchProfileHandler = async (event, profileId, preferredLang, launchOptio
 
         activeProcesses[profileId] = {
             xrayPid: xrayProcess ? xrayProcess.pid : null,
+            sshTunnel,
             browser,
             logFd: logFd  // 存储日志文件描述符，用于后续关闭
         };
@@ -5419,18 +5585,12 @@ const launchProfileHandler = async (event, profileId, preferredLang, launchOptio
 
         browser.on('disconnected', async () => {
             if (activeProcesses[profileId]) {
-                const pid = activeProcesses[profileId].xrayPid;
-                const logFd = activeProcesses[profileId].logFd;
-
-                // 关闭日志文件描述符
-                if (logFd !== undefined) {
-                    try {
-                        fs.closeSync(logFd);
-                    } catch (e) { }
-                }
-
-                delete activeProcesses[profileId];
-                await forceKill(pid);
+                await cleanupProfileRuntime(profileId, {
+                    closeBrowser: false,
+                    killXray: true,
+                    refreshMenu: false,
+                    broadcast: true
+                });
 
                 // 性能优化：清理缓存文件，节省磁盘空间
                 try {
@@ -5442,7 +5602,6 @@ const launchProfileHandler = async (event, profileId, preferredLang, launchOptio
                     // 忽略清理错误
                 }
 
-                if (!sender.isDestroyed()) sender.send('profile-status', { id: profileId, status: 'stopped' });
                 refreshTrayMenu().catch(() => { });
             }
         });
@@ -5455,6 +5614,9 @@ const launchProfileHandler = async (event, profileId, preferredLang, launchOptio
 
         if (xrayProcess && xrayProcess.pid) {
             await forceKill(xrayProcess.pid);
+        }
+        if (sshTunnel && typeof sshTunnel.close === 'function') {
+            try { await sshTunnel.close(); } catch (e) { }
         }
 
         if (logFd !== undefined) {
@@ -5483,7 +5645,12 @@ app.on('before-quit', () => {
 
 app.on('window-all-closed', () => {
     if (!isAppQuitting) return;
-    Object.values(activeProcesses).forEach(p => forceKill(p.xrayPid));
+    Object.values(activeProcesses).forEach((p) => {
+        if (p?.sshTunnel && typeof p.sshTunnel.close === 'function') {
+            p.sshTunnel.close().catch(() => { });
+        }
+        forceKill(p.xrayPid);
+    });
     if (appTray && (typeof appTray.isDestroyed !== 'function' || !appTray.isDestroyed())) {
         try { appTray.destroy(); } catch (e) { }
         appTray = null;

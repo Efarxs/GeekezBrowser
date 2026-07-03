@@ -118,6 +118,7 @@
     "puppeteer-extra": "^3.3.6",
     "puppeteer-extra-plugin-stealth": "^2.11.2",
     "socks-proxy-agent": "^10.0.0",
+    "ssh2": "^1.17.0",
     "tcp-ping": "^0.1.1",
     "tree-kill": "^1.2.2",
     "uuid": "^13.0.0",
