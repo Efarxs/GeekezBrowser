@@ -3489,7 +3489,8 @@ async function startSshTunnelWithFallback(proxyStr, localPort, options = {}) {
         workDir = app.getPath('userData'),
         probeOptions = {},
         preferredLang = 'cn',
-        tunnelLogPath = null
+        tunnelLogPath = null,
+        gostLogPath: configuredGostLogPath = null
     } = options;
 
     const probe = async (tunnel, processRef = null) => {
@@ -3538,7 +3539,7 @@ async function startSshTunnelWithFallback(proxyStr, localPort, options = {}) {
     let gostLogPath = null;
     try {
         const configPath = path.join(workDir, `gost_ssh_${localPort}.json`);
-        const logPath = path.join(workDir, `gost_ssh_${localPort}.log`);
+        const logPath = configuredGostLogPath || path.join(workDir, 'gost_ssh.log');
         gostLogPath = logPath;
         appendProxyTunnelLog(tunnelLogPath, 'ssh.gost.start', {
             localPort,
@@ -3770,6 +3771,7 @@ async function runProxyLatencyTest(proxyStr) {
                     workDir: app.getPath('userData'),
                     preferredLang: 'cn',
                     tunnelLogPath,
+                    gostLogPath: path.join(app.getPath('userData'), 'gost_ssh_test.log'),
                     probeOptions: {
                         fastReadyTimeoutMs: 2600,
                         fastProbeTimeoutMs: 1000,
@@ -5123,7 +5125,8 @@ const launchProfileHandler = async (event, profileId, preferredLang, launchOptio
                 workDir: profileDir,
                 preferredLang,
                 probeOptions: sshProbeOptions,
-                tunnelLogPath
+                tunnelLogPath,
+                gostLogPath: path.join(profileDir, 'gost_ssh.log')
             });
             sshTunnel = startedSshTunnel.tunnel;
 
