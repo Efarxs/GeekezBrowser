@@ -3493,15 +3493,18 @@ async function startSshTunnelWithFallback(proxyStr, localPort, options = {}) {
     } = options;
 
     const probe = async (tunnel, processRef = null) => {
+        const portReadyTimeoutMs = tunnel?.type === 'gost-ssh' ? 15000 : 2500;
         appendProxyTunnelLog(tunnelLogPath, 'ssh.probe.port.wait', {
             backend: tunnel?.type || 'unknown',
-            localPort
+            localPort,
+            timeoutMs: portReadyTimeoutMs
         });
-        const ready = await waitForLocalPortReady(localPort, 2500);
+        const ready = await waitForLocalPortReady(localPort, portReadyTimeoutMs);
         if (!ready) {
             appendProxyTunnelLog(tunnelLogPath, 'ssh.probe.port.failed', {
                 backend: tunnel?.type || 'unknown',
-                localPort
+                localPort,
+                timeoutMs: portReadyTimeoutMs
             });
             throw new Error(preferredLang === 'en'
                 ? `SSH local SOCKS port ${localPort} was not ready in time`
@@ -3532,9 +3535,11 @@ async function startSshTunnelWithFallback(proxyStr, localPort, options = {}) {
     };
 
     let gostTunnel = null;
+    let gostLogPath = null;
     try {
         const configPath = path.join(workDir, `gost_ssh_${localPort}.json`);
         const logPath = path.join(workDir, `gost_ssh_${localPort}.log`);
+        gostLogPath = logPath;
         appendProxyTunnelLog(tunnelLogPath, 'ssh.gost.start', {
             localPort,
             configPath,
@@ -3560,7 +3565,8 @@ async function startSshTunnelWithFallback(proxyStr, localPort, options = {}) {
         }
         appendProxyTunnelLog(tunnelLogPath, 'ssh.gost.fallback', {
             localPort,
-            reason: err?.message || String(err || 'unknown')
+            reason: err?.message || String(err || 'unknown'),
+            logTail: readFileTailSafe(gostLogPath, 1200)
         });
         console.warn(`[SSH Tunnel] gost backend failed, falling back to ssh2: ${err?.message || err}`);
     }

@@ -23,6 +23,7 @@ import (
 const (
 	defaultPoolSize = 3
 	maxPoolSize     = 8
+	version         = "0.2.0"
 )
 
 type Config struct {
@@ -55,7 +56,12 @@ func main() {
 	log.SetFlags(log.LstdFlags | log.Lmicroseconds)
 
 	configPath := flag.String("config", "", "path to JSON config")
+	showVersion := flag.Bool("version", false, "print version")
 	flag.Parse()
+	if *showVersion {
+		fmt.Println(version)
+		return
+	}
 	if *configPath == "" {
 		log.Fatal("missing -config")
 	}
@@ -141,16 +147,45 @@ func loadConfig(path string) (Config, error) {
 }
 
 func (s *tunnelServer) start(ctx context.Context) error {
+	type dialResult struct {
+		client *ssh.Client
+		err    error
+	}
+
+	log.Printf("ssh pool connecting target=%s:%d pool=%d", s.cfg.Host, s.cfg.Port, s.cfg.PoolSize)
+	results := make(chan dialResult, s.cfg.PoolSize)
 	for i := 0; i < s.cfg.PoolSize; i++ {
-		client, err := dialSSH(s.cfg)
-		if err != nil {
-			s.close()
-			return err
+		go func() {
+			client, err := dialSSH(s.cfg)
+			results <- dialResult{client: client, err: err}
+		}()
+	}
+
+	var firstErr error
+	var clients []*ssh.Client
+	for i := 0; i < s.cfg.PoolSize; i++ {
+		result := <-results
+		if result.err != nil {
+			if firstErr == nil {
+				firstErr = result.err
+			}
+			continue
 		}
+		clients = append(clients, result.client)
+	}
+	if firstErr != nil {
+		for _, client := range clients {
+			_ = client.Close()
+		}
+		return firstErr
+	}
+
+	for _, client := range clients {
 		entry := &clientEntry{client: client}
 		s.clients = append(s.clients, entry)
 		go keepAlive(ctx, entry, time.Duration(s.cfg.KeepAliveSeconds)*time.Second)
 	}
+	log.Printf("ssh pool ready target=%s:%d pool=%d", s.cfg.Host, s.cfg.Port, len(s.clients))
 	return nil
 }
 
