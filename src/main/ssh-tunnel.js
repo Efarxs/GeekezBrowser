@@ -2,6 +2,9 @@ const fs = require('fs');
 const net = require('net');
 const { Client } = require('ssh2');
 
+const DEFAULT_POOL_SIZE = 3;
+const MAX_POOL_SIZE = 8;
+
 function isSshProxyString(value) {
     const raw = String(value || '').trim();
     return raw.startsWith('ssh://') || /^ssh\s+/i.test(raw);
@@ -66,6 +69,7 @@ function parseSshCommand(raw) {
     let username = '';
     let privateKeyPath = '';
     let passphrase = '';
+    let poolSize;
     let target = '';
     const extra = [];
 
@@ -81,6 +85,8 @@ function parseSshCommand(raw) {
             privateKeyPath = tokens[++i];
         } else if (token === '--passphrase' && tokens[i + 1]) {
             passphrase = tokens[++i];
+        } else if ((token === '--pool' || token === '--ssh-pool') && tokens[i + 1]) {
+            poolSize = Number(tokens[++i]);
         } else if (['-o', '-J', '-b', '-c', '-D', '-L', '-R', '-W'].includes(token) && tokens[i + 1]) {
             i++;
         } else if (token.startsWith('-')) {
@@ -100,7 +106,8 @@ function parseSshCommand(raw) {
         username: parsedTarget.username,
         password,
         privateKeyPath,
-        passphrase
+        passphrase,
+        poolSize
     });
 }
 
@@ -115,8 +122,15 @@ function parseSshUrl(raw) {
         privateKeyPath: params.get('privateKeyPath') || params.get('keyPath') || '',
         privateKey: params.get('privateKey') || '',
         passphrase: params.get('passphrase') || '',
+        poolSize: params.get('pool') || params.get('poolSize') || params.get('sshPool'),
         readyTimeout: params.get('readyTimeout') ? Number(params.get('readyTimeout')) : undefined
     });
+}
+
+function normalizePoolSize(value) {
+    const parsed = Number(value);
+    if (!Number.isFinite(parsed) || parsed <= 0) return DEFAULT_POOL_SIZE;
+    return Math.max(1, Math.min(MAX_POOL_SIZE, Math.floor(parsed)));
 }
 
 function normalizeSshConfig(config) {
@@ -137,6 +151,7 @@ function normalizeSshConfig(config) {
         privateKeyPath: String(config.privateKeyPath || ''),
         privateKey: config.privateKey || '',
         passphrase: String(config.passphrase || ''),
+        poolSize: normalizePoolSize(config.poolSize),
         readyTimeout: Number(config.readyTimeout) > 0 ? Number(config.readyTimeout) : 15000
     };
 }
@@ -162,6 +177,23 @@ function buildConnectOptions(config) {
     if (config.privateKeyPath) options.privateKey = fs.readFileSync(config.privateKeyPath);
     if (config.passphrase) options.passphrase = config.passphrase;
     return options;
+}
+
+function connectSshClient(config) {
+    const sshClient = new Client();
+    return new Promise((resolve, reject) => {
+        const onReady = () => cleanup(() => resolve(sshClient));
+        const onError = (err) => cleanup(() => reject(err));
+        const cleanup = (done) => {
+            sshClient.off('ready', onReady);
+            sshClient.off('error', onError);
+            done();
+        };
+
+        sshClient.once('ready', onReady);
+        sshClient.once('error', onError);
+        sshClient.connect(buildConnectOptions(config));
+    });
 }
 
 function parseSocksRequest(buffer) {
@@ -205,8 +237,9 @@ function sendSocksReply(socket, status) {
     socket.write(Buffer.from([0x05, status, 0x00, 0x01, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00]));
 }
 
-function handleSocksConnection(socket, sshClient, sockets, channels) {
+function handleSocksConnection(socket, getSshClientEntry, sockets, channels) {
     sockets.add(socket);
+    try { socket.setNoDelay(true); } catch (e) { }
     let buffer = Buffer.alloc(0);
     let stage = 'greeting';
     let connecting = false;
@@ -250,7 +283,13 @@ function handleSocksConnection(socket, sshClient, sockets, channels) {
                 const extra = buffer.subarray(request.bytesRead);
                 socket.removeListener('data', onData);
 
-                sshClient.forwardOut(
+                const clientEntry = getSshClientEntry();
+                if (!clientEntry || !clientEntry.client) {
+                    fail(0x01);
+                    return;
+                }
+
+                clientEntry.client.forwardOut(
                     socket.remoteAddress || '127.0.0.1',
                     socket.remotePort || 0,
                     request.dstAddr,
@@ -261,7 +300,11 @@ function handleSocksConnection(socket, sshClient, sockets, channels) {
                             return;
                         }
                         channels.add(stream);
-                        stream.on('close', () => channels.delete(stream));
+                        clientEntry.channels.add(stream);
+                        stream.on('close', () => {
+                            channels.delete(stream);
+                            clientEntry.channels.delete(stream);
+                        });
                         stream.on('error', () => { });
                         sendSocksReply(socket, 0x00);
                         if (extra.length) stream.write(extra);
@@ -279,29 +322,55 @@ function handleSocksConnection(socket, sshClient, sockets, channels) {
 
 async function startSshSocksTunnel(proxyString, localPort) {
     const config = parseSshProxyConfig(proxyString);
-    const sshClient = new Client();
+    const clientEntries = [];
     const sockets = new Set();
     const channels = new Set();
     let server = null;
     let closed = false;
+    let nextClientIndex = 0;
 
-    await new Promise((resolve, reject) => {
-        const onReady = () => cleanup(resolve);
-        const onError = (err) => cleanup(() => reject(err));
-        const cleanup = (done) => {
-            sshClient.off('ready', onReady);
-            sshClient.off('error', onError);
-            done();
-        };
+    const settledClients = await Promise.allSettled(
+        Array.from({ length: config.poolSize }, () => connectSshClient(config))
+    );
+    const failedClient = settledClients.find((result) => result.status === 'rejected');
+    if (failedClient) {
+        for (const result of settledClients) {
+            if (result.status === 'fulfilled') {
+                try { result.value.end(); } catch (e) { }
+            }
+        }
+        throw failedClient.reason;
+    }
 
-        sshClient.once('ready', onReady);
-        sshClient.once('error', onError);
-        sshClient.connect(buildConnectOptions(config));
-    });
+    for (const result of settledClients) {
+        const client = result.value;
+        const entry = { client, channels: new Set(), closed: false };
+        client.on('close', () => {
+            entry.closed = true;
+        });
+        clientEntries.push(entry);
+    }
+
+    const getSshClientEntry = () => {
+        const available = clientEntries.filter((entry) => !entry.closed);
+        if (!available.length) return null;
+
+        let selected = available[0];
+        for (const entry of available) {
+            if (entry.channels.size < selected.channels.size) selected = entry;
+        }
+
+        const leastLoaded = available.filter((entry) => entry.channels.size === selected.channels.size);
+        if (leastLoaded.length > 1) {
+            selected = leastLoaded[nextClientIndex % leastLoaded.length];
+            nextClientIndex++;
+        }
+        return selected;
+    };
 
     await new Promise((resolve, reject) => {
         server = net.createServer((socket) => {
-            handleSocksConnection(socket, sshClient, sockets, channels);
+            handleSocksConnection(socket, getSshClientEntry, sockets, channels);
         });
         server.once('error', reject);
         server.listen(localPort, '127.0.0.1', () => {
@@ -310,20 +379,14 @@ async function startSshSocksTunnel(proxyString, localPort) {
         });
     });
 
-    sshClient.on('close', () => {
-        if (closed) return;
-        for (const socket of sockets) {
-            try { socket.destroy(); } catch (e) { }
-        }
-    });
-
     return {
         type: 'ssh2',
         localPort,
         config: {
             host: config.host,
             port: config.port,
-            username: config.username
+            username: config.username,
+            poolSize: config.poolSize
         },
         close: async () => {
             if (closed) return;
@@ -338,7 +401,9 @@ async function startSshSocksTunnel(proxyString, localPort) {
                 if (!server) return resolve();
                 try { server.close(() => resolve()); } catch (e) { resolve(); }
             });
-            try { sshClient.end(); } catch (e) { }
+            for (const entry of clientEntries) {
+                try { entry.client.end(); } catch (e) { }
+            }
         }
     };
 }
