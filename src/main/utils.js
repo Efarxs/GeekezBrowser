@@ -19,6 +19,24 @@ function getProxyRemark(link) {
             const configStr = decodeBase64Content(base64Str);
             const vmess = JSON.parse(configStr);
             return vmess.ps || '';
+        } else if (link.startsWith('ssh://')) {
+            const urlObj = new URL(link);
+            return `${decodeURIComponent(urlObj.username || '')}@${urlObj.hostname}:${urlObj.port || 22}`.replace(/^@/, '');
+        } else if (/^ssh\s+/i.test(link)) {
+            const tokens = link.split(/\s+/).filter(Boolean);
+            for (let i = 1; i < tokens.length; i++) {
+                const token = tokens[i];
+                if (token === '-p' || token === '-i' || token === '-l') {
+                    i++;
+                    continue;
+                }
+                if (['-o', '-J', '-b', '-c', '-D', '-L', '-R', '-W'].includes(token)) {
+                    i++;
+                    continue;
+                }
+                if (token.startsWith('-')) continue;
+                return token;
+            }
         } else if (link.includes('#')) {
             return decodeURIComponent(link.split('#')[1]).trim();
         }
