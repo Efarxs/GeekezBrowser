@@ -37,8 +37,8 @@
         ]
       },
       {
-        "from": "resources/puppeteer",
-        "to": "puppeteer",
+        "from": "resources/fingerprint-chromium",
+        "to": "fingerprint-chromium",
         "filter": [
           "**/*"
         ]

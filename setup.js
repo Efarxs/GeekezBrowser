@@ -330,7 +330,7 @@ async function main() {
         }
 
         // 3. 准备浏览器内核（fingerprint-chromium 148，固定版本）
-        const DOWNLOAD_ROOT = path.join(__dirname, 'resources', 'puppeteer');
+        const DOWNLOAD_ROOT = path.join(__dirname, 'resources', 'fingerprint-chromium');
         const FC_VERSION = '148.0.7778.215';
         const FC_TARGET_DIR = path.join(DOWNLOAD_ROOT, 'chrome', 'fingerprint-chromium');
         const FC_VERSION_FILE = path.join(FC_TARGET_DIR, 'VERSION');

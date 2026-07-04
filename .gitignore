@@ -8,7 +8,7 @@ _Trash_Bin/
 .DS_Store
 Thumbs.db
 resources/bin/
-resources/puppeteer/
+resources/fingerprint-chromium/
 website/
 tools/
 out/

@@ -161,12 +161,12 @@ function resolveChromiumPath({ basePath, platform = process.platform, env = proc
 }
 
 function getChromiumPath({ isDev, appPath, resourcesPath, platform = process.platform, env = process.env } = {}) {
-    const basePath = isDev ? path.join(appPath, 'resources', 'puppeteer') : path.join(resourcesPath, 'puppeteer');
+    const basePath = isDev ? path.join(appPath, 'resources', 'fingerprint-chromium') : path.join(resourcesPath, 'fingerprint-chromium');
     return resolveChromiumPath({ basePath, platform, env });
 }
 
 function getChromiumVersion({ isDev, appPath, resourcesPath, platform = process.platform } = {}) {
-    const basePath = isDev ? path.join(appPath, 'resources', 'puppeteer') : path.join(resourcesPath, 'puppeteer');
+    const basePath = isDev ? path.join(appPath, 'resources', 'fingerprint-chromium') : path.join(resourcesPath, 'fingerprint-chromium');
 
     // Priority 1: fingerprint-chromium VERSION file
     const fcVersionFile = path.join(basePath, 'chrome', 'fingerprint-chromium', 'VERSION');
