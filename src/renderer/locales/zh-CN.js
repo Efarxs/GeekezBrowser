@@ -125,8 +125,6 @@ window.zhCN = {
     confirmUpdate: "确认更新",
     skipVersion: "跳过此版本",
     versionSkipped: "已跳过此版本更新",
-    xrayUpdateFound: "发现 Xray 内核更新！正在后台下载...",
-    xrayUpdatePrompt: "发现 Xray-core 新版本！",
     noUpdate: "当前已是最新版本。",
     updateError: "检查更新失败。",
     updateDownloaded: "内核更新完成，重启软件生效。",

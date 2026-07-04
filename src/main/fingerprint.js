@@ -549,7 +549,7 @@ function resolveBrowserFullVersion(fullVersion, majorVersion) {
 }
 
 function mapBrowserMajorToUtls(browserType, majorVersion) {
-    // Xray supports a limited set of uTLS signatures, so we map major versions to those
+    // sing-box supports a limited set of uTLS signatures, so we map major versions to those
     // signatures to keep TLS handshake style closer to the chosen browser family.
     if (browserType === 'edge') {
         if (majorVersion >= 132) return 'edge';

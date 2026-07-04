@@ -123,8 +123,6 @@ const enTranslations = {
     confirmUpdate: "Update Now",
     skipVersion: "Skip this version",
     versionSkipped: "This version update has been skipped",
-    xrayUpdateFound: "New Xray core found! Downloading...",
-    xrayUpdatePrompt: "New Xray core version found!",
     noUpdate: "You are up to date.",
     updateError: "Update check failed.",
     updateDownloaded: "Update downloaded. Please restart.",

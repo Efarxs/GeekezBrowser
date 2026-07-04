@@ -15,9 +15,7 @@ const { getChromiumPath: resolveChromiumPathForApp, getChromiumVersion: resolveC
 const { withHeadlessChromeCookies } = require('./cdp-cookie-client');
 const { CLOSE_BEHAVIOR, normalizeCloseBehavior, resolveCloseBehavior } = require('./close-behavior');
 const { fetchLatestGitHubReleaseInfo } = require('./release-check');
-const { resolveXrayAssetName } = require('./xray-assets');
-const { isSshProxyString, parseSshProxyConfig, startSshSocksTunnel } = require('./ssh-tunnel');
-const { startGostSshTunnel } = require('./gost-ssh-tunnel');
+const { resolveSingBoxAssetName } = require('./singbox-assets');
 const gzip = promisify(zlib.gzip);
 const gunzip = promisify(zlib.gunzip);
 const { SocksClient } = require('socks');
@@ -68,18 +66,15 @@ async function createSocksProxyAgent(proxyUrl) {
 // Hardware acceleration enabled for better UI performance
 // Only disable if GPU compatibility issues occur
 
-import { generateXrayConfig, parseProxyLink, getProxyRemark } from './utils';
+import { generateSingBoxConfig, parseProxyLink, getProxyRemark } from './utils';
 import { generateFingerprint, getGeolocationScript, getWatermarkScript } from './fingerprint';
 
 const isDev = !app.isPackaged;
 const RESOURCES_BIN = isDev ? path.join(app.getAppPath(), 'resources', 'bin') : path.join(process.resourcesPath, 'bin');
-// Use platform+arch specific directory for xray binary
+// Use platform+arch specific directory for sing-box binary
 const PLATFORM_ARCH = `${process.platform}-${process.arch}`; // e.g., darwin-arm64, darwin-x64, win32-x64
 const BIN_DIR = path.join(RESOURCES_BIN, PLATFORM_ARCH);
-const BIN_PATH = path.join(BIN_DIR, process.platform === 'win32' ? 'xray.exe' : 'xray');
-// Fallback to old location for backward compatibility
-const BIN_DIR_LEGACY = RESOURCES_BIN;
-const BIN_PATH_LEGACY = path.join(BIN_DIR_LEGACY, process.platform === 'win32' ? 'xray.exe' : 'xray');
+const BIN_PATH = path.join(BIN_DIR, process.platform === 'win32' ? 'sing-box.exe' : 'sing-box');
 
 // 自定义数据目录支持
 const APP_CONFIG_FILE = path.join(app.getPath('userData'), 'app-config.json');
@@ -1424,16 +1419,6 @@ function ensureProxyStrValid(proxyStr) {
     const raw = String(proxyStr || '').trim();
     if (!raw || isDirectProxy(raw)) return;
 
-    if (isSshProxyString(raw)) {
-        try {
-            parseSshProxyConfig(raw);
-            return;
-        } catch (err) {
-            const msg = String(err && err.message ? err.message : '');
-            throw new Error(`SSH代理配置错误：${msg || '格式不正确'}`);
-        }
-    }
-
     try {
         parseProxyLink(raw, 'proxy_validate');
     } catch (err) {
@@ -2321,7 +2306,7 @@ function broadcastProfileStatus(profileId, status) {
 async function cleanupProfileRuntime(profileId, options = {}) {
     const {
         closeBrowser = false,
-        killXray = true,
+        killProxy = true,
         refreshMenu = true,
         broadcast = true
     } = options;
@@ -2331,9 +2316,8 @@ async function cleanupProfileRuntime(profileId, options = {}) {
     appendProxyTunnelLog(proc.tunnelLogPath, 'runtime.cleanup.start', {
         profileId,
         closeBrowser,
-        killXray,
-        hasXray: !!proc.xrayPid,
-        hasSshTunnel: !!proc.sshTunnel
+        killSingbox: killProxy,
+        hasSingbox: !!proc.singboxPid
     });
 
     delete activeProcesses[profileId];
@@ -2349,19 +2333,12 @@ async function cleanupProfileRuntime(profileId, options = {}) {
             pid: proc.browserPid
         });
     }
-    if (proc.sshTunnel && typeof proc.sshTunnel.close === 'function') {
-        try { await proc.sshTunnel.close(); } catch (e) { }
-        appendProxyTunnelLog(proc.tunnelLogPath, 'ssh.close', {
-            profileId,
-            backend: proc.sshTunnel.type || 'unknown'
-        });
-    }
-    if (killXray) {
-        await forceKill(proc.xrayPid);
-        if (proc.xrayPid) {
-            appendProxyTunnelLog(proc.tunnelLogPath, 'xray.close', {
+    if (killProxy) {
+        await forceKill(proc.singboxPid);
+        if (proc.singboxPid) {
+            appendProxyTunnelLog(proc.tunnelLogPath, 'singbox.close', {
                 profileId,
-                pid: proc.xrayPid
+                pid: proc.singboxPid
             });
         }
     }
@@ -2389,7 +2366,7 @@ async function reconcileActiveProcesses(options = {}) {
             // eslint-disable-next-line no-await-in-loop
             const didClean = await cleanupProfileRuntime(profileId, {
                 closeBrowser: false,
-                killXray: true,
+                killProxy: true,
                 refreshMenu: false,
                 broadcast
             });
@@ -2418,7 +2395,7 @@ async function stopRunningProfile(profileId, options = {}) {
     const { refreshMenu = true } = options;
     return await cleanupProfileRuntime(profileId, {
         closeBrowser: true,
-        killXray: true,
+        killProxy: true,
         refreshMenu,
         broadcast: true
     });
@@ -3122,128 +3099,23 @@ async function waitForProxyChainReady(socksPort, processRef = null, options = {}
     return { ...slowResult, phase: 'slow' };
 }
 
-async function startSshTunnelWithFallback(proxyStr, localPort, options = {}) {
-    const {
-        workDir = app.getPath('userData'),
-        probeOptions = {},
-        preferredLang = 'cn',
-        tunnelLogPath = null,
-        gostLogPath: configuredGostLogPath = null
-    } = options;
 
-    const probe = async (tunnel, processRef = null) => {
-        const portReadyTimeoutMs = tunnel?.type === 'gost-ssh' ? 15000 : 2500;
-        appendProxyTunnelLog(tunnelLogPath, 'ssh.probe.port.wait', {
-            backend: tunnel?.type || 'unknown',
-            localPort,
-            timeoutMs: portReadyTimeoutMs
-        });
-        const ready = await waitForLocalPortReady(localPort, portReadyTimeoutMs);
-        if (!ready) {
-            appendProxyTunnelLog(tunnelLogPath, 'ssh.probe.port.failed', {
-                backend: tunnel?.type || 'unknown',
-                localPort,
-                timeoutMs: portReadyTimeoutMs
-            });
-            throw new Error(preferredLang === 'en'
-                ? `SSH local SOCKS port ${localPort} was not ready in time`
-                : `SSH本地SOCKS端口 ${localPort} 未及时就绪`);
-        }
-
-        appendProxyTunnelLog(tunnelLogPath, 'ssh.probe.chain.start', {
-            backend: tunnel?.type || 'unknown',
-            localPort
-        });
-        const proxyUsable = await waitForProxyChainReady(localPort, processRef, probeOptions);
-        if (!proxyUsable.success) {
-            const probeSummary = summarizeProbeDetails(proxyUsable.details, 3);
-            appendProxyTunnelLog(tunnelLogPath, 'ssh.probe.chain.failed', {
-                backend: tunnel?.type || 'unknown',
-                localPort,
-                phase: proxyUsable.phase,
-                reason: probeSummary || proxyUsable.msg || 'proxy probe failed'
-            });
-            throw new Error(probeSummary || proxyUsable.msg || 'proxy probe failed');
-        }
-        appendProxyTunnelLog(tunnelLogPath, 'ssh.probe.chain.ready', {
-            backend: tunnel?.type || 'unknown',
-            localPort,
-            phase: proxyUsable.phase
-        });
-        return proxyUsable;
-    };
-
-    let gostTunnel = null;
-    let gostLogPath = null;
-    try {
-        const configPath = path.join(workDir, `gost_ssh_${localPort}.json`);
-        const logPath = configuredGostLogPath || path.join(workDir, 'gost_ssh.log');
-        gostLogPath = logPath;
-        appendProxyTunnelLog(tunnelLogPath, 'ssh.gost.start', {
-            localPort,
-            configPath,
-            logPath
-        });
-        gostTunnel = await startGostSshTunnel(proxyStr, localPort, {
-            binDir: BIN_DIR,
-            cacheDir: path.join(app.getPath('userData'), 'bin', 'gost-ssh-tunnel'),
-            configPath,
-            logPath,
-            cwd: BIN_DIR
-        });
-        const proxyUsable = await probe(gostTunnel, null);
-        appendProxyTunnelLog(tunnelLogPath, 'ssh.gost.ready', {
-            localPort,
-            pid: gostTunnel.pid,
-            logPath
-        });
-        return { tunnel: gostTunnel, proxyUsable, backend: 'gost' };
-    } catch (err) {
-        if (gostTunnel) {
-            try { await gostTunnel.close(); } catch (e) { }
-        }
-        appendProxyTunnelLog(tunnelLogPath, 'ssh.gost.fallback', {
-            localPort,
-            reason: err?.message || String(err || 'unknown'),
-            logTail: readFileTailSafe(gostLogPath, 1200)
-        });
-        console.warn(`[SSH Tunnel] gost backend failed, falling back to ssh2: ${err?.message || err}`);
-    }
-
-    appendProxyTunnelLog(tunnelLogPath, 'ssh.ssh2.start', { localPort });
-    const ssh2Tunnel = await startSshSocksTunnel(proxyStr, localPort);
-    try {
-        const proxyUsable = await probe(ssh2Tunnel, null);
-        appendProxyTunnelLog(tunnelLogPath, 'ssh.ssh2.ready', { localPort });
-        return { tunnel: ssh2Tunnel, proxyUsable, backend: 'ssh2' };
-    } catch (err) {
-        try { await ssh2Tunnel.close(); } catch (e) { }
-        appendProxyTunnelLog(tunnelLogPath, 'ssh.ssh2.failed', {
-            localPort,
-            reason: err?.message || String(err || 'unknown')
-        });
-        throw new Error(preferredLang === 'en'
-            ? `SSH tunnel is unavailable: ${err?.message || err}`
-            : `SSH隧道不可用：${err?.message || err}`);
-    }
-}
-
-function createProxyStartupError(profileName, reason, xrayLogPath, lang = 'cn') {
+function createProxyStartupError(profileName, reason, singboxLogPath, lang = 'cn') {
     const displayName = profileName || '当前环境';
     const summary = lang === 'en'
         ? `${displayName} proxy failed to start. Please check whether the proxy is available or try restarting the profile.`
         : `${displayName}代理启动失败，请检查代理是否可用或尝试重启环境。`;
-    const logTail = readFileTailSafe(xrayLogPath, 500).trim();
+    const logTail = readFileTailSafe(singboxLogPath, 500).trim();
     const extraReason = String(reason || '').trim();
 
     if (logTail) {
-        console.error(`[Xray Launch Failed] ${displayName}: ${extraReason || 'unknown'}\n${logTail}`);
+        console.error(`[Proxy Launch Failed] ${displayName}: ${extraReason || 'unknown'}\n${logTail}`);
     } else {
-        console.error(`[Xray Launch Failed] ${displayName}: ${extraReason || 'unknown'}`);
+        console.error(`[Proxy Launch Failed] ${displayName}: ${extraReason || 'unknown'}`);
     }
 
     const err = new Error(summary);
-    err.code = 'XRAY_STARTUP_FAILED';
+    err.code = 'PROXY_STARTUP_FAILED';
     err.detail = extraReason;
     return err;
 }
@@ -3272,7 +3144,7 @@ async function waitForSocksProxyUsable(socksPort, timeoutMs = 4500, connectTimeo
         if (processRef && processRef.exitCode !== null) {
             return {
                 success: false,
-                msg: `xray exited before proxy became usable (code: ${processRef.exitCode})`,
+                msg: `sing-box exited before proxy became usable (code: ${processRef.exitCode})`,
                 details: lastDetails
             };
         }
@@ -3396,120 +3268,66 @@ async function runProxyLatencyTest(proxyStr) {
     const tempPort = await getAvailablePort();
     const tempConfigPath = path.join(app.getPath('userData'), `test_config_${tempPort}.json`);
     const tunnelLogPath = path.join(app.getPath('userData'), 'proxy_tunnel_test.log');
-    let xrayProcess = null;
-    let sshTunnel = null;
+    let singboxProcess = null;
     try {
-        appendProxyTunnelLog(tunnelLogPath, 'test.start', {
-            localPort: tempPort,
-            proxyType: isSshProxyString(proxyStr) ? 'ssh' : 'xray'
-        });
-        if (isSshProxyString(proxyStr)) {
-            try {
-                const started = await startSshTunnelWithFallback(proxyStr, tempPort, {
-                    workDir: app.getPath('userData'),
-                    preferredLang: 'cn',
-                    tunnelLogPath,
-                    gostLogPath: path.join(app.getPath('userData'), 'gost_ssh_test.log'),
-                    probeOptions: {
-                        fastReadyTimeoutMs: 2600,
-                        fastProbeTimeoutMs: 1000,
-                        slowReadyTimeoutMs: 4200,
-                        slowProbeTimeoutMs: 1800
-                    }
-                });
-                sshTunnel = started.tunnel;
-            } catch (err) {
-                appendProxyTunnelLog(tunnelLogPath, 'test.ssh.failed', {
-                    localPort: tempPort,
-                    reason: err?.message || String(err || 'unknown')
-                });
-                return { success: false, msg: `SSH Err: ${err.message || err}` };
-            }
-            const result = await measureSocksConnectLatency(tempPort, 4000);
-            appendProxyTunnelLog(tunnelLogPath, result.success ? 'test.ssh.ok' : 'test.ssh.unusable', {
-                localPort: tempPort,
-                msg: result.msg || ''
-            });
-            return result;
-        }
+        appendProxyTunnelLog(tunnelLogPath, 'test.start', { localPort: tempPort });
 
-        let outbound;
+        let config;
         try {
-            outbound = parseProxyLink(proxyStr, "proxy_test");
+            config = generateSingBoxConfig(proxyStr, tempPort, null, null);
         } catch (err) {
-            return { success: false, msg: "Format Err" };
+            return { success: false, msg: 'Format Err' };
         }
-        const config = {
-            log: { loglevel: "warning" },
-            inbounds: [{
-                port: tempPort,
-                listen: "127.0.0.1",
-                protocol: "socks",
-                settings: {
-                    auth: "noauth",
-                    udp: false
-                }
-            }],
-            outbounds: [outbound, { protocol: "freedom", tag: "direct" }],
-            routing: {
-                domainStrategy: "AsIs",
-                rules: [{ type: "field", outboundTag: "proxy_test", port: "0-65535" }]
-            }
-        };
         await fs.writeJson(tempConfigPath, config);
 
-        xrayProcess = spawn(BIN_PATH, ['-c', tempConfigPath], { cwd: BIN_DIR, env: { ...process.env, 'XRAY_LOCATION_ASSET': RESOURCES_BIN }, stdio: ['ignore', 'pipe', 'pipe'], windowsHide: true });
-        appendProxyTunnelLog(tunnelLogPath, 'test.xray.spawned', {
+        singboxProcess = spawn(BIN_PATH, ['run', '-c', tempConfigPath], {
+            cwd: BIN_DIR,
+            stdio: ['ignore', 'pipe', 'pipe'],
+            windowsHide: true
+        });
+        appendProxyTunnelLog(tunnelLogPath, 'test.singbox.spawned', {
             localPort: tempPort,
-            pid: xrayProcess.pid,
+            pid: singboxProcess.pid,
             configPath: tempConfigPath
         });
-        let xrayErr = '';
-        xrayProcess.stderr.on('data', d => {
+        let singboxErr = '';
+        singboxProcess.stderr.on('data', d => {
             const chunk = d.toString();
-            xrayErr += chunk;
-            if (xrayErr.length > 5000) xrayErr = xrayErr.substring(xrayErr.length - 5000);
+            singboxErr += chunk;
+            if (singboxErr.length > 5000) singboxErr = singboxErr.substring(singboxErr.length - 5000);
         });
-        xrayProcess.stdout.on('data', () => { });
+        singboxProcess.stdout.on('data', () => { });
 
         const ready = await waitForLocalPortReady(tempPort, 1500);
-        if (!ready || xrayProcess.exitCode !== null) {
-            appendProxyTunnelLog(tunnelLogPath, 'test.xray.port.failed', {
+        if (!ready || singboxProcess.exitCode !== null) {
+            appendProxyTunnelLog(tunnelLogPath, 'test.singbox.port.failed', {
                 localPort: tempPort,
-                exitCode: xrayProcess.exitCode,
-                stderr: xrayErr.substring(0, 500)
+                exitCode: singboxProcess.exitCode,
+                stderr: singboxErr.substring(0, 500)
             });
-            return { success: false, msg: `Xray crashed: ${xrayErr.substring(0, 150) || 'unknown'}` };
+            return { success: false, msg: `sing-box crashed: ${singboxErr.substring(0, 150) || 'unknown'}` };
         }
 
         const result = await measureSocksConnectLatency(tempPort, 4000);
-        appendProxyTunnelLog(tunnelLogPath, result.success ? 'test.xray.ok' : 'test.xray.unusable', {
+        appendProxyTunnelLog(tunnelLogPath, result.success ? 'test.singbox.ok' : 'test.singbox.unusable', {
             localPort: tempPort,
             msg: result.msg || ''
         });
-        if (!result.success && !result.xrayLog && xrayErr) {
-            result.xrayLog = xrayErr.substring(0, 500);
+        if (!result.success && !result.singboxLog && singboxErr) {
+            result.singboxLog = singboxErr.substring(0, 500);
         }
-        await forceKill(xrayProcess.pid);
-        xrayProcess = null;
+        await forceKill(singboxProcess.pid);
+        singboxProcess = null;
         try { fs.unlinkSync(tempConfigPath); } catch (e) { }
         return result;
     } catch (err) {
-        if (xrayProcess) try { await forceKill(xrayProcess.pid); } catch (e) { }
+        if (singboxProcess) try { await forceKill(singboxProcess.pid); } catch (e) { }
         try { fs.unlinkSync(tempConfigPath); } catch (e) { }
         appendProxyTunnelLog(tunnelLogPath, 'test.failed', {
             localPort: tempPort,
             reason: err?.message || String(err || 'unknown')
         });
         return { success: false, msg: err.message };
-    } finally {
-        if (sshTunnel && typeof sshTunnel.close === 'function') {
-            try { await sshTunnel.close(); } catch (e) { }
-            appendProxyTunnelLog(tunnelLogPath, 'test.ssh.closed', {
-                localPort: tempPort,
-                backend: sshTunnel.type || 'unknown'
-            });
-        }
     }
 }
 
@@ -3544,91 +3362,6 @@ ipcMain.handle('test-proxy-latency-batch', async (_e, entries) => {
 });
 ipcMain.handle('set-title-bar-color', (e, colors) => { const win = BrowserWindow.fromWebContents(e.sender); if (win) { if (process.platform === 'win32') try { win.setTitleBarOverlay({ color: colors.bg, symbolColor: colors.symbol }); } catch (e) { } win.setBackgroundColor(colors.bg); } });
 ipcMain.handle('check-app-update', async () => { try { const releaseInfo = await fetchLatestGitHubReleaseInfo({ owner: 'EchoHS', repo: 'GeekezBrowser', currentVersion: app.getVersion() }); if (compareVersions(releaseInfo.latestVersion, app.getVersion()) > 0) { return { update: true, remote: releaseInfo.latestVersion, url: 'https://browser.geekez.net/#downloads', notes: releaseInfo.notes }; } return { update: false }; } catch (e) { return { update: false, error: e.message }; } });
-ipcMain.handle('check-xray-update', async () => { try { const data = await fetchJson('https://api.github.com/repos/XTLS/Xray-core/releases/latest'); if (!data || !data.tag_name) return { update: false }; const remoteVer = data.tag_name; const currentVer = await getLocalXrayVersion(); if (remoteVer !== currentVer) { const assetName = resolveXrayAssetName({ platform: os.platform(), arch: os.arch() }); if (!assetName) return { update: false, error: `Unsupported platform/arch: ${os.platform()}-${os.arch()}` }; const downloadUrl = `https://gh-proxy.com/https://github.com/XTLS/Xray-core/releases/download/${remoteVer}/${assetName}`; return { update: true, remote: remoteVer.replace(/^v/, ''), downloadUrl }; } return { update: false }; } catch (e) { return { update: false }; } });
-ipcMain.handle('download-xray-update', async (e, url) => {
-    const exeName = process.platform === 'win32' ? 'xray.exe' : 'xray';
-    const tempBase = os.tmpdir();
-    const updateId = `xray_update_${Date.now()}`;
-    const tempDir = path.join(tempBase, updateId);
-    const zipPath = path.join(tempDir, 'xray.zip');
-    try {
-        fs.mkdirSync(tempDir, { recursive: true });
-        await downloadFile(url, zipPath);
-        if (process.platform === 'win32') await new Promise((resolve) => exec('taskkill /F /IM xray.exe', () => resolve()));
-        activeProcesses = {};
-        await new Promise(r => setTimeout(r, 3000));
-        const extractDir = path.join(tempDir, 'extracted');
-        fs.mkdirSync(extractDir, { recursive: true });
-        await extractZip(zipPath, extractDir);
-        function findXrayBinary(dir) {
-            const files = fs.readdirSync(dir);
-            for (const file of files) {
-                const fullPath = path.join(dir, file);
-                const stat = fs.statSync(fullPath);
-                if (stat.isDirectory()) {
-                    const found = findXrayBinary(fullPath);
-                    if (found) return found;
-                } else if (file === exeName) {
-                    return fullPath;
-                }
-            }
-            return null;
-        }
-        const xrayBinary = findXrayBinary(extractDir);
-        console.log('[Update Debug] Searched in:', extractDir);
-        console.log('[Update Debug] Found binary:', xrayBinary);
-        if (!xrayBinary) {
-            // 列出所有文件帮助调试
-            const allFiles = [];
-            function listAllFiles(dir, prefix = '') {
-                const files = fs.readdirSync(dir);
-                files.forEach(file => {
-                    const fullPath = path.join(dir, file);
-                    const stat = fs.statSync(fullPath);
-                    if (stat.isDirectory()) {
-                        allFiles.push(prefix + file + '/');
-                        listAllFiles(fullPath, prefix + file + '/');
-                    } else {
-                        allFiles.push(prefix + file);
-                    }
-                });
-            }
-            listAllFiles(extractDir);
-            console.log('[Update Debug] All extracted files:', allFiles);
-            throw new Error('Xray binary not found in package');
-        }
-
-        // Windows文件锁规避：先重命名旧文件，再复制新文件
-        const oldPath = BIN_PATH + '.old';
-        if (fs.existsSync(BIN_PATH)) {
-            try {
-                if (fs.existsSync(oldPath)) fs.unlinkSync(oldPath);
-            } catch (e) { }
-            fs.renameSync(BIN_PATH, oldPath);
-        }
-        fs.ensureDirSync(BIN_DIR);
-        fs.copyFileSync(xrayBinary, BIN_PATH);
-        if (process.platform !== 'win32') fs.chmodSync(BIN_PATH, '755');
-        // 删除旧文件
-        try {
-            if (fs.existsSync(oldPath)) fs.unlinkSync(oldPath);
-        } catch (e) { }
-        if (process.platform !== 'win32') fs.chmodSync(BIN_PATH, '755');
-        // 清理临时目录（即使失败也不影响更新）
-        try {
-            fs.rmSync(tempDir, { recursive: true, force: true });
-        } catch (cleanupErr) {
-            console.warn('[Cleanup Warning] Failed to remove temp dir:', cleanupErr.message);
-        }
-        return true;
-    } catch (e) {
-        console.error('Xray update failed:', e);
-        try {
-            if (fs.existsSync(tempDir)) fs.rmSync(tempDir, { recursive: true, force: true });
-        } catch (err) { }
-        return false;
-    }
-});
 ipcMain.handle('get-running-ids', () => Object.keys(activeProcesses));
 ipcMain.handle('get-profile-runtime-state', () => ({
     runningIds: Object.keys(activeProcesses),
@@ -4579,7 +4312,7 @@ const launchProfileHandler = async (event, profileId, preferredLang, launchOptio
         }
         await cleanupProfileRuntime(profileId, {
             closeBrowser: false,
-            killXray: true,
+            killProxy: true,
             refreshMenu: true,
             broadcast: true
         });
@@ -4631,8 +4364,7 @@ const launchProfileHandler = async (event, profileId, preferredLang, launchOptio
         await profileDB.update(profile.id, profile);
     }
 
-    const useSshProxy = isSshProxyString(profile.proxyStr);
-    const useDirectNetwork = !useSshProxy && isDirectProxy(profile.proxyStr);
+    const useDirectNetwork = isDirectProxy(profile.proxyStr);
 
     // Pre-proxy settings (settings already loaded above)
     const override = profile.preProxyOverride || 'default';
@@ -4658,8 +4390,7 @@ const launchProfileHandler = async (event, profileId, preferredLang, launchOptio
         }
     }
 
-    let xrayProcess = null;
-    let sshTunnel = null;
+    let singboxProcess = null;
     let logFd;
     let browserProcess = null;
     const useCleanProfile = !!launchOptions.useCleanProfile;
@@ -4675,7 +4406,7 @@ const launchProfileHandler = async (event, profileId, preferredLang, launchOptio
         appendProxyTunnelLog(tunnelLogPath, 'runtime.launch.start', {
             profileId,
             profileName: profile.name,
-            proxyType: useSshProxy ? 'ssh' : (useDirectNetwork ? 'direct' : 'xray')
+            proxyType: useDirectNetwork ? 'direct' : 'singbox'
         });
 
         updateLaunchProgress(
@@ -4703,60 +4434,9 @@ const launchProfileHandler = async (event, profileId, preferredLang, launchOptio
             await fs.writeJson(preferencesPath, preferences);
         } catch (e) { }
 
-        if (useSshProxy && activePreProxy) {
-            throw new Error(preferredLang === 'en'
-                ? 'SSH proxy cannot be combined with pre-proxy yet. Please disable pre-proxy for this profile.'
-                : 'SSH代理暂不支持叠加前置代理，请先关闭该环境的前置代理。');
-        }
-
-        const shouldLaunchXray = !useSshProxy && ((!useDirectNetwork) || !!activePreProxy);
-        let xrayLogPath = null;
-        if (useSshProxy) {
-            updateLaunchProgress(
-                32,
-                preferredLang === 'en' ? 'Starting SSH tunnel...' : '正在启动SSH隧道...',
-                true,
-                { step: 4, profileName: progressProfileName }
-            );
-            localPort = await getAvailablePort();
-            const sshProbeOptions = {
-                fastReadyTimeoutMs: 2600,
-                fastProbeTimeoutMs: 1000,
-                slowReadyTimeoutMs: 4200,
-                slowProbeTimeoutMs: 1800
-            };
-            const startedSshTunnel = await startSshTunnelWithFallback(profile.proxyStr, localPort, {
-                workDir: profileDir,
-                preferredLang,
-                probeOptions: sshProbeOptions,
-                tunnelLogPath,
-                gostLogPath: path.join(profileDir, 'gost_ssh.log')
-            });
-            sshTunnel = startedSshTunnel.tunnel;
-
-            updateLaunchProgress(
-                40,
-                preferredLang === 'en'
-                    ? `SSH tunnel ready (${startedSshTunnel.backend})`
-                    : `SSH隧道已就绪（${startedSshTunnel.backend}）`,
-                true,
-                { step: 4, profileName: progressProfileName }
-            );
-
-            updateLaunchProgress(
-                48,
-                preferredLang === 'en' ? 'Checking SSH tunnel availability...' : '正在检测SSH隧道可用性...',
-                true,
-                { step: 5, profileName: progressProfileName }
-            );
-            const proxyUsable = startedSshTunnel.proxyUsable;
-            if (!proxyUsable.success) {
-                const probeSummary = summarizeProbeDetails(proxyUsable.details, 3);
-                throw new Error(preferredLang === 'en'
-                    ? `SSH tunnel is unavailable: ${probeSummary || proxyUsable.msg || 'proxy probe failed'}`
-                    : `SSH隧道不可用：${probeSummary || proxyUsable.msg || '代理检测失败'}`);
-            }
-        } else if (shouldLaunchXray) {
+        const shouldLaunchSingbox = (!useDirectNetwork) || !!activePreProxy;
+        let singboxLogPath = null;
+        if (shouldLaunchSingbox) {
             updateLaunchProgress(
                 32,
                 activePreProxy
@@ -4766,25 +4446,29 @@ const launchProfileHandler = async (event, profileId, preferredLang, launchOptio
                 { step: 4, profileName: progressProfileName }
             );
             localPort = await getAvailablePort();
-            const xrayConfigPath = path.join(profileDir, 'config.json');
-            xrayLogPath = path.join(profileDir, 'xray_run.log');
+            const singboxConfigPath = path.join(profileDir, 'config.json');
+            singboxLogPath = path.join(profileDir, 'singbox_run.log');
             const upstreamProxy = useDirectNetwork ? activePreProxy?.url : profile.proxyStr;
             const chainedPreProxy = useDirectNetwork ? null : finalPreProxyConfig;
-            const config = generateXrayConfig(upstreamProxy, localPort, chainedPreProxy, profile.fingerprint);
-            fs.writeJsonSync(xrayConfigPath, config);
-            logFd = fs.openSync(xrayLogPath, 'a');
-            const xrayLaunchStartedAt = Date.now();
-            appendProxyTunnelLog(tunnelLogPath, 'xray.start', {
+            const config = generateSingBoxConfig(upstreamProxy, localPort, chainedPreProxy, profile.fingerprint);
+            fs.writeJsonSync(singboxConfigPath, config);
+            logFd = fs.openSync(singboxLogPath, 'a');
+            const singboxLaunchStartedAt = Date.now();
+            appendProxyTunnelLog(tunnelLogPath, 'singbox.start', {
                 profileId,
                 localPort,
-                configPath: xrayConfigPath,
-                logPath: xrayLogPath,
+                configPath: singboxConfigPath,
+                logPath: singboxLogPath,
                 chained: !!activePreProxy
             });
-            xrayProcess = spawn(BIN_PATH, ['-c', xrayConfigPath], { cwd: BIN_DIR, env: { ...process.env, 'XRAY_LOCATION_ASSET': RESOURCES_BIN }, stdio: ['ignore', logFd, logFd], windowsHide: true });
-            appendProxyTunnelLog(tunnelLogPath, 'xray.spawned', {
+            singboxProcess = spawn(BIN_PATH, ['run', '-c', singboxConfigPath], {
+                cwd: BIN_DIR,
+                stdio: ['ignore', logFd, logFd],
+                windowsHide: true
+            });
+            appendProxyTunnelLog(tunnelLogPath, 'singbox.spawned', {
                 profileId,
-                pid: xrayProcess.pid
+                pid: singboxProcess.pid
             });
             const preProxyLabel = activePreProxy?.remark || activePreProxy?.name || activePreProxy?.id || '';
             const preProxyCheckPromise = activePreProxy?.url
@@ -4825,29 +4509,30 @@ const launchProfileHandler = async (event, profileId, preferredLang, launchOptio
                 true,
                 { step: 4, profileName: progressProfileName }
             );
-            const readyTimeoutMs = 2500;
+            const readyTimeoutMs = 3000;
             const ready = await awaitWithPreProxyPriority(waitForLocalPortReady(localPort, readyTimeoutMs));
             if (!ready) {
-                const exitCode = xrayProcess.exitCode;
+                const exitCode = singboxProcess.exitCode;
                 const reason = exitCode !== null
-                    ? `xray exited before ready (code: ${exitCode})`
-                    : `xray socks port ${localPort} not ready within ${readyTimeoutMs}ms`;
-                appendProxyTunnelLog(tunnelLogPath, 'xray.port.failed', {
+                    ? `sing-box exited before ready (code: ${exitCode})`
+                    : `sing-box socks port ${localPort} not ready within ${readyTimeoutMs}ms`;
+                appendProxyTunnelLog(tunnelLogPath, 'singbox.port.failed', {
                     profileId,
                     localPort,
                     reason
                 });
-                throw createProxyStartupError(profile.name, reason, xrayLogPath, uiLang);
+                throw createProxyStartupError(profile.name, reason, singboxLogPath, uiLang);
             }
-            appendProxyTunnelLog(tunnelLogPath, 'xray.port.ready', {
+            appendProxyTunnelLog(tunnelLogPath, 'singbox.port.ready', {
                 profileId,
                 localPort
             });
 
-            // Xray may bind the local SOCKS port before the upstream proxy chain is fully usable.
-            // Chained pre-proxy setups need a bit more warm-up budget before the first probe.
+            // sing-box may bind the local SOCKS port before the upstream link (esp.
+            // hy2/tuic) finishes the QUIC handshake — chained pre-proxy setups need
+            // extra warm-up budget before the first probe.
             const minWarmupMs = activePreProxy ? 1200 : 300;
-            const remainingWarmupMs = minWarmupMs - (Date.now() - xrayLaunchStartedAt);
+            const remainingWarmupMs = minWarmupMs - (Date.now() - singboxLaunchStartedAt);
             if (remainingWarmupMs > 0) {
                 await awaitWithPreProxyPriority(new Promise((resolve) => setTimeout(resolve, remainingWarmupMs)));
             }
@@ -4863,7 +4548,7 @@ const launchProfileHandler = async (event, profileId, preferredLang, launchOptio
             const proxyUsable = await awaitWithPreProxyPriority(
                 waitForProxyChainReady(
                     localPort,
-                    xrayProcess,
+                    singboxProcess,
                     activePreProxy?.url
                         ? {
                             fastReadyTimeoutMs: 2600,
@@ -4881,7 +4566,7 @@ const launchProfileHandler = async (event, profileId, preferredLang, launchOptio
             );
             if (!proxyUsable.success) {
                 const probeSummary = summarizeProbeDetails(proxyUsable.details, 3);
-                appendProxyTunnelLog(tunnelLogPath, 'xray.probe.failed', {
+                appendProxyTunnelLog(tunnelLogPath, 'singbox.probe.failed', {
                     profileId,
                     localPort,
                     phase: proxyUsable.phase,
@@ -4907,11 +4592,11 @@ const launchProfileHandler = async (event, profileId, preferredLang, launchOptio
                 throw createProxyStartupError(
                     profile.name,
                     probeSummary || proxyUsable.msg || 'proxy chain not usable after startup',
-                    xrayLogPath,
+                    singboxLogPath,
                     uiLang
                 );
             }
-            appendProxyTunnelLog(tunnelLogPath, 'xray.probe.ready', {
+            appendProxyTunnelLog(tunnelLogPath, 'singbox.probe.ready', {
                 profileId,
                 localPort,
                 phase: proxyUsable.phase
@@ -4963,8 +4648,8 @@ const launchProfileHandler = async (event, profileId, preferredLang, launchOptio
         const chromiumVersion = getChromiumVersion(); // e.g., "148.0.7778.215"
 
         if (!chromePath) {
-            if (xrayProcess && xrayProcess.pid) {
-                await forceKill(xrayProcess.pid);
+            if (singboxProcess && singboxProcess.pid) {
+                await forceKill(singboxProcess.pid);
             }
             throw new Error("Chrome binary not found.");
         }
@@ -5199,7 +4884,7 @@ const launchProfileHandler = async (event, profileId, preferredLang, launchOptio
             if (activeProcesses[profileId]) {
                 await cleanupProfileRuntime(profileId, {
                     closeBrowser: false,
-                    killXray: true,
+                    killProxy: true,
                     refreshMenu: false,
                     broadcast: true
                 });
@@ -5225,8 +4910,7 @@ const launchProfileHandler = async (event, profileId, preferredLang, launchOptio
         );
 
         activeProcesses[profileId] = {
-            xrayPid: xrayProcess ? xrayProcess.pid : null,
-            sshTunnel,
+            singboxPid: singboxProcess ? singboxProcess.pid : null,
             browserPid,
             browserProcess,
             tunnelLogPath,
@@ -5236,8 +4920,7 @@ const launchProfileHandler = async (event, profileId, preferredLang, launchOptio
         appendProxyTunnelLog(tunnelLogPath, 'runtime.launch.ready', {
             profileId,
             localPort,
-            hasXray: !!xrayProcess,
-            sshBackend: sshTunnel?.type || '',
+            hasSingbox: !!singboxProcess,
             cleanProfile: useCleanProfile,
             browserPid
         });
@@ -5258,18 +4941,11 @@ const launchProfileHandler = async (event, profileId, preferredLang, launchOptio
             try { await forceKill(browserProcess.pid); } catch (e) { }
         }
 
-        if (xrayProcess && xrayProcess.pid) {
-            await forceKill(xrayProcess.pid);
-            appendProxyTunnelLog(tunnelLogPath, 'xray.close.error', {
+        if (singboxProcess && singboxProcess.pid) {
+            await forceKill(singboxProcess.pid);
+            appendProxyTunnelLog(tunnelLogPath, 'singbox.close.error', {
                 profileId,
-                pid: xrayProcess.pid
-            });
-        }
-        if (sshTunnel && typeof sshTunnel.close === 'function') {
-            try { await sshTunnel.close(); } catch (e) { }
-            appendProxyTunnelLog(tunnelLogPath, 'ssh.close.error', {
-                profileId,
-                backend: sshTunnel.type || 'unknown'
+                pid: singboxProcess.pid
             });
         }
 
@@ -5304,10 +4980,7 @@ app.on('before-quit', () => {
 app.on('window-all-closed', () => {
     if (!isAppQuitting) return;
     Object.values(activeProcesses).forEach((p) => {
-        if (p?.sshTunnel && typeof p.sshTunnel.close === 'function') {
-            p.sshTunnel.close().catch(() => { });
-        }
-        forceKill(p.xrayPid);
+        forceKill(p.singboxPid);
         forceKill(p.browserPid);
     });
     if (appTray && (typeof appTray.isDestroyed !== 'function' || !appTray.isDestroyed())) {
@@ -5318,7 +4991,7 @@ app.on('window-all-closed', () => {
 });
 // Helpers (Same)
 function fetchJson(url) { return new Promise((resolve, reject) => { const req = https.get(url, { headers: { 'User-Agent': 'GeekEZ-Browser' } }, (res) => { let data = ''; res.on('data', c => data += c); res.on('end', () => { try { resolve(JSON.parse(data)); } catch (e) { reject(e); } }); }); req.on('error', reject); }); }
-function getLocalXrayVersion() { return new Promise((resolve) => { if (!fs.existsSync(BIN_PATH)) return resolve('v0.0.0'); try { const proc = spawn(BIN_PATH, ['-version']); let output = ''; proc.stdout.on('data', d => output += d.toString()); proc.on('close', () => { const match = output.match(/Xray\s+v?(\d+\.\d+\.\d+)/i); resolve(match ? (match[1].startsWith('v') ? match[1] : 'v' + match[1]) : 'v0.0.0'); }); proc.on('error', () => resolve('v0.0.0')); } catch (e) { resolve('v0.0.0'); } }); }
+function getLocalSingBoxVersion() { return new Promise((resolve) => { if (!fs.existsSync(BIN_PATH)) return resolve('v0.0.0'); try { const proc = spawn(BIN_PATH, ['version']); let output = ''; proc.stdout.on('data', d => output += d.toString()); proc.on('close', () => { const match = output.match(/sing-box\s+version\s+(\d+\.\d+\.\d+)/i); resolve(match ? 'v' + match[1] : 'v0.0.0'); }); proc.on('error', () => resolve('v0.0.0')); } catch (e) { resolve('v0.0.0'); } }); }
 function compareVersions(v1, v2) { const p1 = v1.split('.').map(Number); const p2 = v2.split('.').map(Number); for (let i = 0; i < 3; i++) { if ((p1[i] || 0) > (p2[i] || 0)) return 1; if ((p1[i] || 0) < (p2[i] || 0)) return -1; } return 0; }
 function downloadFile(url, dest, onProgress) {
     return new Promise((resolve, reject) => {
