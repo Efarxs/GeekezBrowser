@@ -4426,12 +4426,15 @@ const launchProfileHandler = async (event, profileId, preferredLang, launchOptio
     let browserProcess = null;
     const useCleanProfile = !!launchOptions.useCleanProfile;
     const resetOnLaunch = !!profile.resetOnLaunch;
+    // Hoist paths out of the try block so the catch handler (which logs to
+    // tunnelLogPath) can access them even if the try throws before its own
+    // declarations run.
+    const profileDir = path.join(DATA_PATH, profileId);
+    const userDataDir = useCleanProfile
+        ? path.join(profileDir, 'browser_data_clean')
+        : path.join(profileDir, 'browser_data');
+    const tunnelLogPath = path.join(profileDir, 'proxy_tunnel.log');
     try {
-        const profileDir = path.join(DATA_PATH, profileId);
-        const userDataDir = useCleanProfile
-            ? path.join(profileDir, 'browser_data_clean')
-            : path.join(profileDir, 'browser_data');
-        const tunnelLogPath = path.join(profileDir, 'proxy_tunnel.log');
         fs.ensureDirSync(userDataDir);
 
         // resetOnLaunch (a.k.a. ephemeral mode): wipe the profile's browser data
@@ -4987,34 +4990,48 @@ const launchProfileHandler = async (event, profileId, preferredLang, launchOptio
 
         return switchMsg;
     } catch (err) {
+        // Dismiss the progress modal FIRST so an exception in any cleanup step
+        // below can never leave the user staring at a stuck spinner.
+        try {
+            if (sender && !(typeof sender.isDestroyed === 'function' && sender.isDestroyed())) {
+                emitProfileLaunchProgress(sender, { visible: false });
+            }
+        } catch (e) { }
+        // Also drop the launching flag immediately for the same reason —
+        // otherwise a leaked flag would keep the profile in "launching" state
+        // forever.
+        try { launchingProfiles.delete(profileId); } catch (e) { }
+        try { delete activeProcesses[profileId]; } catch (e) { }
+
         if (browserProcess && browserProcess.pid) {
             try { await forceKill(browserProcess.pid); } catch (e) { }
         }
 
         if (singboxProcess && singboxProcess.pid) {
-            await forceKill(singboxProcess.pid);
-            appendProxyTunnelLog(tunnelLogPath, 'singbox.close.error', {
-                profileId,
-                pid: singboxProcess.pid
-            });
-        }
-
-        if (logFd !== undefined) {
+            try { await forceKill(singboxProcess.pid); } catch (e) { }
             try {
-                fs.closeSync(logFd);
+                appendProxyTunnelLog(tunnelLogPath, 'singbox.close.error', {
+                    profileId,
+                    pid: singboxProcess.pid
+                });
             } catch (e) { }
         }
 
-        launchingProfiles.delete(profileId);
-        delete activeProcesses[profileId];
-        appendProxyTunnelLog(tunnelLogPath, 'runtime.launch.failed', {
-            profileId,
-            reason: err?.message || String(err || 'unknown')
-        });
-        if (!sender.isDestroyed()) {
-            sender.send('profile-status', { id: profileId, status: 'stopped' });
+        if (logFd !== undefined) {
+            try { fs.closeSync(logFd); } catch (e) { }
         }
-        emitProfileLaunchProgress(sender, { visible: false });
+
+        try {
+            appendProxyTunnelLog(tunnelLogPath, 'runtime.launch.failed', {
+                profileId,
+                reason: err?.message || String(err || 'unknown')
+            });
+        } catch (e) { }
+        try {
+            if (sender && !(typeof sender.isDestroyed === 'function' && sender.isDestroyed())) {
+                sender.send('profile-status', { id: profileId, status: 'stopped' });
+            }
+        } catch (e) { }
         refreshTrayMenu().catch(() => { });
 
         console.error(err);
