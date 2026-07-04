@@ -16,6 +16,17 @@
                 >
                     {{ isLaunching ? t('launchingStatus') : t('runningStatus') }}
                 </span>
+                <span
+                    v-if="showDebugPort"
+                    class="debug-port-chip no-drag"
+                    :class="{ live: isRunning, idle: !isRunning }"
+                    :title="debugPortTitle"
+                    @click.stop="copyDebugUrl"
+                >
+                    <span class="debug-port-dot"></span>
+                    :{{ profile.debugPort }}
+                    <span v-if="debugCopiedFlash" class="debug-copied">✓</span>
+                </span>
             </div>
             <div class="profile-meta">
                 <span v-for="tag in profile.tags" :key="tag" class="tag"
@@ -66,11 +77,13 @@
 import { computed, onBeforeUnmount, ref } from 'vue';
 import { useUIStore } from '../store/useUIStore';
 import { useProfileStore } from '../store/useProfileStore';
+import { useSettingsStore } from '../store/useSettingsStore';
 import { profileService } from '../services/profile.service';
 import { getProxyProtocol } from '../utils/helpers';
 
 const uiStore = useUIStore();
 const profileStore = useProfileStore();
+const settingsStore = useSettingsStore();
 
 const props = defineProps({
     profile: {
@@ -112,6 +125,35 @@ const displayScreen = computed(() => {
     }
     return '0x0';
 });
+
+const showDebugPort = computed(() => !!(
+    settingsStore.enableRemoteDebugging && props.profile.debugPort
+));
+const debugPortTitle = computed(() => {
+    const url = `http://127.0.0.1:${props.profile.debugPort}`;
+    const state = props.isRunning ? t('debugPortLive') : t('debugPortIdle');
+    return `${state}\n${url}\n${t('debugPortClickHint')}`;
+});
+
+const debugCopiedFlash = ref(false);
+const copyDebugUrl = async () => {
+    const url = `http://127.0.0.1:${props.profile.debugPort}`;
+    try {
+        await navigator.clipboard.writeText(url);
+    } catch (e) {
+        // Fallback for restricted contexts
+        try {
+            const ta = document.createElement('textarea');
+            ta.value = url;
+            document.body.appendChild(ta);
+            ta.select();
+            document.execCommand('copy');
+            document.body.removeChild(ta);
+        } catch (err) { }
+    }
+    debugCopiedFlash.value = true;
+    setTimeout(() => { debugCopiedFlash.value = false; }, 1200);
+};
 
 const quickUpdatePreProxy = async (val) => {
     if (props.isRunning || props.isLaunching) {
@@ -245,6 +287,58 @@ const remove = () => {
     color: #f39c12;
     border-color: rgba(243, 156, 18, 0.6);
     background: rgba(243, 156, 18, 0.12);
+}
+
+.debug-port-chip {
+    display: inline-flex;
+    align-items: center;
+    gap: 5px;
+    margin-left: 8px;
+    padding: 2px 8px;
+    border-radius: 999px;
+    font-size: 11px;
+    font-family: 'JetBrains Mono', Consolas, ui-monospace, monospace;
+    letter-spacing: 0.3px;
+    cursor: pointer;
+    user-select: none;
+    transition: transform 0.15s, background 0.15s, border-color 0.15s;
+}
+.debug-port-chip.live {
+    background: rgba(76, 175, 80, 0.15);
+    color: #7fd48a;
+    border: 1px solid rgba(76, 175, 80, 0.55);
+}
+.debug-port-chip.idle {
+    background: rgba(255, 255, 255, 0.04);
+    color: var(--text-secondary, #888);
+    border: 1px dashed rgba(255, 255, 255, 0.18);
+}
+.debug-port-chip:hover {
+    transform: translateY(-1px);
+}
+.debug-port-chip.live:hover {
+    background: rgba(76, 175, 80, 0.25);
+}
+.debug-port-chip.idle:hover {
+    background: rgba(255, 255, 255, 0.08);
+}
+.debug-port-dot {
+    width: 6px;
+    height: 6px;
+    border-radius: 50%;
+    background: currentColor;
+    opacity: 0.85;
+}
+.debug-port-chip.live .debug-port-dot {
+    animation: debug-port-pulse 1.6s ease-in-out infinite;
+}
+@keyframes debug-port-pulse {
+    0%, 100% { opacity: 0.55; }
+    50% { opacity: 1; }
+}
+.debug-copied {
+    margin-left: 2px;
+    font-weight: 600;
 }
 
 .launch-group {
