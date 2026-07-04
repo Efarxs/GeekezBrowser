@@ -477,6 +477,9 @@ function asNumber(value) {
 }
 
 function resolveRuntimePlatform(explicitPlatform) {
+    // 'auto' 表示每次调用都随机（用于 resetOnLaunch 模式，或者非 ephemeral profile
+    // 首次创建时抽一次身份）
+    if (explicitPlatform === 'auto') return getRandom(['windows', 'mac', 'linux']);
     if (explicitPlatform === 'Win32') return 'windows';
     if (explicitPlatform === 'MacIntel') return 'mac';
     if (explicitPlatform === 'Linux x86_64') return 'linux';

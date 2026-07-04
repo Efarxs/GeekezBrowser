@@ -1540,6 +1540,11 @@ function normalizeFingerprintOptions(data = {}) {
         language: firstDefined(data.language, inputFp.language),
         languages: firstDefined(data.languages, inputFp.languages),
         platform: firstDefined(data.platform, inputFp.platform),
+        // Track whether the user chose "Auto Random" so ephemeral (resetOnLaunch)
+        // rerolls can pick a new platform each launch. For a fixed profile this
+        // stays 'fixed' and `platform` above holds the concrete value.
+        platformMode: firstDefined(data.platformMode, inputFp.platformMode,
+            (data.platform === 'auto' || inputFp.platform === 'auto') ? 'auto' : 'fixed'),
         hardwareConcurrency: firstDefined(data.hardwareConcurrency, inputFp.hardwareConcurrency),
         deviceMemory: firstDefined(data.deviceMemory, inputFp.deviceMemory),
         canvasNoise: firstDefined(data.canvasNoise, inputFp.canvasNoise),
@@ -1744,6 +1749,7 @@ async function buildProfileFromInput(rawData, profiles, settings, existingProfil
         debugPort,
         customArgs: normalizedCustomArgs,
         ignoreCertErrors: firstDefined(data.ignoreCertErrors, existingProfile?.ignoreCertErrors, false),
+        resetOnLaunch: !!firstDefined(data.resetOnLaunch, existingProfile?.resetOnLaunch, false),
         isSetup: existingProfile?.isSetup || false,
         createdAt: existingProfile?.createdAt || Date.now()
     };
@@ -4351,6 +4357,31 @@ const launchProfileHandler = async (event, profileId, preferredLang, launchOptio
 
     ensureProxyStrValid(profile.proxyStr);
     profile.fingerprint = normalizeFingerprint(profile.fingerprint || {});
+
+    // resetOnLaunch: reroll identity-shaping fields each launch. Preserve fields
+    // the user set intentionally (timezone, city, geolocation, language, custom
+    // UA). Custom UA takes priority — if user pinned one, don't overwrite it.
+    // For platform: platformMode 'auto' means "reroll each launch" (Win/Mac/Linux
+    // rotates); platformMode 'fixed' pins the concrete platform saved on profile.
+    if (profile.resetOnLaunch) {
+        const prevFp = profile.fingerprint;
+        const carryOver = {
+            timezone: prevFp.timezone,
+            city: prevFp.city,
+            geolocation: prevFp.geolocation,
+            language: prevFp.language,
+            languages: prevFp.languages,
+            userAgent: prevFp.userAgent,           // 空串 = 未设 → 内核派生
+            uaMode: prevFp.uaMode,
+            browserType: prevFp.browserType,
+            platformMode: prevFp.platformMode,
+            platform: prevFp.platformMode === 'auto' ? 'auto' : prevFp.platform
+        };
+        profile.fingerprint = generateFingerprint(carryOver);
+        // 让 platformMode 也带到新 fingerprint 里（generateFingerprint 不感知它）
+        profile.fingerprint.platformMode = prevFp.platformMode || 'fixed';
+    }
+
     updateLaunchProgress(
         12,
         preferredLang === 'en' ? 'Validating profile configuration...' : '正在校验环境配置...',
@@ -4394,6 +4425,7 @@ const launchProfileHandler = async (event, profileId, preferredLang, launchOptio
     let logFd;
     let browserProcess = null;
     const useCleanProfile = !!launchOptions.useCleanProfile;
+    const resetOnLaunch = !!profile.resetOnLaunch;
     try {
         const profileDir = path.join(DATA_PATH, profileId);
         const userDataDir = useCleanProfile
@@ -4401,6 +4433,22 @@ const launchProfileHandler = async (event, profileId, preferredLang, launchOptio
             : path.join(profileDir, 'browser_data');
         const tunnelLogPath = path.join(profileDir, 'proxy_tunnel.log');
         fs.ensureDirSync(userDataDir);
+
+        // resetOnLaunch (a.k.a. ephemeral mode): wipe the profile's browser data
+        // before the browser starts, so this launch begins with zero cookies,
+        // caches, IndexedDB, etc. The clean-profile launch option already uses
+        // a parallel dir, so skip the wipe there.
+        if (resetOnLaunch && !useCleanProfile) {
+            try {
+                await fs.emptyDir(userDataDir);
+                appendProxyTunnelLog(tunnelLogPath, 'runtime.reset.wiped', {
+                    profileId,
+                    dir: userDataDir
+                });
+            } catch (err) {
+                console.warn(`[reset-on-launch] wipe failed for ${profile.name || profileId}: ${err?.message || err}`);
+            }
+        }
 
         let localPort = null;
         appendProxyTunnelLog(tunnelLogPath, 'runtime.launch.start', {
@@ -4763,7 +4811,9 @@ const launchProfileHandler = async (event, profileId, preferredLang, launchOptio
             ? profile.fingerprint.userAgent.trim()
             : '';
         {
-            const fpSeed = generateFingerprintSeed(profileId);
+            const fpSeed = resetOnLaunch
+                ? crypto.randomInt(1, 2147483647)
+                : generateFingerprintSeed(profileId);
             launchArgs.push(`--fingerprint=${fpSeed}`);
             launchArgs.push('--disable-non-proxied-udp');
 

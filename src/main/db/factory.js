@@ -21,8 +21,9 @@ async function createDatabase(dbConfig, dataPath) {
             // 自动建表
             sqlite.exec(CREATE_TABLE_SQL);
 
-            // 迁移：添加 ignore_cert_errors 列（已有表时静默忽略）
+            // 迁移：已有表时静默忽略
             try { sqlite.exec('ALTER TABLE profiles ADD COLUMN ignore_cert_errors INTEGER DEFAULT 0'); } catch {}
+            try { sqlite.exec('ALTER TABLE profiles ADD COLUMN reset_on_launch INTEGER DEFAULT 0'); } catch {}
 
             const db = drizzle({ client: sqlite });
 
@@ -45,8 +46,9 @@ async function createDatabase(dbConfig, dataPath) {
             // 自动建表
             await pool.query(CREATE_TABLE_SQL);
 
-            // 迁移：添加 ignore_cert_errors 列（已有表时静默忽略）
+            // 迁移：已有表时静默忽略
             try { await pool.query('ALTER TABLE profiles ADD COLUMN IF NOT EXISTS ignore_cert_errors INTEGER DEFAULT 0'); } catch {}
+            try { await pool.query('ALTER TABLE profiles ADD COLUMN IF NOT EXISTS reset_on_launch INTEGER DEFAULT 0'); } catch {}
 
             return {
                 db,
@@ -67,8 +69,9 @@ async function createDatabase(dbConfig, dataPath) {
             // 自动建表
             await pool.query(CREATE_TABLE_SQL);
 
-            // 迁移：添加 ignore_cert_errors 列（已有表时静默忽略）
+            // 迁移：已有表时静默忽略
             try { await pool.query('ALTER TABLE profiles ADD COLUMN ignore_cert_errors INT DEFAULT 0'); } catch {}
+            try { await pool.query('ALTER TABLE profiles ADD COLUMN reset_on_launch INT DEFAULT 0'); } catch {}
 
             return {
                 db,

@@ -13,6 +13,13 @@ export const browserMajorVersionOptions = [
     makeOption(148, 'v148', 'v148')
 ];
 
+export const platformOptions = [
+    makeOption('auto', 'Auto Random', '自动随机'),
+    makeOption('Win32', 'Windows', 'Windows'),
+    makeOption('MacIntel', 'macOS', 'macOS'),
+    makeOption('Linux x86_64', 'Linux', 'Linux')
+];
+
 export const browserVersionPresetOptions = [
     makeOption('none', 'No UA Modification', '不修改 UA'),
     makeOption('auto', 'Auto Random', '自动随机'),

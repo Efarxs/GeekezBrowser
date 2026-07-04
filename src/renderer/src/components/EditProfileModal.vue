@@ -87,10 +87,20 @@
 
         <label class="label-tiny">{{ $t('platformLabel') }}</label>
         <select v-model="form.platform">
-          <option value="Win32">{{ $t('platformWin') }}</option>
-          <option value="MacIntel">{{ $t('platformMac') }}</option>
-          <option value="Linux x86_64">{{ $t('platformLinux') }}</option>
+          <option v-for="opt in platformOptions" :key="opt.value" :value="opt.value">
+            {{ getOptionLabel(opt) }}
+          </option>
         </select>
+        <div v-if="form.platform === 'auto'" class="hint-text">{{ $t('platformAutoHint') }}</div>
+
+        <label class="reset-toggle mt-10">
+          <input type="checkbox" v-model="form.resetOnLaunch">
+          <span class="reset-toggle-checkmark"></span>
+          <div class="reset-toggle-body">
+            <div class="reset-toggle-title">{{ $t('resetOnLaunchLabel') }}</div>
+            <div class="hint-text">{{ $t('resetOnLaunchHint') }}</div>
+          </div>
+        </label>
 
         <label class="label-tiny mt-10">{{ $t('proxyLink') }}</label>
         <textarea v-model="form.proxyStr" rows="4"></textarea>
@@ -144,6 +154,7 @@ import { useUIStore } from '../store/useUIStore';
 import { useProfileStore } from '../store/useProfileStore';
 import {
   browserVersionPresetOptions,
+  platformOptions,
   getOptionLabel,
   generateRandomUserAgent
 } from '../utils/fingerprintOptions';
@@ -176,13 +187,18 @@ const form = reactive({
   browserVersionPreset: 'none',
   platform: 'Win32',
   customUserAgent: '',
+  resetOnLaunch: false,
 });
 
 function randomizeCustomUa() {
   const preset = parseBrowserVersionPreset(form.browserVersionPreset);
   const browserType = preset.browserType === 'edge' ? 'edge' : 'chrome';
+  const pool = ['Win32', 'MacIntel', 'Linux x86_64'];
+  const uaPlatform = form.platform === 'auto'
+    ? pool[Math.floor(Math.random() * pool.length)]
+    : form.platform;
   form.customUserAgent = generateRandomUserAgent({
-    platform: form.platform,
+    platform: uaPlatform,
     browserType
   });
 }
@@ -266,8 +282,12 @@ watch(() => uiStore.editModalVisible, async (visible) => {
     form.debugPort = p.debugPort || null;
     form.customArgs = p.customArgs || '';
     form.browserVersionPreset = toBrowserVersionPreset(fp.uaMode, fp.browserType, fp.browserMajorVersion);
-    form.platform = fp.platform || 'Win32';
+    // If profile was created with "Auto Random" platform (platformMode='auto'),
+    // show 'auto' in the dropdown so users can flip it off. Otherwise show the
+    // concrete platform they picked.
+    form.platform = fp.platformMode === 'auto' ? 'auto' : (fp.platform || 'Win32');
     form.customUserAgent = fp.userAgent || '';
+    form.resetOnLaunch = !!p.resetOnLaunch;
 
     // Timezone
     form.timezone = fp.timezone || 'Auto';
@@ -362,11 +382,13 @@ async function handleSave() {
         browserType: browserPreset.browserType,
         browserMajorVersion: browserPreset.browserMajorVersion,
         platform: form.platform,
+        platformMode: form.platform === 'auto' ? 'auto' : 'fixed',
         userAgent: trimmedUa || null
       },
       debugPort: form.debugPort,
       customArgs: form.customArgs,
-      ignoreCertErrors: true
+      ignoreCertErrors: true,
+      resetOnLaunch: !!form.resetOnLaunch
     };
 
     // 这一步彻底洗掉 Vue 的 Proxy 深度监控包装，防止 Electron 的原生底层报错 "An object could not be cloned"
@@ -501,5 +523,40 @@ async function handleSave() {
 .profile-notes-textarea {
   min-height: 86px;
   resize: vertical;
+}
+
+.reset-toggle {
+  display: flex;
+  align-items: flex-start;
+  gap: 10px;
+  padding: 10px 12px;
+  border: 1px solid var(--border);
+  border-radius: 8px;
+  cursor: pointer;
+  background: rgba(255, 255, 255, 0.03);
+  transition: background 0.15s, border-color 0.15s;
+}
+.reset-toggle:hover {
+  background: rgba(255, 255, 255, 0.06);
+  border-color: var(--accent);
+}
+.form-fieldset[disabled] .reset-toggle {
+  cursor: not-allowed;
+  opacity: 0.7;
+}
+.reset-toggle input[type="checkbox"] {
+  margin: 3px 0 0 0;
+  width: 15px;
+  height: 15px;
+  cursor: pointer;
+  accent-color: var(--accent);
+}
+.reset-toggle-checkmark { display: none; }
+.reset-toggle-body { flex: 1; min-width: 0; }
+.reset-toggle-title {
+  font-size: 13px;
+  font-weight: 600;
+  color: var(--text-primary);
+  margin-bottom: 3px;
 }
 </style>
