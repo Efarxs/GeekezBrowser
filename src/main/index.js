@@ -2,7 +2,6 @@ const { app, BrowserWindow, ipcMain, dialog, screen, shell, Tray, Menu, nativeIm
 const path = require('path');
 const fs = require('fs-extra');
 const { spawn, exec, execSync } = require('child_process');
-const puppeteer = require('puppeteer'); // 使用原生 puppeteer，不带 extra
 const yaml = require('js-yaml');
 const http = require('http');
 const https = require('https');
@@ -13,6 +12,7 @@ const crypto = require('crypto');
 const zlib = require('zlib');
 const { promisify } = require('util');
 const { getChromiumPath: resolveChromiumPathForApp, getChromiumVersion: resolveChromiumVersionForApp } = require('./chromium-path');
+const { withHeadlessChromeCookies } = require('./cdp-cookie-client');
 const { CLOSE_BEHAVIOR, normalizeCloseBehavior, resolveCloseBehavior } = require('./close-behavior');
 const { fetchLatestGitHubReleaseInfo } = require('./release-check');
 const { resolveXrayAssetName } = require('./xray-assets');
@@ -69,7 +69,7 @@ async function createSocksProxyAgent(proxyUrl) {
 // Only disable if GPU compatibility issues occur
 
 import { generateXrayConfig, parseProxyLink, getProxyRemark } from './utils';
-import { generateFingerprint, getInjectScript, getGeolocationScript, getWatermarkScript } from './fingerprint';
+import { generateFingerprint, getGeolocationScript, getWatermarkScript } from './fingerprint';
 
 const isDev = !app.isPackaged;
 const RESOURCES_BIN = isDev ? path.join(app.getAppPath(), 'resources', 'bin') : path.join(process.resourcesPath, 'bin');
@@ -2000,15 +2000,10 @@ async function handleApiRequest(method, pathname, body, params, context = {}) {
             // 2. CDP Cookie + 密码解密
             if (!backupData.browserData[profile.id]) backupData.browserData[profile.id] = {};
             try {
-                const browser = await puppeteer.launch({
-                    headless: 'new', executablePath: chromePath, userDataDir: profileDataDir,
-                    args: ['--no-first-run', '--disable-extensions', '--disable-sync', '--disable-gpu'],
-                    defaultViewport: null, ignoreDefaultArgs: ['--enable-automation'],
+                const cookies = await withHeadlessChromeCookies(chromePath, profileDataDir, async (session) => {
+                    const { cookies } = await session.send('Network.getAllCookies');
+                    return cookies;
                 });
-                const page = (await browser.pages())[0] || await browser.newPage();
-                const client = await page.createCDPSession();
-                const { cookies } = await client.send('Network.getAllCookies');
-                await browser.close();
                 backupData.browserData[profile.id]._cookies = cookies;
             } catch (err) { }
             try {
@@ -2156,6 +2151,28 @@ function forceKill(pid) {
     });
 }
 
+function isBrowserProcessAlive(pid) {
+    if (!pid) return false;
+    try {
+        process.kill(pid, 0);
+        return true;
+    } catch (e) {
+        return false;
+    }
+}
+
+async function focusExistingBrowserWindow(profileId) {
+    const proc = activeProcesses[profileId];
+    if (!proc || !proc.browserPid) return false;
+    if (process.platform === 'win32') {
+        return new Promise((resolve) => {
+            const script = `Add-Type -TypeDefinition 'using System;using System.Runtime.InteropServices;public class WA{[DllImport(\\"user32.dll\\")]public static extern bool ShowWindowAsync(IntPtr hWnd,int nCmdShow);[DllImport(\\"user32.dll\\")]public static extern bool SetForegroundWindow(IntPtr hWnd);}';$p=Get-Process -Id ${proc.browserPid} -ErrorAction SilentlyContinue;if($p -and $p.MainWindowHandle -ne 0){[WA]::ShowWindowAsync($p.MainWindowHandle,9)|Out-Null;[WA]::SetForegroundWindow($p.MainWindowHandle)|Out-Null}`;
+            exec(`powershell -NoProfile -NonInteractive -Command "${script.replace(/"/g, '\\"')}"`, { timeout: 3000 }, () => resolve(true));
+        });
+    }
+    return false;
+}
+
 function getChromiumPath() {
     return resolveChromiumPathForApp({
         isDev,
@@ -2262,24 +2279,9 @@ function emitProfileLaunchProgress(sender, payload) {
 
 async function focusRunningProfileWindow(profileId) {
     const proc = activeProcesses[profileId];
-    if (!proc || !proc.browser) return false;
-
+    if (!proc || !proc.browserPid) return false;
     try {
-        const pages = await proc.browser.pages();
-        if (!pages || pages.length === 0) return false;
-
-        const preferred = pages.find((page) => {
-            try {
-                const url = String(page.url() || '').toLowerCase();
-                return url && url !== 'about:blank' && url !== 'chrome://newtab/' && url !== 'chrome://new-tab-page/';
-            } catch (e) {
-                return false;
-            }
-        }) || pages[0];
-
-        if (!preferred) return false;
-        await preferred.bringToFront();
-        try { app.focus({ steal: true }); } catch (e) { }
+        await focusExistingBrowserWindow(profileId);
         return true;
     } catch (e) {
         return false;
@@ -2340,8 +2342,12 @@ async function cleanupProfileRuntime(profileId, options = {}) {
     if (proc.logFd !== undefined) {
         try { fs.closeSync(proc.logFd); } catch (e) { }
     }
-    if (closeBrowser && proc.browser) {
-        try { await proc.browser.close(); } catch (e) { }
+    if (closeBrowser && proc.browserPid) {
+        try { await forceKill(proc.browserPid); } catch (e) { }
+        appendProxyTunnelLog(proc.tunnelLogPath, 'browser.close', {
+            profileId,
+            pid: proc.browserPid
+        });
     }
     if (proc.sshTunnel && typeof proc.sshTunnel.close === 'function') {
         try { await proc.sshTunnel.close(); } catch (e) { }
@@ -2377,14 +2383,9 @@ async function reconcileActiveProcesses(options = {}) {
 
     for (const profileId of profileIds) {
         const proc = activeProcesses[profileId];
-        let connected = false;
-        try {
-            connected = !!(proc && proc.browser && proc.browser.isConnected());
-        } catch (e) {
-            connected = false;
-        }
+        const alive = !!(proc && isBrowserProcessAlive(proc.browserPid));
 
-        if (!connected) {
+        if (!alive) {
             // eslint-disable-next-line no-await-in-loop
             const didClean = await cleanupProfileRuntime(profileId, {
                 closeBrowser: false,
@@ -2791,411 +2792,48 @@ async function generateExtension(profilePath, fingerprint, profileId, options = 
     const extDir = path.join(profilePath, 'extension');
     await fs.ensureDir(extDir);
 
-    // 读取已保存的密码 (解密)
-    const pwFile = path.join(DATA_PATH, profileId, 'passwords.json');
-    const passwords = await readEncryptedPasswords(pwFile, profileId);
+    const { profileName, watermarkStyle, includeWatermark = true } = options;
+    const watermarkContent = includeWatermark
+        ? getWatermarkScript(profileName || profileId || 'Profile', watermarkStyle || 'enhanced')
+        : null;
+    const geoScriptContent = getGeolocationScript(fingerprint);
 
-    // 内部扩展固定使用独立端口 12139
-    const apiPort = 12139;
+    const contentScripts = [
+        {
+            matches: ["<all_urls>"],
+            js: ["geo.js"],
+            run_at: "document_start",
+            all_frames: true,
+            match_about_blank: true,
+            match_origin_as_fallback: true,
+            world: "MAIN"
+        }
+    ];
+    if (watermarkContent) {
+        contentScripts.push({
+            matches: ["<all_urls>"],
+            js: ["watermark.js"],
+            run_at: "document_idle",
+            all_frames: false,
+            match_about_blank: true,
+            match_origin_as_fallback: true,
+            world: "ISOLATED"
+        });
+    }
 
     const manifest = {
         manifest_version: 3,
         name: "GeekEZ Guard",
-        version: "1.1.0",
-        description: "Privacy & Password Protection",
-        permissions: ["storage", "activeTab"],
-        host_permissions: ["http://127.0.0.1/*", "http://localhost/*"],
-        background: { service_worker: "background.js" },
-        content_scripts: [
-            {
-                matches: ["<all_urls>"],
-                js: ["geo.js", "content.js"],
-                run_at: "document_start",
-                all_frames: true,
-                match_about_blank: true,
-                match_origin_as_fallback: true,
-                world: "MAIN"
-            },
-            {
-                matches: ["<all_urls>"],
-                js: ["content_pw.js"],
-                run_at: "document_idle",
-                all_frames: false,
-                match_about_blank: true,
-                match_origin_as_fallback: true,
-                world: "ISOLATED"
-            }
-        ],
-        action: { default_popup: "popup.html" }
+        version: "1.2.0",
+        description: "Geolocation spoofing and profile watermark for GeekEZ Browser.",
+        permissions: ["storage"],
+        content_scripts: contentScripts
     };
-    const geoScriptContent = getGeolocationScript(fingerprint);
-    const scriptContent = getInjectScript(fingerprint, options);
     await fs.writeJson(path.join(extDir, 'manifest.json'), manifest);
     await fs.writeFile(path.join(extDir, 'geo.js'), geoScriptContent);
-    await fs.writeFile(path.join(extDir, 'content.js'), scriptContent);
-
-    // --- background.js ---
-    const backgroundJs = `
-const PROFILE_ID = ${JSON.stringify(profileId || '')};
-const API_PORT = ${apiPort};
-const INIT_PASSWORDS = ${JSON.stringify(passwords)};
-
-// 初始化密码数据
-chrome.runtime.onInstalled.addListener(() => { initPasswords(); });
-chrome.runtime.onStartup.addListener(() => { initPasswords(); });
-
-async function initPasswords() {
-    const { geekez_passwords } = await chrome.storage.local.get('geekez_passwords');
-    if (!geekez_passwords || geekez_passwords.length === 0) {
-        if (INIT_PASSWORDS.length > 0) {
-            await chrome.storage.local.set({ geekez_passwords: INIT_PASSWORDS });
-        }
+    if (watermarkContent) {
+        await fs.writeFile(path.join(extDir, 'watermark.js'), watermarkContent);
     }
-}
-
-async function getPasswords() {
-    const { geekez_passwords } = await chrome.storage.local.get('geekez_passwords');
-    return geekez_passwords || [];
-}
-
-async function savePassword(entry) {
-    const pws = await getPasswords();
-    const idx = pws.findIndex(p => p.origin === entry.origin && p.username === entry.username);
-    const now = Date.now();
-    if (idx > -1) {
-        pws[idx] = { ...pws[idx], ...entry, updatedAt: now };
-    } else {
-        pws.push({ ...entry, createdAt: now, updatedAt: now });
-    }
-    await chrome.storage.local.set({ geekez_passwords: pws });
-    syncToElectron(pws);
-    return pws;
-}
-
-async function deletePassword(origin, username) {
-    let pws = await getPasswords();
-    pws = pws.filter(p => !(p.origin === origin && p.username === username));
-    await chrome.storage.local.set({ geekez_passwords: pws });
-    syncToElectron(pws);
-    return pws;
-}
-
-function syncToElectron(passwords) {
-    fetch(\`http://127.0.0.1:\${API_PORT}/api/passwords/sync\`, {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ profileId: PROFILE_ID, passwords })
-    }).then(r => r.json())
-      .then(res => console.log('Sync to Electron success:', res))
-      .catch(err => console.error('Sync to Electron falied:', err));
-}
-
-chrome.runtime.onMessage.addListener((msg, sender, sendResponse) => {
-    if (msg.type === 'QUERY_PASSWORDS') {
-        getPasswords().then(pws => {
-            const matches = pws.filter(p => msg.origin && p.origin === msg.origin);
-            sendResponse({ passwords: matches });
-        });
-        return true;
-    }
-    if (msg.type === 'SAVE_PASSWORD') {
-        savePassword(msg.entry).then(pws => sendResponse({ success: true, count: pws.length }));
-        return true;
-    }
-    if (msg.type === 'DELETE_PASSWORD') {
-        deletePassword(msg.origin, msg.username).then(pws => sendResponse({ success: true, count: pws.length }));
-        return true;
-    }
-    if (msg.type === 'GET_ALL_PASSWORDS') {
-        getPasswords().then(pws => sendResponse({ passwords: pws }));
-        return true;
-    }
-});
-`;
-    await fs.writeFile(path.join(extDir, 'background.js'), backgroundJs);
-
-    // --- content_pw.js (密码自动填充 + 保存检测) ---
-    const contentPwJs = `
-(function() {
-    'use strict';
-    let fillAttempted = false;
-
-    function getOrigin() { return location.origin; }
-
-    function findPasswordFields() {
-        return Array.from(document.querySelectorAll('input[type="password"]:not([data-geekez-processed])'));
-    }
-
-    function findUsernameField(pwField) {
-        const form = pwField.closest('form') || document.body;
-        const inputs = Array.from(form.querySelectorAll('input:not([type="hidden"]):not([type="submit"]):not([type="button"]):not([type="checkbox"]):not([type="radio"])'));
-        const pwIdx = inputs.indexOf(pwField);
-        for (let i = pwIdx - 1; i >= 0; i--) {
-            const inp = inputs[i];
-            const t = (inp.type || '').toLowerCase();
-            const n = (inp.name || '').toLowerCase();
-            const id = (inp.id || '').toLowerCase();
-            const ac = (inp.autocomplete || '').toLowerCase();
-            if (t === 'email' || t === 'text' || t === 'tel' ||
-                ac.includes('username') || ac.includes('email') ||
-                n.includes('user') || n.includes('email') || n.includes('login') || n.includes('account') ||
-                id.includes('user') || id.includes('email') || id.includes('login') || id.includes('account')) {
-                return inp;
-            }
-        }
-        if (pwIdx > 0) return inputs[pwIdx - 1];
-        return null;
-    }
-
-    function createFillButton(pwField, passwords) {
-        if (passwords.length === 0) return;
-        const btn = document.createElement('div');
-        btn.setAttribute('data-geekez-fill', 'true');
-        btn.style.cssText = 'position:absolute;width:20px;height:20px;cursor:pointer;z-index:999999;background:#4285f4;border-radius:50%;display:flex;align-items:center;justify-content:center;font-size:11px;color:#fff;box-shadow:0 1px 3px rgba(0,0,0,.3);';
-        btn.textContent = 'G';
-        btn.title = 'GeeKez 自动填充';
-
-        const rect = pwField.getBoundingClientRect();
-        btn.style.position = 'absolute';
-        btn.style.left = (rect.right - 25 + window.scrollX) + 'px';
-        btn.style.top = (rect.top + (rect.height - 20) / 2 + window.scrollY) + 'px';
-
-        btn.addEventListener('click', (e) => {
-            e.preventDefault();
-            e.stopPropagation();
-            if (passwords.length === 1) {
-                doFill(pwField, passwords[0]);
-            } else {
-                showDropdown(btn, pwField, passwords);
-            }
-        });
-        document.body.appendChild(btn);
-    }
-
-    function showDropdown(anchor, pwField, passwords) {
-        const existing = document.querySelector('[data-geekez-dropdown]');
-        if (existing) existing.remove();
-        const dd = document.createElement('div');
-        dd.setAttribute('data-geekez-dropdown', 'true');
-        dd.style.cssText = 'position:absolute;z-index:9999999;background:#fff;border:1px solid #ddd;border-radius:8px;box-shadow:0 4px 12px rgba(0,0,0,.15);min-width:200px;max-height:200px;overflow-y:auto;';
-        const r = anchor.getBoundingClientRect();
-        dd.style.left = (r.left + window.scrollX) + 'px';
-        dd.style.top = (r.bottom + 4 + window.scrollY) + 'px';
-        passwords.forEach(pw => {
-            const item = document.createElement('div');
-            item.style.cssText = 'padding:8px 12px;cursor:pointer;font-size:13px;border-bottom:1px solid #f0f0f0;';
-            item.textContent = pw.username;
-            item.addEventListener('mouseenter', () => item.style.background = '#f5f5f5');
-            item.addEventListener('mouseleave', () => item.style.background = '#fff');
-            item.addEventListener('click', () => { doFill(pwField, pw); dd.remove(); });
-            dd.appendChild(item);
-        });
-        document.body.appendChild(dd);
-        setTimeout(() => document.addEventListener('click', () => dd.remove(), { once: true }), 100);
-    }
-
-    function doFill(pwField, pw) {
-        const userField = findUsernameField(pwField);
-        if (userField) setVal(userField, pw.username);
-        setVal(pwField, pw.password);
-    }
-
-    function setVal(el, val) {
-        const nativeSetter = Object.getOwnPropertyDescriptor(HTMLInputElement.prototype, 'value').set;
-        if(nativeSetter) nativeSetter.call(el, val);
-        else el.value = val;
-        el.dispatchEvent(new Event('input', { bubbles: true }));
-        el.dispatchEvent(new Event('change', { bubbles: true }));
-    }
-
-    // 保存最后输入的凭据
-    let lastCreds = { origin: getOrigin(), url: location.href, name: location.hostname };
-
-    function processPage() {
-        const pwFields = findPasswordFields();
-        if (pwFields.length === 0) return;
-        
-        pwFields.forEach(pwField => {
-            if (pwField.hasAttribute('data-geekez-processed')) return;
-            pwField.setAttribute('data-geekez-processed', 'true');
-            
-            // 记录用户输入，即使没有form submit也能捕获
-            pwField.addEventListener('blur', () => {
-                if (pwField.value) {
-                    lastCreds.password = pwField.value;
-                    const uField = findUsernameField(pwField);
-                    if (uField && uField.value) lastCreds.username = uField.value;
-                }
-            });
-            const uField = findUsernameField(pwField);
-            if (uField) {
-                uField.addEventListener('blur', () => {
-                   if (uField.value) lastCreds.username = uField.value; 
-                });
-            }
-        });
-
-        chrome.runtime.sendMessage({ type: 'QUERY_PASSWORDS', origin: getOrigin() }, (resp) => {
-            if (!resp || !resp.passwords) return;
-            pwFields.forEach(pwField => {
-                if(!pwField.hasAttribute('data-geekez-btn-added')) {
-                    pwField.setAttribute('data-geekez-btn-added', 'true');
-                    createFillButton(pwField, resp.passwords);
-                }
-                if (!fillAttempted && resp.passwords.length === 1) {
-                    fillAttempted = true;
-                    doFill(pwField, resp.passwords[0]);
-                }
-            });
-        });
-    }
-
-    // 监听表单提交 - 提示保存密码
-    function monitorSubmit() {
-        function attemptSave(pwField) {
-            let uVal = lastCreds.username, pVal = lastCreds.password;
-            if (pwField && pwField.value) pVal = pwField.value;
-            if (pwField) {
-                const uField = findUsernameField(pwField);
-                if (uField && uField.value) uVal = uField.value;
-            }
-            if (uVal && pVal) {
-                chrome.runtime.sendMessage({ type: 'SAVE_PASSWORD', entry: { ...lastCreds, username: uVal, password: pVal } });
-            }
-        }
-
-        document.addEventListener('submit', (e) => {
-            const form = e.target;
-            const pwField = form.querySelector('input[type="password"]') || Array.from(document.querySelectorAll('input[type="password"]')).pop();
-            attemptSave(pwField);
-        }, true);
-
-        // 也监听点击登录按钮 (扩大范围，捕获 div/span 等模拟按钮)
-        document.addEventListener('click', (e) => {
-            const el = e.target;
-            const text = (el.innerText || el.textContent || '').toLowerCase();
-            const btn = el.closest('button, input[type="submit"], input[type="button"], .btn, .button');
-            
-            if (btn || text.includes('log in') || text.includes('login') || text.includes('sign in') || text.includes('signin') || text.includes('登录') || text.includes('登入')) {
-                const pwField = (btn ? btn.closest('form') : null)?.querySelector('input[type="password"]') || Array.from(document.querySelectorAll('input[type="password"]')).pop();
-                attemptSave(pwField);
-            }
-        }, true);
-        
-        // 离开页面前如果有输入也尝试保存
-        window.addEventListener('beforeunload', () => {
-            if (lastCreds.username && lastCreds.password) {
-                chrome.runtime.sendMessage({ type: 'SAVE_PASSWORD', entry: lastCreds });
-            }
-        });
-    }
-
-    processPage();
-    monitorSubmit();
-    const obs = new MutationObserver(() => { setTimeout(processPage, 500); });
-    obs.observe(document.body, { childList: true, subtree: true });
-})();
-`;
-    await fs.writeFile(path.join(extDir, 'content_pw.js'), contentPwJs);
-
-    // --- popup.html ---
-    const popupHtml = `<!DOCTYPE html>
-<html><head><meta charset="utf-8">
-<style>
-*{margin:0;padding:0;box-sizing:border-box}
-body{width:320px;font-family:-apple-system,BlinkMacSystemFont,'Segoe UI',Arial,sans-serif;background:#1a1a2e;color:#e0e0e0;font-size:13px}
-.header{padding:12px 16px;background:linear-gradient(135deg,#16213e,#0f3460);display:flex;align-items:center;gap:8px}
-.header h1{font-size:15px;font-weight:600;color:#e94560}
-.header span{font-size:11px;color:#888;margin-left:auto}
-.list{max-height:300px;overflow-y:auto;padding:4px 0}
-.item{padding:10px 16px;border-bottom:1px solid #222;cursor:pointer;transition:background .15s}
-.item:hover{background:#16213e}
-.item .site{font-weight:500;color:#e94560;font-size:12px;margin-bottom:2px}
-.item .user{color:#ccc;font-size:12px}
-.item .actions{display:flex;gap:6px;margin-top:4px}
-.item .actions button{background:none;border:1px solid #444;color:#aaa;font-size:10px;padding:2px 8px;border-radius:4px;cursor:pointer}
-.item .actions button:hover{border-color:#e94560;color:#e94560}
-.empty{padding:24px 16px;text-align:center;color:#666;font-size:12px}
-.add-form{padding:12px 16px;border-top:1px solid #333}
-.add-form input{width:100%;padding:6px 8px;margin:3px 0;background:#16213e;border:1px solid #333;border-radius:4px;color:#e0e0e0;font-size:12px}
-.add-form button{width:100%;padding:6px;margin-top:6px;background:#e94560;color:#fff;border:none;border-radius:4px;cursor:pointer;font-size:12px;font-weight:500}
-.add-form button:hover{background:#c73450}
-.add-pw-btn{display:block;width:100%;padding:8px;background:none;border:none;border-top:1px solid #333;color:#e94560;cursor:pointer;font-size:12px}
-</style></head>
-<body>
-<div class="header"><h1>🔑 GeeKez</h1><span>密码管理</span></div>
-<div class="list" id="list"></div>
-<button class="add-pw-btn" id="addPwBtn">+ 添加密码</button>
-<div class="add-form" id="addForm" style="display:none">
-<input id="addUrl" placeholder="网址 URL"><input id="addUser" placeholder="用户名"><input id="addPw" type="password" placeholder="密码">
-<button id="addBtn">保存</button>
-</div>
-<script src="popup.js"></script>
-</body></html>`;
-    await fs.writeFile(path.join(extDir, 'popup.html'), popupHtml);
-
-    // --- popup.js ---
-    const popupJs = `
-document.addEventListener('DOMContentLoaded', async () => {
-    const list = document.getElementById('list');
-    const addPwBtn = document.getElementById('addPwBtn');
-    const addForm = document.getElementById('addForm');
-    const addBtn = document.getElementById('addBtn');
-
-    addPwBtn.addEventListener('click', () => {
-        addForm.style.display = addForm.style.display === 'none' ? 'block' : 'none';
-    });
-
-    addBtn.addEventListener('click', () => {
-        const url = document.getElementById('addUrl').value.trim();
-        const user = document.getElementById('addUser').value.trim();
-        const pw = document.getElementById('addPw').value;
-        if (!url || !user || !pw) return;
-        let origin;
-        try { origin = new URL(url).origin; } catch { origin = url; }
-        chrome.runtime.sendMessage({
-            type: 'SAVE_PASSWORD',
-            entry: { url, origin, username: user, password: pw, name: new URL(url).hostname || url }
-        }, () => { loadList(); addForm.style.display = 'none'; });
-    });
-
-    function loadList() {
-        chrome.runtime.sendMessage({ type: 'GET_ALL_PASSWORDS' }, (resp) => {
-            const pws = (resp && resp.passwords) || [];
-            if (pws.length === 0) {
-                list.innerHTML = '<div class="empty">暂无保存的密码</div>';
-                return;
-            }
-            list.innerHTML = pws.map(pw => \`
-                <div class="item">
-                    <div class="site">\${esc(pw.name || pw.origin)}</div>
-                    <div class="user">\${esc(pw.username)}</div>
-                    <div class="actions">
-                        <button data-action="copy" data-pw="\${esc(pw.password)}">复制密码</button>
-                        <button data-action="delete" data-origin="\${esc(pw.origin)}" data-user="\${esc(pw.username)}">删除</button>
-                    </div>
-                </div>
-            \`).join('');
-
-            list.querySelectorAll('[data-action="copy"]').forEach(btn => {
-                btn.addEventListener('click', () => {
-                    navigator.clipboard.writeText(btn.dataset.pw).then(() => { btn.textContent = '✓ 已复制'; setTimeout(() => btn.textContent = '复制密码', 1500); });
-                });
-            });
-            list.querySelectorAll('[data-action="delete"]').forEach(btn => {
-                btn.addEventListener('click', () => {
-                    chrome.runtime.sendMessage({ type: 'DELETE_PASSWORD', origin: btn.dataset.origin, username: btn.dataset.user }, () => loadList());
-                });
-            });
-        });
-    }
-
-    function esc(s) { const d = document.createElement('div'); d.textContent = s || ''; return d.innerHTML; }
-    loadList();
-});
-`;
-    await fs.writeFile(path.join(extDir, 'popup.js'), popupJs);
-
     return extDir;
 }
 
@@ -4619,18 +4257,10 @@ ipcMain.handle('export-full-backup', async (e, { profileIds, password, filePath 
 
             // 2a. Cookie: 无头启动浏览器 → CDP 获取明文 Cookie
             try {
-                const browser = await puppeteer.launch({
-                    headless: 'new',
-                    executablePath: chromePath,
-                    userDataDir: profileDataDir,
-                    args: ['--no-first-run', '--disable-extensions', '--disable-sync', '--disable-gpu'],
-                    defaultViewport: null,
-                    ignoreDefaultArgs: ['--enable-automation'],
+                const cookies = await withHeadlessChromeCookies(chromePath, profileDataDir, async (session) => {
+                    const { cookies } = await session.send('Network.getAllCookies');
+                    return cookies;
                 });
-                const page = (await browser.pages())[0] || await browser.newPage();
-                const client = await page.createCDPSession();
-                const { cookies } = await client.send('Network.getAllCookies');
-                await browser.close();
                 backupData.browserData[profile.id]._cookies = cookies;
                 console.log(`已导出 ${cookies.length} 个 Cookie (${profile.id})`);
             } catch (err) {
@@ -4774,14 +4404,8 @@ ipcMain.handle('import-full-backup', async (e, { filePath, password }) => {
             if (hasCookies || hasPasswords) {
                 // 先启动浏览器处理 Cookie（这也会生成 Local State 和加密密钥）
                 try {
-                    const browser = await puppeteer.launch({
-                        headless: 'new', executablePath: chromePath, userDataDir: profileDataDir,
-                        args: ['--no-first-run', '--disable-extensions', '--disable-sync', '--disable-gpu'],
-                        defaultViewport: null, ignoreDefaultArgs: ['--enable-automation'],
-                    });
-                    if (hasCookies) {
-                        const page = (await browser.pages())[0] || await browser.newPage();
-                        const client = await page.createCDPSession();
+                    await withHeadlessChromeCookies(chromePath, profileDataDir, async (session) => {
+                        if (!hasCookies) return;
                         let cookieCount = 0;
                         for (const cookie of browserFiles._cookies) {
                             try {
@@ -4792,13 +4416,12 @@ ipcMain.handle('import-full-backup', async (e, { filePath, password }) => {
                                     sameSite: cookie.sameSite || 'Lax',
                                 };
                                 if (cookie.expires > 0) params.expires = cookie.expires;
-                                await client.send('Network.setCookie', params);
+                                await session.send('Network.setCookie', params);
                                 cookieCount++;
                             } catch (ce) { }
                         }
                         console.log(`已导入 ${cookieCount}/${browserFiles._cookies.length} 个 Cookie (${profileId})`);
-                    }
-                    await browser.close();
+                    });
                     // 等待浏览器完全释放文件锁
                     await new Promise(r => setTimeout(r, 1000));
                 } catch (err) {
@@ -4949,39 +4572,17 @@ const launchProfileHandler = async (event, profileId, preferredLang, launchOptio
 
     if (activeProcesses[profileId]) {
         const proc = activeProcesses[profileId];
-        if (proc.browser && proc.browser.isConnected()) {
-            try {
-                const targets = await proc.browser.targets();
-                const pageTarget = targets.find(t => t.type() === 'page');
-                if (pageTarget) {
-                    const page = await pageTarget.page();
-                    if (page) {
-                        const session = await pageTarget.createCDPSession();
-                        const { windowId } = await session.send('Browser.getWindowForTarget');
-                        await session.send('Browser.setWindowBounds', { windowId, bounds: { windowState: 'minimized' } });
-                        setTimeout(async () => {
-                            try { await session.send('Browser.setWindowBounds', { windowId, bounds: { windowState: 'normal' } }); } catch (e) { }
-                        }, 100);
-                        await page.bringToFront();
-                    }
-                }
-                return "环境已唤醒";
-            } catch (e) {
-                await cleanupProfileRuntime(profileId, {
-                    closeBrowser: false,
-                    killXray: true,
-                    refreshMenu: true,
-                    broadcast: true
-                });
-            }
-        } else {
-            await cleanupProfileRuntime(profileId, {
-                closeBrowser: false,
-                killXray: true,
-                refreshMenu: true,
-                broadcast: true
-            });
+        const alive = isBrowserProcessAlive(proc.browserPid);
+        if (alive) {
+            focusExistingBrowserWindow(profileId).catch(() => { });
+            return "环境已唤醒";
         }
+        await cleanupProfileRuntime(profileId, {
+            closeBrowser: false,
+            killXray: true,
+            refreshMenu: true,
+            broadcast: true
+        });
         if (activeProcesses[profileId]) return "环境已唤醒";
     }
 
@@ -5060,10 +4661,13 @@ const launchProfileHandler = async (event, profileId, preferredLang, launchOptio
     let xrayProcess = null;
     let sshTunnel = null;
     let logFd;
-    let browser = null;
+    let browserProcess = null;
+    const useCleanProfile = !!launchOptions.useCleanProfile;
     try {
         const profileDir = path.join(DATA_PATH, profileId);
-        const userDataDir = path.join(profileDir, 'browser_data');
+        const userDataDir = useCleanProfile
+            ? path.join(profileDir, 'browser_data_clean')
+            : path.join(profileDir, 'browser_data');
         const tunnelLogPath = path.join(profileDir, 'proxy_tunnel.log');
         fs.ensureDirSync(userDataDir);
 
@@ -5356,11 +4960,50 @@ const launchProfileHandler = async (event, profileId, preferredLang, launchOptio
 
         // fingerprint-chromium 是唯一内核
         const chromePath = getChromiumPath();
-        const isFingerprintChromium = true;
         const chromiumVersion = getChromiumVersion(); // e.g., "148.0.7778.215"
 
-        // 1. 生成 GeekEZ Guard 扩展
-        const extPath = await generateExtension(profileDir, profile.fingerprint, profileId, { useFingerprintChromium: isFingerprintChromium, browserVersion: chromiumVersion });
+        if (!chromePath) {
+            if (xrayProcess && xrayProcess.pid) {
+                await forceKill(xrayProcess.pid);
+            }
+            throw new Error("Chrome binary not found.");
+        }
+
+        // Auto-IP-base: resolve geo/timezone from proxy exit BEFORE spawn so kernel args reflect it.
+        try {
+            const policy = getAutoIpBasePolicy(profile.fingerprint);
+            if (policy.enabled && localPort) {
+                updateLaunchProgress(
+                    70,
+                    preferredLang === 'en' ? 'Resolving proxy geolocation...' : '正在根据出口 IP 解析地理信息...',
+                    true,
+                    { step: 6, profileName: progressProfileName }
+                );
+                const resolved = await resolveAutoIpBaseFingerprintAfterLaunch(profileId, profile.fingerprint, localPort);
+                if (resolved && resolved.fingerprint) {
+                    profile.fingerprint = resolved.fingerprint;
+                    const parts = [];
+                    if (resolved.policy.location && hasValidGeolocation(profile.fingerprint.geolocation)) {
+                        parts.push(`geo=${profile.fingerprint.geolocation.latitude},${profile.fingerprint.geolocation.longitude}`);
+                    }
+                    if (resolved.policy.timezone && isValidTimezoneId(profile.fingerprint.timezone)) {
+                        parts.push(`timezone=${profile.fingerprint.timezone}`);
+                    }
+                    console.log(`[Auto IP Base] ${profile.name || profileId}: ${resolved.cacheHit ? 'reused cache' : 'refreshed'} ip=${resolved.source.ip}${parts.length ? ` ${parts.join(' ')}` : ''}`);
+                }
+            }
+        } catch (err) {
+            console.warn(`[Auto IP Base] ${profile.name || profileId}: ${err?.message || err}`);
+        }
+
+        // 1. 生成 GeekEZ Guard 扩展（仅地理位置 + 水印）
+        const enableWatermark = settings.enableWatermark !== false;
+        const watermarkStyleSetting = settings.watermarkStyle || 'enhanced';
+        const extPath = await generateExtension(profileDir, profile.fingerprint, profileId, {
+            profileName: profile.name || profileId,
+            watermarkStyle: watermarkStyleSetting,
+            includeWatermark: enableWatermark
+        });
 
         // 2. 获取当前环境需要加载的用户扩展
         updateLaunchProgress(
@@ -5369,20 +5012,16 @@ const launchProfileHandler = async (event, profileId, preferredLang, launchOptio
             true,
             { step: 7, profileName: progressProfileName }
         );
-        const userExtensions = getProfileUserExtensions(settings, profileId);
+        const userExtensions = useCleanProfile ? [] : getProfileUserExtensions(settings, profileId);
         for (const ext of userExtensions) {
             await patchExtensionInstallBehavior(ext.path).catch(() => { });
             const extStoreId = sanitizeExtensionStoreId(ext.storeId) || sanitizeExtensionStoreId(String(ext.id || '').replace(/^store_/, ''));
             await patchKnownExtensionOnboarding(ext.path, extStoreId).catch(() => { });
         }
-        const userExtPaths = userExtensions.map(ext => ext.path);
+        const extPaths = [extPath, ...userExtensions.map(ext => ext.path)].join(',');
+        const shouldRestoreSession = !useCleanProfile && hasRestorableSession(userDataDir);
 
-        // 3. 合并所有扩展路径
-        const extPaths = [extPath, ...userExtPaths].join(',');
-        const shouldRestoreSession = hasRestorableSession(userDataDir);
-
-        // 4. 构建启动参数（性能优化）
-
+        // 3. 构建启动参数（内核指纹 + 隐蔽性去噪）
         const disabledFeatures = [
             'IsolateOrigins',
             'site-per-process',
@@ -5398,56 +5037,65 @@ const launchProfileHandler = async (event, profileId, preferredLang, launchOptio
             `--window-size=${profile.fingerprint?.window?.width || 1280},${profile.fingerprint?.window?.height || 800}`,
             `--disable-features=${disabledFeatures.join(',')}`,
             '--force-webrtc-ip-handling-policy=disable_non_proxied_udp',
-            `--disable-extensions-except=${extPaths}`,
-            `--load-extension=${extPaths}`,
-            // 性能优化参数
-            '--no-first-run',                    // 跳过首次运行向导
-            '--no-default-browser-check',        // 跳过默认浏览器检查
-            '--disable-session-crashed-bubble',  // 隐藏恢复会话提示气泡
-            '--disable-background-timer-throttling', // 防止后台标签页被限速
+            '--no-first-run',
+            '--no-default-browser-check',
+            '--disable-session-crashed-bubble',
+            '--disable-background-timer-throttling',
             '--disable-backgrounding-occluded-windows',
             '--disable-renderer-backgrounding',
-            '--disable-dev-shm-usage',           // 减少共享内存使用
-            '--disk-cache-size=52428800',        // 限制磁盘缓存为 50MB
-            '--media-cache-size=52428800'        // 限制媒体缓存为 50MB
+            '--disable-dev-shm-usage',
+            '--disable-background-networking',
+            '--disable-sync',
+            '--disable-component-update',
+            '--no-service-autorun',
+            '--password-store=basic',
+            '--disk-cache-size=52428800',
+            '--media-cache-size=52428800'
         ];
+        if (extPaths) {
+            launchArgs.push(`--load-extension=${extPaths}`);
+            launchArgs.push(`--disable-extensions-except=${extPaths}`);
+        }
         if (shouldRestoreSession) {
             launchArgs.push('--restore-last-session');
         }
 
         if (localPort) {
             launchArgs.unshift(`--proxy-server=socks5://127.0.0.1:${localPort}`);
+            launchArgs.push('--proxy-bypass-list=<local>');
         } else {
             launchArgs.unshift('--no-proxy-server');
         }
 
-        const shouldSpoofUa = profile.fingerprint?.uaMode !== 'none';
-        // fingerprint-chromium 通过 --fingerprint-platform/brand 处理 UA，不需要 --user-agent
-        if (shouldSpoofUa && !isFingerprintChromium && profile.fingerprint?.userAgent) {
-            launchArgs.push(`--user-agent=${profile.fingerprint.userAgent}`);
-        }
         if (hasLanguageOverride) {
             launchArgs.push(`--lang=${targetLang}`);
             launchArgs.push(`--accept-lang=${targetLang}`);
         }
 
         // fingerprint-chromium 引擎级指纹伪装
-        if (isFingerprintChromium) {
+        const shouldSpoofUa = profile.fingerprint?.uaMode !== 'none';
+        const customUserAgent = typeof profile.fingerprint?.userAgent === 'string'
+            ? profile.fingerprint.userAgent.trim()
+            : '';
+        {
             const fpSeed = generateFingerprintSeed(profileId);
-            // --fingerprint=<seed> 是核心：seed 驱动所有指纹（WebGL, Canvas, Audio, UA, fonts 等）
             launchArgs.push(`--fingerprint=${fpSeed}`);
             launchArgs.push('--disable-non-proxied-udp');
 
             const fcBrand = resolveFingerprintChromiumBrand(profile.fingerprint);
             launchArgs.push(`--fingerprint-brand=${fcBrand}`);
+            let fcBrandVersion = '';
             if (shouldSpoofUa) {
-                const fcBrandVersion = resolveFingerprintChromiumBrandVersion(profile.fingerprint, chromiumVersion);
+                fcBrandVersion = resolveFingerprintChromiumBrandVersion(profile.fingerprint, chromiumVersion);
+                if (customUserAgent) {
+                    const uaMatch = customUserAgent.match(/(?:Edg|Chrome)\/(\d+\.\d+\.\d+\.\d+)/);
+                    if (uaMatch) fcBrandVersion = uaMatch[1];
+                }
                 if (fcBrandVersion) {
                     launchArgs.push(`--fingerprint-brand-version=${fcBrandVersion}`);
                 }
             }
 
-            // 平台（与 fingerprint.platform 一致）
             const fcPlatform = resolveFingerprintChromiumPlatform(profile.fingerprint?.platform);
             launchArgs.push(`--fingerprint-platform=${fcPlatform}`);
             const fcPlatformVersion = resolveFingerprintChromiumPlatformVersion(profile.fingerprint);
@@ -5455,7 +5103,6 @@ const launchProfileHandler = async (event, profileId, preferredLang, launchOptio
                 launchArgs.push(`--fingerprint-platform-version=${fcPlatformVersion}`);
             }
 
-            // 硬件参数
             if (profile.fingerprint?.hardwareConcurrency) {
                 launchArgs.push(`--fingerprint-hardware-concurrency=${profile.fingerprint.hardwareConcurrency}`);
             }
@@ -5463,21 +5110,21 @@ const launchProfileHandler = async (event, profileId, preferredLang, launchOptio
                 launchArgs.push(`--fingerprint-device-memory=${profile.fingerprint.deviceMemory}`);
             }
 
-            // 时区（引擎级，替代 env.TZ）
             if (profile.fingerprint?.timezone && !isAutoTimezoneValue(profile.fingerprint.timezone)) {
                 launchArgs.push(`--timezone=${profile.fingerprint.timezone}`);
             }
 
-            // 注意：Chrome 144+ 已移除 --fingerprint-webgl-vendor/renderer、--fingerprint-canvas-noise、--fingerprint-audio-noise
-            // WebGL/Canvas/Audio 噪声由 --fingerprint=<seed> 自动派生
-            // 引擎已内置：navigator.webdriver=false, plugins, ClientRects, fonts
+            if (customUserAgent) {
+                launchArgs.push(`--user-agent=${customUserAgent}`);
+            }
+
             console.log('🔒 fingerprint-chromium engine mode active');
-            console.log(`   Seed: ${fpSeed}, Platform: ${fcPlatform}, Brand: ${fcBrand}`);
+            console.log(`   Seed: ${fpSeed}, Platform: ${fcPlatform}, Brand: ${fcBrand}${customUserAgent ? ', custom UA' : ''}`);
         }
 
-        // 5. Remote Debugging Port (if enabled)
+        // 4. Remote Debugging Port (仅显式开启且非干净模式)
         const remoteDebugPort = normalizeDebugPort(profile.debugPort);
-        if (settings.enableRemoteDebugging && remoteDebugPort) {
+        if (!useCleanProfile && settings.enableRemoteDebugging && remoteDebugPort) {
             launchArgs.push(`--remote-debugging-port=${remoteDebugPort}`);
             console.log('━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━');
             console.log('⚠️  REMOTE DEBUGGING ENABLED');
@@ -5487,8 +5134,8 @@ const launchProfileHandler = async (event, profileId, preferredLang, launchOptio
             console.log('━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━');
         }
 
-        // 6. Custom Launch Arguments (if enabled)
-        if (settings.enableCustomArgs && profile.customArgs) {
+        // 5. Custom Launch Arguments (if enabled)
+        if (!useCleanProfile && settings.enableCustomArgs && profile.customArgs) {
             const customArgsList = profile.customArgs
                 .split(/[\n\s]+/)
                 .map(arg => arg.trim())
@@ -5500,7 +5147,7 @@ const launchProfileHandler = async (event, profileId, preferredLang, launchOptio
             }
         }
 
-        if (launchArgsOverride.length > 0) {
+        if (!useCleanProfile && launchArgsOverride.length > 0) {
             launchArgs.push(...launchArgsOverride);
             console.log('⚡ API Launch Args Override:', launchArgsOverride.join(' '));
             updateLaunchProgress(
@@ -5519,30 +5166,55 @@ const launchProfileHandler = async (event, profileId, preferredLang, launchOptio
             true,
             { step: 8, profileName: progressProfileName }
         );
-        // 5. 启动浏览器
-        if (!chromePath) {
-            if (xrayProcess && xrayProcess.pid) {
-                await forceKill(xrayProcess.pid);
+
+        // 6. spawn 直接启动，不带 CDP 连接
+        const spawnEnv = { ...process.env };
+        appendProxyTunnelLog(tunnelLogPath, 'runtime.browser.spawn', {
+            profileId,
+            chromePath,
+            cleanProfile: useCleanProfile,
+            argCount: launchArgs.length
+        });
+        browserProcess = spawn(chromePath, launchArgs, {
+            cwd: path.dirname(chromePath),
+            env: spawnEnv,
+            stdio: 'ignore',
+            windowsHide: false,
+            detached: false
+        });
+        browserProcess.once('error', (err) => {
+            appendProxyTunnelLog(tunnelLogPath, 'browser.spawn.error', {
+                profileId,
+                message: err?.message || String(err)
+            });
+        });
+        const browserPid = browserProcess.pid;
+        browserProcess.once('exit', async (code, signal) => {
+            appendProxyTunnelLog(tunnelLogPath, 'browser.exit', {
+                profileId,
+                pid: browserPid,
+                code,
+                signal
+            });
+            if (activeProcesses[profileId]) {
+                await cleanupProfileRuntime(profileId, {
+                    closeBrowser: false,
+                    killXray: true,
+                    refreshMenu: false,
+                    broadcast: true
+                });
+
+                if (!useCleanProfile) {
+                    try {
+                        const cacheDir = path.join(userDataDir, 'Default', 'Cache');
+                        const codeCacheDir = path.join(userDataDir, 'Default', 'Code Cache');
+                        if (fs.existsSync(cacheDir)) await fs.emptyDir(cacheDir);
+                        if (fs.existsSync(codeCacheDir)) await fs.emptyDir(codeCacheDir);
+                    } catch (e) { }
+                }
+
+                refreshTrayMenu().catch(() => { });
             }
-            throw new Error("Chrome binary not found.");
-        }
-
-        // 时区设置（fingerprint-chromium 通过 --timezone 处理，不需要 env.TZ）
-        const env = { ...process.env };
-        if (!isFingerprintChromium && profile.fingerprint?.timezone && !isAutoTimezoneValue(profile.fingerprint.timezone)) {
-            env.TZ = profile.fingerprint.timezone;
-        }
-
-        browser = await puppeteer.launch({
-            headless: false,
-            executablePath: chromePath,
-            userDataDir: userDataDir,
-            args: launchArgs,
-            defaultViewport: null,
-            ignoreDefaultArgs: ['--enable-automation'],
-            pipe: false,
-            dumpio: false,
-            env: env  // 注入环境变量
         });
 
         updateLaunchProgress(
@@ -5552,321 +5224,22 @@ const launchProfileHandler = async (event, profileId, preferredLang, launchOptio
             { step: 9, profileName: progressProfileName }
         );
 
-        const shortLang = targetLang.includes('-') ? targetLang.split('-')[0] : targetLang;
-        const acceptLanguageHeader = shortLang && shortLang !== targetLang
-            ? `${targetLang},${shortLang};q=0.9`
-            : targetLang;
-        let runtimeFingerprint = profile.fingerprint;
-        let geolocationScript = getGeolocationScript(runtimeFingerprint);
-        let fingerprintInjectScript = getInjectScript(runtimeFingerprint, { useFingerprintChromium: isFingerprintChromium, browserVersion: chromiumVersion });
-
-        const enableWatermark = settings.enableWatermark !== false;
-        const watermarkStyleSetting = settings.watermarkStyle || 'enhanced';
-        const watermarkScript = enableWatermark
-            ? getWatermarkScript(profile.name || profileId, watermarkStyleSetting)
-            : null;
-        // fingerprint-chromium 已在引擎级处理 WebGL，不需要 JS 层覆盖
-        const enableWebglOverride = !isFingerprintChromium && !!(
-            profile.fingerprint?.webglProfile !== 'none' &&
-            profile.fingerprint?.webgl &&
-            !profile.fingerprint?.webgl?.disabled
-        );
-        const webglOverrideScript = (() => {
-            if (!enableWebglOverride) return '(()=>{})();';
-            const webglJson = JSON.stringify(profile.fingerprint?.webgl || {});
-            return `
-(() => {
-  try {
-    const webglInfo = ${webglJson};
-    const PATCHED_KEY = '__geekezDirectWebglPatched__';
-    const debugExt = { UNMASKED_VENDOR_WEBGL: 37445, UNMASKED_RENDERER_WEBGL: 37446 };
-
-    const caps = (() => {
-      const renderer = String(webglInfo.unmaskedRenderer || webglInfo.renderer || '').toLowerCase();
-      const vendor = String(webglInfo.unmaskedVendor || webglInfo.vendor || '').toLowerCase();
-      const isHigh = renderer.includes('apple') || renderer.includes('nvidia') || renderer.includes('amd') || renderer.includes('radeon') || vendor.includes('apple') || vendor.includes('nvidia') || vendor.includes('ati');
-      const texture = isHigh ? 32768 : 16384;
-      const vertexUniforms = isHigh ? 4096 : 2048;
-      const fragmentUniforms = isHigh ? 2048 : 1024;
-      const varying = isHigh ? 32 : 30;
-      return {
-        3379: texture,
-        34076: texture,
-        34024: texture,
-        34921: 16,
-        34930: 16,
-        35660: 16,
-        35661: 32,
-        36347: vertexUniforms,
-        36348: varying,
-        36349: fragmentUniforms,
-        3386: new Int32Array([texture, texture]),
-        33901: new Float32Array([1, 1024]),
-        33902: new Float32Array([1, 1]),
-        34852: 8,
-        36063: 8
-      };
-    })();
-
-    const cloneCap = (value) => {
-      if (value instanceof Int32Array) return new Int32Array(value);
-      if (value instanceof Float32Array) return new Float32Array(value);
-      return value;
-    };
-
-    const patchProto = (proto) => {
-      if (!proto || proto[PATCHED_KEY]) return;
-      try {
-        const originalGetParameter = proto.getParameter;
-        const originalGetExtension = proto.getExtension;
-        const originalGetSupportedExtensions = proto.getSupportedExtensions;
-        proto.getParameter = function(param) {
-          if (param === 37445) return webglInfo.unmaskedVendor || webglInfo.vendor || 'Google Inc.';
-          if (param === 37446) return webglInfo.unmaskedRenderer || webglInfo.renderer || 'ANGLE (Unknown GPU)';
-          if (param === 7936) return webglInfo.vendor || 'Google Inc.';
-          if (param === 7937) return webglInfo.renderer || 'ANGLE (Unknown GPU)';
-          if (param === 7938) return webglInfo.version || 'WebGL 1.0 (OpenGL ES 2.0 Chromium)';
-          if (param === 35724) return webglInfo.shadingLanguageVersion || 'WebGL GLSL ES 1.0 (OpenGL ES GLSL ES 1.0 Chromium)';
-          if (Object.prototype.hasOwnProperty.call(caps, param)) return cloneCap(caps[param]);
-          return originalGetParameter.apply(this, arguments);
-        };
-        proto.getExtension = function(name) {
-          if (name === 'WEBGL_debug_renderer_info') return debugExt;
-          return originalGetExtension.apply(this, arguments);
-        };
-        if (originalGetSupportedExtensions) {
-          proto.getSupportedExtensions = function() {
-            const list = originalGetSupportedExtensions.apply(this, arguments) || [];
-            if (Array.isArray(list) && !list.includes('WEBGL_debug_renderer_info')) return list.concat(['WEBGL_debug_renderer_info']);
-            return list;
-          };
-        }
-        Object.defineProperty(proto, PATCHED_KEY, { value: true, configurable: true });
-      } catch (e) {}
-    };
-
-    const patchFactory = (factoryProto) => {
-      if (!factoryProto || !factoryProto.getContext || factoryProto.__geekezCtxPatched__) return;
-      try {
-        const originalGetContext = factoryProto.getContext;
-        factoryProto.getContext = function(type) {
-          const ctx = originalGetContext.apply(this, arguments);
-          const name = String(type || '').toLowerCase();
-          if (name === 'webgl' || name === 'experimental-webgl' || name === 'webgl2') {
-            try { patchProto(Object.getPrototypeOf(ctx)); } catch (e) {}
-          }
-          return ctx;
-        };
-        Object.defineProperty(factoryProto, '__geekezCtxPatched__', { value: true, configurable: true });
-      } catch (e) {}
-    };
-
-    patchProto(window.WebGLRenderingContext && window.WebGLRenderingContext.prototype);
-    patchProto(window.WebGL2RenderingContext && window.WebGL2RenderingContext.prototype);
-    patchFactory(window.HTMLCanvasElement && window.HTMLCanvasElement.prototype);
-    patchFactory(window.OffscreenCanvas && window.OffscreenCanvas.prototype);
-  } catch (e) {}
-})();
-            `;
-        })();
-
-        // Keep network headers, Intl locale and runtime fingerprint hooks aligned with profile settings.
-        const applyPageOverrides = async (page) => {
-            if (!page) return;
-            try {
-                try {
-                    await page.evaluateOnNewDocument(geolocationScript);
-                } catch (e) { }
-                try {
-                    await page.evaluateOnNewDocument(fingerprintInjectScript);
-                } catch (e) { }
-                try {
-                    await page.evaluateOnNewDocument(webglOverrideScript);
-                } catch (e) { }
-                if (watermarkScript) {
-                    try {
-                        await page.evaluateOnNewDocument(watermarkScript);
-                    } catch (e) { }
-                }
-
-                try {
-                    await page.evaluate(geolocationScript);
-                } catch (e) { }
-                try {
-                    await page.evaluate(fingerprintInjectScript);
-                } catch (e) { }
-                try {
-                    await page.evaluate(webglOverrideScript);
-                } catch (e) { }
-                if (watermarkScript) {
-                    try {
-                        await page.evaluate(watermarkScript);
-                    } catch (e) { }
-                }
-
-                const session = await page.createCDPSession();
-                try {
-                    await session.send('Page.enable');
-                    await session.send('Page.addScriptToEvaluateOnNewDocument', { source: webglOverrideScript });
-                } catch (e) { }
-                try { await session.send('Network.enable'); } catch (e) { }
-
-                if (hasLanguageOverride) {
-                    try {
-                        await session.send('Network.setExtraHTTPHeaders', {
-                            headers: {
-                                'Accept-Language': acceptLanguageHeader
-                            }
-                        });
-                    } catch (e) { }
-
-                    try {
-                        await session.send('Emulation.setLocaleOverride', { locale: targetLang });
-                    } catch (e) { }
-                }
-
-                if (runtimeFingerprint?.timezone && !isAutoTimezoneValue(runtimeFingerprint.timezone)) {
-                    try {
-                        await session.send('Emulation.setTimezoneOverride', { timezoneId: runtimeFingerprint.timezone });
-                    } catch (e) { }
-                }
-
-                if (profile.fingerprint?.uaMode !== 'none' && profile.fingerprint?.userAgent) {
-                    const payload = {
-                        userAgent: profile.fingerprint.userAgent
-                    };
-                    if (hasLanguageOverride) {
-                        payload.acceptLanguage = targetLang;
-                    }
-                    if (profile.fingerprint?.platform) {
-                        payload.platform = profile.fingerprint.platform;
-                    }
-
-                    const metadata = profile.fingerprint?.userAgentMetadata;
-                    if (metadata && typeof metadata === 'object') {
-                        const md = {
-                            mobile: !!metadata.mobile
-                        };
-                        if (Array.isArray(metadata.brands)) md.brands = metadata.brands;
-                        if (Array.isArray(metadata.fullVersionList)) md.fullVersionList = metadata.fullVersionList;
-                        if (metadata.platform) md.platform = metadata.platform;
-                        if (metadata.platformVersion) md.platformVersion = metadata.platformVersion;
-                        if (metadata.architecture) md.architecture = metadata.architecture;
-                        if (metadata.model !== undefined) md.model = metadata.model;
-                        if (metadata.bitness) md.bitness = metadata.bitness;
-                        if (metadata.wow64 !== undefined) md.wow64 = !!metadata.wow64;
-                        if (metadata.uaFullVersion) md.fullVersion = metadata.uaFullVersion;
-                        payload.userAgentMetadata = md;
-                    }
-
-                    await session.send('Network.setUserAgentOverride', payload);
-                }
-            } catch (err) {
-                const msg = String(err && err.message ? err.message : '');
-                if (msg.includes('No target with given id found') || msg.includes('Target closed')) {
-                    return;
-                }
-                console.warn('Page override failed:', msg);
-            }
-        };
-
-        try {
-            const startupPages = await browser.pages();
-            for (const page of startupPages) {
-                await applyPageOverrides(page);
-            }
-        } catch (e) { }
-
-        const isBlankPageUrl = (url) => {
-            const value = String(url || '').trim().toLowerCase();
-            return value === 'about:blank' || value === 'chrome://newtab/' || value === 'chrome://new-tab-page/';
-        };
-        const blankCleanupDeadline = Date.now() + 1500;
-        const inBlankCleanupWindow = () => Date.now() <= blankCleanupDeadline;
-        const ensureAtLeastOnePage = async () => {
-            try {
-                const pages = await browser.pages();
-                if (pages.length === 0) {
-                    await browser.newPage();
-                }
-            } catch (e) { }
-        };
-        const cleanupRestoredBlankPages = async () => {
-            if (!shouldRestoreSession || !inBlankCleanupWindow()) return;
-            try {
-                const pages = await browser.pages();
-                const hasRealPage = pages.some((page) => {
-                    const url = page.url();
-                    return !isBlankPageUrl(url);
-                });
-                if (!hasRealPage) return;
-
-                for (const page of pages) {
-                    const url = page.url();
-                    if (!isBlankPageUrl(url)) continue;
-                    try { await page.close(); } catch (e) { }
-                }
-            } catch (e) { }
-        };
-        const handlePageCreated = async (page) => {
-            if (!page) return;
-
-            try {
-                const url = page.url();
-                if (shouldRestoreSession && inBlankCleanupWindow() && isBlankPageUrl(url)) {
-                    await cleanupRestoredBlankPages();
-                    await ensureAtLeastOnePage();
-                }
-            } catch (e) { }
-
-            await applyPageOverrides(page);
-        };
-
-        browser.on('targetcreated', async (target) => {
-            if (target.type() !== 'page') return;
-            try {
-                const page = await target.page();
-                await handlePageCreated(page);
-            } catch (e) { }
-        });
-
-        try {
-            const startupPages = await browser.pages();
-            for (const page of startupPages) {
-                await handlePageCreated(page);
-            }
-
-            const monitor = setInterval(async () => {
-                if (!inBlankCleanupWindow()) {
-                    clearInterval(monitor);
-                    return;
-                }
-
-                try {
-                    if (shouldRestoreSession) {
-                        await cleanupRestoredBlankPages();
-                    }
-                    await ensureAtLeastOnePage();
-                } catch (e) { }
-            }, 500);
-
-            await ensureAtLeastOnePage();
-        } catch (e) {
-            console.error('Failed to process startup pages:', e);
-        }
-
         activeProcesses[profileId] = {
             xrayPid: xrayProcess ? xrayProcess.pid : null,
             sshTunnel,
-            browser,
+            browserPid,
+            browserProcess,
             tunnelLogPath,
-            logFd: logFd  // 存储日志文件描述符，用于后续关闭
+            logFd,
+            cleanProfile: useCleanProfile
         };
         appendProxyTunnelLog(tunnelLogPath, 'runtime.launch.ready', {
             profileId,
             localPort,
             hasXray: !!xrayProcess,
-            sshBackend: sshTunnel?.type || ''
+            sshBackend: sshTunnel?.type || '',
+            cleanProfile: useCleanProfile,
+            browserPid
         });
         launchingProfiles.delete(profileId);
         updateLaunchProgress(
@@ -5879,95 +5252,11 @@ const launchProfileHandler = async (event, profileId, preferredLang, launchOptio
         sender.send('profile-status', { id: profileId, status: 'running' });
         refreshTrayMenu().catch(() => { });
 
-        const applyAutoIpBaseRuntime = async () => {
-            const policy = getAutoIpBasePolicy(profile.fingerprint);
-            if (!policy.enabled) return;
-            try {
-                const resolved = await resolveAutoIpBaseFingerprintAfterLaunch(profileId, profile.fingerprint, localPort);
-                if (!resolved || !resolved.fingerprint) return;
-
-                runtimeFingerprint = resolved.fingerprint;
-                geolocationScript = getGeolocationScript(runtimeFingerprint);
-                fingerprintInjectScript = getInjectScript(runtimeFingerprint, { useFingerprintChromium: isFingerprintChromium, browserVersion: chromiumVersion });
-
-                try {
-                    const pages = await browser.pages();
-                    for (const page of pages) {
-                        await applyPageOverrides(page);
-                    }
-                } catch (e) { }
-
-                const parts = [];
-                if (resolved.policy.location && hasValidGeolocation(runtimeFingerprint.geolocation)) {
-                    parts.push(`geo=${runtimeFingerprint.geolocation.latitude},${runtimeFingerprint.geolocation.longitude}`);
-                }
-                if (resolved.policy.timezone && isValidTimezoneId(runtimeFingerprint.timezone)) {
-                    parts.push(`timezone=${runtimeFingerprint.timezone}`);
-                }
-                console.log(`[Auto IP Base] ${profile.name || profileId}: ${resolved.cacheHit ? 'reused cache' : 'refreshed'} ip=${resolved.source.ip}${parts.length ? ` ${parts.join(' ')}` : ''}`);
-            } catch (err) {
-                console.warn(`[Auto IP Base] ${profile.name || profileId}: ${err?.message || err}`);
-            }
-        };
-        setTimeout(() => {
-            applyAutoIpBaseRuntime().catch((err) => {
-                console.warn(`[Auto IP Base] ${profile.name || profileId}: ${err?.message || err}`);
-            });
-        }, 0);
-
-        // CDP Timezone Override (Windows only)
-        // On macOS/Linux, TZ env var changes V8's timezone natively.
-        // On Windows, V8 ignores TZ and uses Win32 API, so we use CDP instead.
-        // This changes V8's internal timezone at the engine level - all Date methods
-        // (toString, getTimezoneOffset, getHours, etc.) and Intl APIs work correctly.
-        const targetTimezone = runtimeFingerprint?.timezone;
-        if (process.platform === 'win32' && targetTimezone && !isAutoTimezoneValue(targetTimezone)) {
-            try {
-                const pages = await browser.pages();
-                for (const page of pages) {
-                    try { await page.emulateTimezone(targetTimezone); } catch (e) { }
-                }
-                browser.on('targetcreated', async (target) => {
-                    if (target.type() === 'page') {
-                        try {
-                            const page = await target.page();
-                            if (page) await page.emulateTimezone(targetTimezone);
-                        } catch (e) { }
-                    }
-                });
-            } catch (e) {
-                console.error('CDP timezone override failed:', e.message);
-            }
-        }
-
-        browser.on('disconnected', async () => {
-            if (activeProcesses[profileId]) {
-                await cleanupProfileRuntime(profileId, {
-                    closeBrowser: false,
-                    killXray: true,
-                    refreshMenu: false,
-                    broadcast: true
-                });
-
-                // 性能优化：清理缓存文件，节省磁盘空间
-                try {
-                    const cacheDir = path.join(userDataDir, 'Default', 'Cache');
-                    const codeCacheDir = path.join(userDataDir, 'Default', 'Code Cache');
-                    if (fs.existsSync(cacheDir)) await fs.emptyDir(cacheDir);
-                    if (fs.existsSync(codeCacheDir)) await fs.emptyDir(codeCacheDir);
-                } catch (e) {
-                    // 忽略清理错误
-                }
-
-                refreshTrayMenu().catch(() => { });
-            }
-        });
-
         return switchMsg;
     } catch (err) {
-        try {
-            if (browser) await browser.close();
-        } catch (e) { }
+        if (browserProcess && browserProcess.pid) {
+            try { await forceKill(browserProcess.pid); } catch (e) { }
+        }
 
         if (xrayProcess && xrayProcess.pid) {
             await forceKill(xrayProcess.pid);
@@ -6019,6 +5308,7 @@ app.on('window-all-closed', () => {
             p.sshTunnel.close().catch(() => { });
         }
         forceKill(p.xrayPid);
+        forceKill(p.browserPid);
     });
     if (appTray && (typeof appTray.isDestroyed !== 'function' || !appTray.isDestroyed())) {
         try { appTray.destroy(); } catch (e) { }

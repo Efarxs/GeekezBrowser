@@ -1730,13 +1730,16 @@ function getWatermarkScript(profileName, watermarkStyle) {
 
                     ensureStyleNode();
 
+                    const EMOJI_FONT = '"Segoe UI Emoji", "Apple Color Emoji", "Noto Color Emoji", "Segoe UI Symbol", sans-serif';
+
                     if (watermarkStyle === 'banner') {
                         const banner = document.createElement('div');
                         banner.id = 'geekez-watermark';
-                        banner.style.cssText = 'position: fixed; top: 0; left: 0; right: 0; background: linear-gradient(135deg, rgba(102, 126, 234, 0.5), rgba(118, 75, 162, 0.5)); backdrop-filter: blur(10px); color: white; padding: 5px 20px; text-align: center; font-size: 12px; font-weight: 500; z-index: 2147483647; box-shadow: 0 2px 10px rgba(0,0,0,0.1); display: flex; align-items: center; justify-content: center; gap: 8px; font-family: monospace;';
+                        banner.style.cssText = 'position: fixed; top: 0; left: 0; right: 0; background: linear-gradient(135deg, rgba(102, 126, 234, 0.5), rgba(118, 75, 162, 0.5)); backdrop-filter: blur(10px); color: white; padding: 5px 20px; text-align: center; font-size: 12px; font-weight: 500; z-index: 2147483647; box-shadow: 0 2px 10px rgba(0,0,0,0.1); display: flex; align-items: center; justify-content: center; gap: 8px; font-family: "Segoe UI", "Helvetica Neue", Arial, sans-serif;';
 
                         const icon = document.createElement('span');
                         icon.textContent = '\\ud83d\\udd39';
+                        icon.style.cssText = 'font-family: ' + EMOJI_FONT + '; font-size: 14px; line-height: 1;';
 
                         const text = document.createElement('span');
                         text.textContent = '\\u73af\\u5883\\uff1a' + profileLabel;
@@ -1755,11 +1758,11 @@ function getWatermarkScript(profileName, watermarkStyle) {
 
                     const watermark = document.createElement('div');
                     watermark.id = 'geekez-watermark';
-                    watermark.style.cssText = 'position: fixed; bottom: 16px; right: 16px; background: linear-gradient(135deg, rgba(102, 126, 234, 0.5), rgba(118, 75, 162, 0.5)); backdrop-filter: blur(10px); color: white; padding: 10px 16px; border-radius: 8px; font-size: 15px; font-weight: 600; z-index: 2147483647; pointer-events: none; user-select: none; box-shadow: 0 4px 15px rgba(102, 126, 234, 0.4); display: flex; align-items: center; gap: 8px; font-family: monospace; animation: geekez-pulse 2s ease-in-out infinite;';
+                    watermark.style.cssText = 'position: fixed; bottom: 16px; right: 16px; background: linear-gradient(135deg, rgba(102, 126, 234, 0.5), rgba(118, 75, 162, 0.5)); backdrop-filter: blur(10px); color: white; padding: 10px 16px; border-radius: 8px; font-size: 15px; font-weight: 600; z-index: 2147483647; pointer-events: none; user-select: none; box-shadow: 0 4px 15px rgba(102, 126, 234, 0.4); display: flex; align-items: center; gap: 8px; font-family: "Segoe UI", "Helvetica Neue", Arial, sans-serif; animation: geekez-pulse 2s ease-in-out infinite;';
 
                     const icon = document.createElement('span');
                     icon.textContent = '\\ud83c\\udfaf';
-                    icon.style.cssText = 'font-size: 18px; animation: geekez-rotate 3s linear infinite;';
+                    icon.style.cssText = 'font-family: ' + EMOJI_FONT + '; font-size: 18px; line-height: 1; animation: geekez-rotate 3s linear infinite; display: inline-block; transform-origin: center;';
 
                     const text = document.createElement('span');
                     text.textContent = profileLabel;
@@ -1795,4 +1798,4 @@ function getWatermarkScript(profileName, watermarkStyle) {
     `;
 }
 
-export { generateFingerprint, getInjectScript, getGeolocationScript, getWatermarkScript };
+export { generateFingerprint, getGeolocationScript, getWatermarkScript };

@@ -28,10 +28,12 @@ export const profileService = {
     /**
      * 启动指定环境
      */
-    async launch(id) {
+    async launch(id, options = {}) {
         try {
             const lang = localStorage.getItem('geekez_lang') === 'en' ? 'en' : 'cn';
-            const msg = await ipcService.invoke('launch-profile', id, lang);
+            const launchOptions = {};
+            if (options && options.useCleanProfile) launchOptions.useCleanProfile = true;
+            const msg = await ipcService.invoke('launch-profile', id, lang, launchOptions);
             return {
                 success: true,
                 message: msg || ''

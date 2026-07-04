@@ -40,3 +40,29 @@ export function getOptionLabel(option) {
     if (window.curLang === 'cn') return option.labelZh || option.label;
     return option.label;
 }
+
+const KERNEL_CHROME_MAJOR = 148;
+
+function randInt(min, max) {
+    return Math.floor(Math.random() * (max - min + 1)) + min;
+}
+
+function buildRandomFullVersion(major) {
+    // Chrome full version format: MAJOR.0.<build>.<patch>
+    const build = randInt(7500, 7999);
+    const patch = randInt(50, 300);
+    return `${major}.0.${build}.${patch}`;
+}
+
+const PLATFORM_UA_TOKEN = {
+    Win32: 'Windows NT 10.0; Win64; x64',
+    MacIntel: 'Macintosh; Intel Mac OS X 10_15_7',
+    'Linux x86_64': 'X11; Linux x86_64'
+};
+
+export function generateRandomUserAgent({ platform = 'Win32', browserType = 'chrome', major = KERNEL_CHROME_MAJOR } = {}) {
+    const token = PLATFORM_UA_TOKEN[platform] || PLATFORM_UA_TOKEN.Win32;
+    const fullVersion = buildRandomFullVersion(major);
+    const base = `Mozilla/5.0 (${token}) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/${fullVersion} Safari/537.36`;
+    return browserType === 'edge' ? `${base} Edg/${fullVersion}` : base;
+}

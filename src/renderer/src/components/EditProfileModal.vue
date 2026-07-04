@@ -54,13 +54,27 @@
           </div>
         </div>
 
-        <template v-if="showUaWebglModify">
+        <template v-if="showUaModify">
           <label class="label-tiny">{{ $t('browserVersionPresetLabel') }}</label>
           <select v-model="form.browserVersionPreset">
             <option v-for="opt in browserVersionPresetOptions" :key="opt.value" :value="opt.value">
               {{ getOptionLabel(opt) }}
             </option>
           </select>
+
+          <label class="label-tiny mt-10">{{ $t('customUaLabel') }}</label>
+          <textarea
+            v-model="form.customUserAgent"
+            rows="3"
+            class="mono-text custom-ua-textarea"
+            :placeholder="$t('customUaPlaceholder')"
+            spellcheck="false"
+            autocomplete="off"
+          ></textarea>
+          <div class="ua-actions">
+            <button type="button" class="outline ua-random-btn" @click="randomizeCustomUa">{{ $t('randomizeUa') }}</button>
+            <span class="hint-text ua-hint">{{ $t('customUaHint') }}</span>
+          </div>
         </template>
 
         <label class="label-tiny">{{ $t('platformLabel') }}</label>
@@ -118,14 +132,15 @@ import { useUIStore } from '../store/useUIStore';
 import { useProfileStore } from '../store/useProfileStore';
 import {
   browserVersionPresetOptions,
-  getOptionLabel
+  getOptionLabel,
+  generateRandomUserAgent
 } from '../utils/fingerprintOptions';
 
 const uiStore = useUIStore();
 const profileStore = useProfileStore();
 
 const settings = ref({});
-const showUaWebglModify = ref(false);
+const showUaModify = ref(false);
 const form = reactive({
   name: '',
   tags: '',
@@ -142,7 +157,17 @@ const form = reactive({
   customArgs: '',
   browserVersionPreset: 'none',
   platform: 'Win32',
+  customUserAgent: '',
 });
+
+function randomizeCustomUa() {
+  const preset = parseBrowserVersionPreset(form.browserVersionPreset);
+  const browserType = preset.browserType === 'edge' ? 'edge' : 'chrome';
+  form.customUserAgent = generateRandomUserAgent({
+    platform: form.platform,
+    browserType
+  });
+}
 
 function parseBrowserVersionPreset(preset) {
   if (!preset || preset === 'none') {
@@ -210,7 +235,7 @@ watch(() => uiStore.editModalVisible, async (visible) => {
     if (!p) return;
 
     settings.value = await window.electronAPI.getSettings();
-    showUaWebglModify.value = !!settings.value?.enableUaWebglModify;
+    showUaModify.value = !!(settings.value?.enableUaModify ?? settings.value?.enableUaWebglModify);
     const fp = p.fingerprint || {};
 
     form.name = p.name;
@@ -224,6 +249,7 @@ watch(() => uiStore.editModalVisible, async (visible) => {
     form.customArgs = p.customArgs || '';
     form.browserVersionPreset = toBrowserVersionPreset(fp.uaMode, fp.browserType, fp.browserMajorVersion);
     form.platform = fp.platform || 'Win32';
+    form.customUserAgent = fp.userAgent || '';
 
     // Timezone
     form.timezone = fp.timezone || 'Auto';
@@ -292,6 +318,8 @@ async function handleSave() {
       return;
     }
     const browserPreset = parseBrowserVersionPreset(form.browserVersionPreset);
+    const trimmedUa = (form.customUserAgent || '').trim();
+    const uaMode = trimmedUa ? 'spoof' : browserPreset.uaMode;
 
     const tagsRaw = (form.tags || '').toString();
     const updated = {
@@ -301,7 +329,7 @@ async function handleSave() {
       tags: tagsRaw.split(/[,，]/).map(s => s.trim()).filter(s => s),
       notes: form.notes,
       preProxyOverride: form.preProxyOverride,
-      uaMode: browserPreset.uaMode,
+      uaMode,
       browserType: browserPreset.browserType,
       browserMajorVersion: browserPreset.browserMajorVersion,
       fingerprint: {
@@ -312,10 +340,11 @@ async function handleSave() {
         city: form.city,
         geolocation: form.geolocation,
         language: form.language,
-        uaMode: browserPreset.uaMode,
+        uaMode,
         browserType: browserPreset.browserType,
         browserMajorVersion: browserPreset.browserMajorVersion,
-        platform: form.platform
+        platform: form.platform,
+        userAgent: trimmedUa || null
       },
       debugPort: form.debugPort,
       customArgs: form.customArgs,
@@ -382,6 +411,27 @@ async function handleSave() {
 .mono-text {
   font-family: monospace;
   font-size: 11px;
+}
+
+.custom-ua-textarea {
+  min-height: 66px;
+  resize: vertical;
+  width: 100%;
+}
+.ua-actions {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  margin-top: 4px;
+}
+.ua-random-btn {
+  white-space: nowrap;
+  padding: 4px 12px;
+  font-size: 12px;
+}
+.ua-hint {
+  margin-bottom: 0;
+  flex: 1;
 }
 
 .profile-notes-textarea {

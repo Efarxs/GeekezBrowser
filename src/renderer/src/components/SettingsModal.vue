@@ -147,26 +147,26 @@
                         </div>
 
                         <div style="border:1px solid var(--border); border-radius:12px; padding:4px; background:var(--card-bg);">
-                            <!-- UA/WebGL Customize Toggle -->
+                            <!-- UA Customize Toggle -->
                             <label class="dev-toggle-item" style="display:flex; align-items:center; gap:14px; padding:14px 16px; cursor:pointer; border-radius:8px; transition:all 0.2s;">
                                 <div class="toggle-switch" style="position:relative; width:44px; height:24px; flex-shrink:0;">
-                                    <input type="checkbox" :checked="settingsStore.enableUaWebglModify"
+                                    <input type="checkbox" :checked="settingsStore.enableUaModify"
                                         style="opacity:0; width:0; height:0; position:absolute;"
-                                        @change="e => settingsStore.toggleUaWebglModify(e.target.checked)">
-                                    <div class="toggle-track" :style="{ background: settingsStore.enableUaWebglModify ? 'var(--accent)' : 'var(--border)' }"
+                                        @change="e => settingsStore.toggleUaModify(e.target.checked)">
+                                    <div class="toggle-track" :style="{ background: settingsStore.enableUaModify ? 'var(--accent)' : 'var(--border)' }"
                                         style="position:absolute; inset:0; border-radius:12px; transition:0.3s;">
                                     </div>
-                                    <div class="toggle-knob" :style="{ left: settingsStore.enableUaWebglModify ? '22px' : '2px' }"
+                                    <div class="toggle-knob" :style="{ left: settingsStore.enableUaModify ? '22px' : '2px' }"
                                         style="position:absolute; top:2px; width:20px; height:20px; background:#fff; border-radius:50%; transition:0.3s; box-shadow:0 2px 4px rgba(0,0,0,0.2);">
                                     </div>
                                 </div>
                                 <div style="flex:1;">
                                     <div style="font-size:13px; font-weight:500; color:var(--text-primary);"
-                                        data-i18n="uaWebglToggle">{{ $t('uaWebglToggle') }}</div>
+                                        data-i18n="uaModifyToggle">{{ $t('uaModifyToggle') }}</div>
                                     <div style="font-size:11px; color:var(--text-secondary); opacity:0.8;"
-                                        data-i18n="uaWebglToggleHint">{{ $t('uaWebglToggleHint') }}</div>
+                                        data-i18n="uaModifyToggleHint">{{ $t('uaModifyToggleHint') }}</div>
                                     <div style="font-size:11px; color:#ffb3b3; margin-top:4px;"
-                                        data-i18n="uaWebglToggleWarn">{{ $t('uaWebglToggleWarn') }}</div>
+                                        data-i18n="uaModifyToggleWarn">{{ $t('uaModifyToggleWarn') }}</div>
                                 </div>
                             </label>
 

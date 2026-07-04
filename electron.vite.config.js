@@ -14,6 +14,7 @@ export default defineConfig({
           'xray-assets': resolve(__dirname, 'src/main/xray-assets.js'),
           'ssh-tunnel': resolve(__dirname, 'src/main/ssh-tunnel.js'),
           'gost-ssh-tunnel': resolve(__dirname, 'src/main/gost-ssh-tunnel.js'),
+          'cdp-cookie-client': resolve(__dirname, 'src/main/cdp-cookie-client.js'),
           'release-check': resolve(__dirname, 'src/main/release-check.js'),
           'profile-db': resolve(__dirname, 'src/main/profile-db.js'),
           'db/config': resolve(__dirname, 'src/main/db/config.js'),
@@ -36,6 +37,11 @@ export default defineConfig({
     }
   },
   renderer: {
+    server: {
+      host: '127.0.0.1',
+      port: 15173,
+      strictPort: true
+    },
     resolve: {
       alias: {
         '@renderer': resolve('src/renderer/src')

@@ -6,7 +6,7 @@ export const useSettingsStore = defineStore('settings', {
     state: () => ({
         enableRemoteDebugging: false,
         enableCustomArgs: false,
-        enableUaWebglModify: false,
+        enableUaModify: false,
         enableWatermark: true,
         watermarkStyle: 'enhanced',
         enableApiServer: false,
@@ -30,7 +30,7 @@ export const useSettingsStore = defineStore('settings', {
                 }
                 this.enableRemoteDebugging = settings.enableRemoteDebugging || false;
                 this.enableCustomArgs = settings.enableCustomArgs || false;
-                this.enableUaWebglModify = settings.enableUaWebglModify || false;
+                this.enableUaModify = (settings.enableUaModify ?? settings.enableUaWebglModify) || false;
                 this.enableWatermark = settings.enableWatermark !== false;
                 this.watermarkStyle = settings.watermarkStyle || 'enhanced';
                 this.enableApiServer = settings.enableApiServer || false;
@@ -80,10 +80,11 @@ export const useSettingsStore = defineStore('settings', {
             await ipcService.saveSettings(settings);
         },
 
-        async toggleUaWebglModify(enabled) {
-            this.enableUaWebglModify = enabled;
+        async toggleUaModify(enabled) {
+            this.enableUaModify = enabled;
             const settings = await ipcService.getSettings();
-            settings.enableUaWebglModify = enabled;
+            settings.enableUaModify = enabled;
+            delete settings.enableUaWebglModify;
             await ipcService.saveSettings(settings);
         },
 

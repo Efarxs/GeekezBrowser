@@ -75,13 +75,27 @@
             </div>
           </div>
         </div>
-        <template v-if="showUaWebglModify">
+        <template v-if="showUaModify">
           <label class="label-tiny">{{ $t('browserVersionPresetLabel') }}</label>
           <select v-model="form.browserVersionPreset">
             <option v-for="opt in browserVersionPresetOptions" :key="opt.value" :value="opt.value">
               {{ getOptionLabel(opt) }}
             </option>
           </select>
+
+          <label class="label-tiny mt-10">{{ $t('customUaLabel') }}</label>
+          <textarea
+            v-model="form.customUserAgent"
+            rows="3"
+            class="mono-text custom-ua-textarea"
+            :placeholder="$t('customUaPlaceholder')"
+            spellcheck="false"
+            autocomplete="off"
+          ></textarea>
+          <div class="ua-actions">
+            <button type="button" class="outline ua-random-btn" @click="randomizeCustomUa">{{ $t('randomizeUa') }}</button>
+            <span class="hint-text ua-hint">{{ $t('customUaHint') }}</span>
+          </div>
         </template>
 
         <label class="label-tiny">{{ $t('platformLabel') }}</label>
@@ -116,7 +130,8 @@ import { useProfileStore } from '../store/useProfileStore';
 import { getProxyRemark } from '../utils/helpers';
 import {
   browserVersionPresetOptions,
-  getOptionLabel
+  getOptionLabel,
+  generateRandomUserAgent
 } from '../utils/fingerprintOptions';
 
 const uiStore = useUIStore();
@@ -124,7 +139,7 @@ const profileStore = useProfileStore();
 
 const isSaving = ref(false);
 const settings = ref({});
-const showUaWebglModify = ref(false);
+const showUaModify = ref(false);
 
 const form = reactive({
   name: '',
@@ -141,7 +156,17 @@ const form = reactive({
   customArgs: '',
   browserVersionPreset: 'none',
   platform: 'Win32',
+  customUserAgent: '',
 });
+
+function randomizeCustomUa() {
+  const preset = parseBrowserVersionPreset(form.browserVersionPreset);
+  const browserType = preset.browserType === 'edge' ? 'edge' : 'chrome';
+  form.customUserAgent = generateRandomUserAgent({
+    platform: form.platform,
+    browserType
+  });
+}
 
 function parseBrowserVersionPreset(preset) {
   if (!preset || preset === 'none') {
@@ -246,17 +271,18 @@ watch(() => uiStore.addModalVisible, async (newVal) => {
       geolocation: null,
       customArgs: '',
       browserVersionPreset: 'none',
-      platform: 'Win32'
+      platform: 'Win32',
+      customUserAgent: ''
     });
     timezoneSearch.value = AUTO_TIMEZONE_LABEL;
     citySearch.value = 'Auto (IP Based)';
     languageSearch.value = 'Auto (System Default)';
     try {
       settings.value = await window.electronAPI.getSettings();
-      showUaWebglModify.value = !!settings.value?.enableUaWebglModify;
+      showUaModify.value = !!(settings.value?.enableUaModify ?? settings.value?.enableUaWebglModify);
     } catch (e) {
       settings.value = {};
-      showUaWebglModify.value = false;
+      showUaModify.value = false;
     }
   }
 });
@@ -299,6 +325,7 @@ async function handleSave() {
 
       const screen = (form.resW && form.resH) ? { width: form.resW, height: form.resH } : null;
       const browserPreset = parseBrowserVersionPreset(form.browserVersionPreset);
+      const trimmedUa = (form.customUserAgent || '').trim();
 
       const payload = {
         name,
@@ -310,12 +337,13 @@ async function handleSave() {
         geolocation: form.geolocation,
         language: form.language,
         screen,
-        uaMode: browserPreset.uaMode,
+        uaMode: trimmedUa ? 'spoof' : browserPreset.uaMode,
         preProxyOverride: form.preProxyOverride,
         customArgs: form.customArgs,
         browserType: browserPreset.browserType,
         browserMajorVersion: browserPreset.browserMajorVersion,
         platform: form.platform,
+        userAgent: trimmedUa || undefined,
         ignoreCertErrors: true
       };
       // Strip Vue reactive proxies to avoid Electron IPC clone failures for geolocation and similar objects.
@@ -386,5 +414,26 @@ async function handleSave() {
 .profile-notes-textarea {
   min-height: 86px;
   resize: vertical;
+}
+
+.custom-ua-textarea {
+  min-height: 66px;
+  resize: vertical;
+  width: 100%;
+}
+.ua-actions {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  margin-top: 4px;
+}
+.ua-random-btn {
+  white-space: nowrap;
+  padding: 4px 12px;
+  font-size: 12px;
+}
+.ua-hint {
+  margin-bottom: 0;
+  flex: 1;
 }
 </style>

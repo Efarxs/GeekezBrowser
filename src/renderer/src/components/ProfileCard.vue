@@ -34,15 +34,36 @@
             </div>
         </div>
         <div class="actions">
-            <button class="no-drag" @click="launch" :disabled="isLaunching">{{ isLaunching ? t('launchingStatus') : t('launch') }}</button>
+            <div class="launch-group no-drag">
+                <button class="no-drag" @click="launch" :disabled="isLaunching">{{ isLaunching ? t('launchingStatus') : t('launch') }}</button>
+                <button
+                    ref="launchMoreBtn"
+                    class="no-drag launch-more"
+                    :disabled="isLaunching"
+                    :aria-label="t('launchMenu')"
+                    @click="toggleLaunchMenu"
+                >▾</button>
+            </div>
             <button class="outline no-drag" @click="edit">{{ t('edit') }}</button>
             <button class="danger no-drag" @click="remove">{{ t('delete') }}</button>
         </div>
     </div>
+    <Teleport to="body">
+        <template v-if="showLaunchMenu">
+            <div class="launch-menu-backdrop no-drag" @mousedown="closeLaunchMenu"></div>
+            <div
+                ref="launchMenuEl"
+                class="launch-menu launch-menu-floating no-drag"
+                :style="launchMenuStyle"
+            >
+                <div class="launch-menu-item" @click="launchClean">{{ t('launchClean') }}</div>
+            </div>
+        </template>
+    </Teleport>
 </template>
 
 <script setup>
-import { computed } from 'vue';
+import { computed, onBeforeUnmount, ref } from 'vue';
 import { useUIStore } from '../store/useUIStore';
 import { useProfileStore } from '../store/useProfileStore';
 import { profileService } from '../services/profile.service';
@@ -115,9 +136,78 @@ const toggleSelected = () => {
     profileStore.toggleSelected(props.profile.id);
 };
 
+const showLaunchMenu = ref(false);
+const launchMoreBtn = ref(null);
+const launchMenuEl = ref(null);
+const launchMenuStyle = ref({});
+
+const positionLaunchMenu = () => {
+    const el = launchMoreBtn.value;
+    if (!el) return;
+    const rect = el.getBoundingClientRect();
+    const menuWidth = 200;
+    const left = Math.max(8, Math.min(window.innerWidth - menuWidth - 8, rect.right - menuWidth));
+    launchMenuStyle.value = {
+        top: `${rect.bottom + 4}px`,
+        left: `${left}px`,
+        minWidth: `${menuWidth}px`
+    };
+};
+
+const onScrollOrResize = () => {
+    if (!showLaunchMenu.value) return;
+    positionLaunchMenu();
+};
+const onKeyDown = (event) => {
+    if (event.key === 'Escape') closeLaunchMenu();
+};
+const onWindowBlur = () => closeLaunchMenu();
+
+const attachGlobalListeners = () => {
+    document.addEventListener('keydown', onKeyDown, true);
+    window.addEventListener('scroll', onScrollOrResize, true);
+    window.addEventListener('resize', onScrollOrResize);
+    window.addEventListener('blur', onWindowBlur);
+};
+const detachGlobalListeners = () => {
+    document.removeEventListener('keydown', onKeyDown, true);
+    window.removeEventListener('scroll', onScrollOrResize, true);
+    window.removeEventListener('resize', onScrollOrResize);
+    window.removeEventListener('blur', onWindowBlur);
+};
+
+function closeLaunchMenu() {
+    if (!showLaunchMenu.value) return;
+    showLaunchMenu.value = false;
+    detachGlobalListeners();
+}
+
+const toggleLaunchMenu = () => {
+    if (props.isLaunching) return;
+    if (showLaunchMenu.value) {
+        closeLaunchMenu();
+        return;
+    }
+    positionLaunchMenu();
+    showLaunchMenu.value = true;
+    attachGlobalListeners();
+};
+
+onBeforeUnmount(detachGlobalListeners);
+
 const launch = async () => {
     if (props.isLaunching) return;
+    closeLaunchMenu();
     const res = await profileService.launch(props.profile.id);
+    if (!res.success && res.message) {
+        uiStore.showAlert(res.message);
+    }
+};
+
+const launchClean = async () => {
+    if (props.isLaunching) return;
+    closeLaunchMenu();
+    const res = await profileService.launch(props.profile.id, { useCleanProfile: true });
     if (!res.success && res.message) {
         uiStore.showAlert(res.message);
     }
@@ -155,5 +245,61 @@ const remove = () => {
     color: #f39c12;
     border-color: rgba(243, 156, 18, 0.6);
     background: rgba(243, 156, 18, 0.12);
+}
+
+.launch-group {
+    position: relative;
+    display: inline-flex;
+}
+.launch-group > button:first-child {
+    border-top-right-radius: 0;
+    border-bottom-right-radius: 0;
+}
+.launch-more {
+    padding: 0 8px;
+    border-top-left-radius: 0;
+    border-bottom-left-radius: 0;
+    margin-left: -1px;
+}
+.launch-menu-item {
+    padding: 8px 14px;
+    font-size: 13px;
+    cursor: pointer;
+    white-space: nowrap;
+}
+.launch-menu-item:hover {
+    background: var(--accent, #4285f4);
+    color: #fff;
+}
+</style>
+
+<style>
+.launch-menu-backdrop {
+    position: fixed;
+    inset: 0;
+    z-index: 9999;
+    background: transparent;
+    -webkit-app-region: no-drag;
+}
+.launch-menu-floating {
+    position: fixed;
+    background: var(--card-bg, #22222c);
+    border: 1px solid var(--border, #444);
+    border-radius: 6px;
+    box-shadow: 0 6px 20px rgba(0, 0, 0, 0.45);
+    z-index: 10000;
+    padding: 4px 0;
+    color: var(--text-primary, #e0e0e0);
+    -webkit-app-region: no-drag;
+}
+.launch-menu-floating .launch-menu-item {
+    padding: 8px 14px;
+    font-size: 13px;
+    cursor: pointer;
+    white-space: nowrap;
+}
+.launch-menu-floating .launch-menu-item:hover {
+    background: var(--accent, #4285f4);
+    color: #fff;
 }
 </style>
