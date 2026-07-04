@@ -256,10 +256,7 @@ const launchClean = async () => {
 };
 
 const edit = () => {
-    if (props.isRunning || props.isLaunching) {
-        uiStore.showAlert(t('runningNoEdit'));
-        return;
-    }
+    // Running/launching profiles open in view-only mode (handled inside the modal).
     uiStore.openEditModal(props.profile.id);
 };
 

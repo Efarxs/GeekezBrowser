@@ -2,10 +2,18 @@
   <div v-show="uiStore.editModalVisible" class="modal-overlay" @mousedown.self="uiStore.closeEditModal">
     <div class="modal-content">
       <div class="modal-header">
-        <span>{{ $t('editFingerprint') }}</span>
+        <span>{{ viewOnly ? $t('viewFingerprint') : $t('editFingerprint') }}</span>
         <span style="cursor:pointer" @click="uiStore.closeEditModal">✕</span>
       </div>
       <div class="modal-body">
+        <div v-if="viewOnly" class="viewonly-banner">
+          <span class="viewonly-icon">👁</span>
+          <div class="viewonly-text">
+            <div class="viewonly-title">{{ $t('viewOnlyTitle') }}</div>
+            <div class="viewonly-hint">{{ $t('viewOnlyHint') }}</div>
+          </div>
+        </div>
+        <fieldset class="form-fieldset" :disabled="viewOnly">
         <label class="label-tiny">{{ $t('profileName') }}</label>
         <input v-model="form.name" type="text" placeholder="Name">
 
@@ -117,10 +125,14 @@
           <textarea v-model="form.customArgs" rows="2" placeholder="--start-maximized" class="mono-text"></textarea>
           <div class="hint-text">{{ $t('customArgsHint') }}</div>
         </div>
+        </fieldset>
       </div>
       <div class="modal-footer">
-        <button class="outline" @click="uiStore.closeEditModal">{{ $t('cancel') }}</button>
-        <button @click="handleSave">{{ $t('save') }}</button>
+        <button v-if="viewOnly" @click="uiStore.closeEditModal">{{ $t('close') }}</button>
+        <template v-else>
+          <button class="outline" @click="uiStore.closeEditModal">{{ $t('cancel') }}</button>
+          <button @click="handleSave">{{ $t('save') }}</button>
+        </template>
       </div>
     </div>
   </div>
@@ -141,6 +153,12 @@ const profileStore = useProfileStore();
 
 const settings = ref({});
 const showUaModify = ref(false);
+
+const viewOnly = computed(() => {
+    const id = uiStore.currentEditId;
+    if (!id) return false;
+    return profileStore.isRunning(id) || profileStore.isLaunching(id);
+});
 const form = reactive({
   name: '',
   tags: '',
@@ -411,6 +429,52 @@ async function handleSave() {
 .mono-text {
   font-family: monospace;
   font-size: 11px;
+}
+
+.form-fieldset {
+  border: none;
+  padding: 0;
+  margin: 0;
+  min-width: 0;
+}
+.form-fieldset[disabled] {
+  opacity: 0.9;
+}
+.form-fieldset[disabled] input,
+.form-fieldset[disabled] textarea,
+.form-fieldset[disabled] select {
+  cursor: not-allowed;
+  background-color: rgba(255, 255, 255, 0.03);
+}
+.form-fieldset[disabled] button {
+  cursor: not-allowed;
+}
+
+.viewonly-banner {
+  display: flex;
+  align-items: flex-start;
+  gap: 10px;
+  padding: 10px 14px;
+  margin-bottom: 14px;
+  border-radius: 8px;
+  background: rgba(76, 175, 80, 0.10);
+  border: 1px solid rgba(76, 175, 80, 0.45);
+  color: #a3e0a3;
+}
+.viewonly-icon {
+  font-size: 18px;
+  line-height: 1.2;
+  margin-top: 1px;
+}
+.viewonly-title {
+  font-size: 13px;
+  font-weight: 600;
+  margin-bottom: 2px;
+}
+.viewonly-hint {
+  font-size: 11px;
+  opacity: 0.9;
+  line-height: 1.4;
 }
 
 .custom-ua-textarea {
