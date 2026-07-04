@@ -1,0 +1,13 @@
+{
+  "name": "geekez-examples",
+  "version": "1.0.0",
+  "private": true,
+  "description": "Playwright automation examples that connect to a running GeekEZ Browser profile over CDP.",
+  "type": "commonjs",
+  "scripts": {
+    "youtube": "node youtube-cdp.js"
+  },
+  "dependencies": {
+    "playwright-core": "^1.55.0"
+  }
+}
