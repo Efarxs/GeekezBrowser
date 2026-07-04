@@ -1,5 +1,5 @@
 <template>
-    <div id="confirmModal" class="modal-overlay" :class="{ active: uiStore.confirmModalVisible }" style="z-index: 2050;">
+    <div id="confirmModal" class="modal-overlay" :class="{ active: uiStore.confirmModalVisible }" style="z-index: 3000;">
         <div class="modal-content confirm-modal-content">
             <h4 class="confirm-title">{{ uiStore.confirmMsg }}</h4>
             <div

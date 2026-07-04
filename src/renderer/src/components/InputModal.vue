@@ -1,5 +1,5 @@
 <template>
-    <div id="inputModal" class="modal-overlay" :class="{ active: uiStore.inputModalVisible }" style="z-index: 2080;">
+    <div id="inputModal" class="modal-overlay" :class="{ active: uiStore.inputModalVisible }" style="z-index: 3000;">
         <div class="modal-content" style="width: 350px;">
             <h4 style="margin-bottom:15px;">{{ uiStore.inputModalTitle }}</h4>
             <input type="text" v-model="uiStore.inputModalValue" @keyup.enter="uiStore.submitInput" class="input" style="width:100%; box-sizing:border-box; margin-bottom:20px;">
