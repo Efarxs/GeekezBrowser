@@ -1,15 +1,20 @@
 const fs = require('fs');
 const path = require('path');
 
+// fingerprint-chromium 各平台内二进制的 basename：
+//   Windows: chrome.exe
+//   macOS:   Chromium 或 Ungoogled Chromium（在 <Name>.app/Contents/MacOS/ 里）
+//   Linux:   chrome
+// 同时保留 Google Chrome 等以便系统装的 Chrome 也能作为回退。
 const BUNDLED_BASENAMES = {
-    darwin: ['Google Chrome'],
-    linux: ['chrome', 'google-chrome', 'chromium', 'chromium-browser'],
+    darwin: ['Chromium', 'Ungoogled Chromium', 'Google Chrome'],
+    linux: ['chrome', 'chromium', 'chromium-browser', 'google-chrome', 'ungoogled-chromium'],
     win32: ['chrome.exe']
 };
 
 const PATH_CANDIDATES = {
-    darwin: ['Google Chrome'],
-    linux: ['google-chrome-stable', 'google-chrome', 'chromium-browser', 'chromium', 'chrome'],
+    darwin: ['Chromium', 'Google Chrome'],
+    linux: ['google-chrome-stable', 'google-chrome', 'chromium-browser', 'chromium', 'chrome', 'ungoogled-chromium'],
     win32: ['chrome.exe', 'chrome']
 };
 
@@ -31,7 +36,8 @@ function scoreBundledCandidate(filePath, platform = process.platform) {
     let score = 0;
 
     if (platform === 'darwin') {
-        if (filePath.endsWith(path.join('Contents', 'MacOS', 'Google Chrome'))) score += 180;
+        // 任何位于 .app/Contents/MacOS/ 里的可执行都比游离二进制优先
+        if (filePath.includes(path.join('Contents', 'MacOS'))) score += 180;
         if (normalized.includes('fingerprint-chromium')) score += 300;
     } else if (platform === 'linux') {
         if (path.basename(filePath) === 'chrome') score += 200;
@@ -112,7 +118,11 @@ function listStandardChromiumCandidates(platform = process.platform, env = proce
 
     if (platform === 'darwin') {
         return [
+            '/Applications/Chromium.app/Contents/MacOS/Chromium',
+            '/Applications/Ungoogled Chromium.app/Contents/MacOS/Chromium',
             '/Applications/Google Chrome.app/Contents/MacOS/Google Chrome',
+            homeDir ? path.join(homeDir, 'Applications', 'Chromium.app', 'Contents', 'MacOS', 'Chromium') : null,
+            homeDir ? path.join(homeDir, 'Applications', 'Ungoogled Chromium.app', 'Contents', 'MacOS', 'Chromium') : null,
             homeDir ? path.join(homeDir, 'Applications', 'Google Chrome.app', 'Contents', 'MacOS', 'Google Chrome') : null
         ].filter(Boolean);
     }

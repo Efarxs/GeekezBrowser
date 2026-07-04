@@ -130,10 +130,12 @@ function extractZip(zipPath, destDir) {
     });
 }
 
-function extractTarGz(archivePath, destDir) {
-    console.log('📦 Extracting tar.gz...');
+function extractTar(archivePath, destDir, mode = 'gz') {
+    console.log(`📦 Extracting tar.${mode}...`);
     // 优先用系统自带 tar（Linux/macOS/Windows 10+ 默认都有）
-    const result = spawnSync('tar', ['-xzf', archivePath, '-C', destDir], {
+    // -z: gzip, -J: xz, -j: bzip2
+    const flag = mode === 'xz' ? '-xJf' : (mode === 'bz2' ? '-xjf' : '-xzf');
+    const result = spawnSync('tar', [flag, archivePath, '-C', destDir], {
         stdio: ['ignore', 'inherit', 'inherit']
     });
     if (result.error) {
@@ -144,9 +146,61 @@ function extractTarGz(archivePath, destDir) {
     }
 }
 
-function extractArchive(archivePath, ext, destDir) {
-    if (ext === 'zip') return extractZip(archivePath, destDir);
-    return extractTarGz(archivePath, destDir);
+// 挂载 .dmg，把里面的 .app 拷贝到目标目录，然后卸载。
+// 依赖 macOS 系统自带的 hdiutil，其它平台上不应该走到这里。
+function extractDmg(archivePath, destDir) {
+    if (os.platform() !== 'darwin') {
+        throw new Error(`Cannot extract .dmg on ${os.platform()}: hdiutil is macOS-only`);
+    }
+    console.log('📦 Mounting .dmg...');
+    const mountPoint = path.join(os.tmpdir(), `fc-mount-${Date.now()}`);
+    fs.mkdirSync(mountPoint, { recursive: true });
+
+    const attach = spawnSync('hdiutil', ['attach', '-nobrowse', '-quiet', '-mountpoint', mountPoint, archivePath], {
+        stdio: ['ignore', 'inherit', 'inherit']
+    });
+    if (attach.error || attach.status !== 0) {
+        try { fs.rmSync(mountPoint, { recursive: true, force: true }); } catch (e) { }
+        throw new Error(`hdiutil attach failed: ${attach.error?.message || 'exit ' + attach.status}`);
+    }
+
+    try {
+        const entries = fs.readdirSync(mountPoint);
+        const appName = entries.find(name => name.endsWith('.app'));
+        if (!appName) {
+            throw new Error(`.dmg mounted but no .app bundle found (contents: ${entries.join(', ')})`);
+        }
+        const srcApp = path.join(mountPoint, appName);
+        const dstApp = path.join(destDir, appName);
+        console.log(`📦 Copying ${appName} into ${destDir}...`);
+        // cp -R 保留符号链接和权限，比 fs.cpSync 更贴近 mac 语境
+        const cp = spawnSync('cp', ['-R', srcApp, dstApp], {
+            stdio: ['ignore', 'inherit', 'inherit']
+        });
+        if (cp.error || cp.status !== 0) {
+            throw new Error(`cp -R failed: ${cp.error?.message || 'exit ' + cp.status}`);
+        }
+    } finally {
+        console.log('📦 Detaching .dmg...');
+        spawnSync('hdiutil', ['detach', '-quiet', mountPoint], {
+            stdio: ['ignore', 'inherit', 'inherit']
+        });
+        try { fs.rmSync(mountPoint, { recursive: true, force: true }); } catch (e) { }
+    }
+}
+
+// 按扩展名分派解压。fingerprint-chromium 各平台产物：
+//   Windows: .zip
+//   Linux:   .tar.xz
+//   macOS:   .dmg  (少数版本也有 .zip)
+function extractArchive(archivePath, destDir) {
+    const lower = archivePath.toLowerCase();
+    if (lower.endsWith('.zip')) return extractZip(archivePath, destDir);
+    if (lower.endsWith('.tar.gz') || lower.endsWith('.tgz')) return extractTar(archivePath, destDir, 'gz');
+    if (lower.endsWith('.tar.xz')) return extractTar(archivePath, destDir, 'xz');
+    if (lower.endsWith('.tar.bz2')) return extractTar(archivePath, destDir, 'bz2');
+    if (lower.endsWith('.dmg')) return extractDmg(archivePath, destDir);
+    throw new Error(`Unsupported archive format: ${archivePath}`);
 }
 
 // 清理老资产（xray-core / gost-ssh-tunnel 遗留文件，方便老用户升级到 sing-box 时自动清理）
@@ -205,7 +259,7 @@ async function installSingBox(isGlobal) {
     const tmpExtractDir = path.join(BIN_DIR, `.singbox-extract-${Date.now()}`);
     fs.mkdirSync(tmpExtractDir, { recursive: true });
     try {
-        extractArchive(archivePath, ext, tmpExtractDir);
+        extractArchive(archivePath, tmpExtractDir);
 
         // archive 内含 `<innerDir>/sing-box(.exe)` 子路径
         const innerBinary = path.join(tmpExtractDir, innerDir, execName);
@@ -244,6 +298,7 @@ async function installFingerprintChromium(isGlobal) {
 
     const FC_API_URL = `https://api.github.com/repos/adryfish/fingerprint-chromium/releases/tags/${FC_VERSION}`;
     let downloadUrl;
+    let assetName = '';
     try {
         const releaseData = await new Promise((resolve, reject) => {
             const makeRequest = (url) => {
@@ -273,15 +328,26 @@ async function installFingerprintChromium(isGlobal) {
             makeRequest(isGlobal ? FC_API_URL : (GH_PROXY + FC_API_URL));
         });
 
-        const platformMap = { win32: 'windows_x64', darwin: 'macos', linux: 'linux' };
-        const platformKeyword = platformMap[os.platform()];
-        const asset = (releaseData.assets || []).find(a =>
-            a.name.includes(platformKeyword) && (a.name.endsWith('.zip') || a.name.endsWith('.tar.xz'))
-        );
+        // 每个平台按优先级挑资产：mac 优先 zip（简单）再退到 dmg（需要 hdiutil）；
+        // linux 优先 tar.xz；windows 只用 zip。
+        const platformPreferences = {
+            win32: { keyword: 'windows_x64', exts: ['.zip'] },
+            darwin: { keyword: 'macos', exts: ['.zip', '.dmg'] },
+            linux: { keyword: 'linux', exts: ['.tar.xz', '.tar.gz', '.zip'] }
+        };
+        const pref = platformPreferences[os.platform()];
+        if (!pref) throw new Error(`Unsupported platform ${os.platform()}`);
+        const assets = (releaseData.assets || []).filter(a => a.name.includes(pref.keyword));
+        let asset = null;
+        for (const ext of pref.exts) {
+            asset = assets.find(a => a.name.toLowerCase().endsWith(ext));
+            if (asset) break;
+        }
         if (!asset) {
-            throw new Error(`No matching asset found for ${os.platform()}`);
+            throw new Error(`No matching asset found for ${os.platform()} (searched ${pref.exts.join(', ')})`);
         }
         downloadUrl = isGlobal ? asset.browser_download_url : (GH_PROXY + asset.browser_download_url);
+        assetName = asset.name;
         console.log(`📦 Asset: ${asset.name} (${formatBytes(asset.size)})`);
     } catch (e) {
         console.error(`⚠️  GitHub API query failed: ${e.message}, using hardcoded URL...`);
@@ -296,15 +362,17 @@ async function installFingerprintChromium(isGlobal) {
             console.error(`❌ No download URL for platform ${os.platform()}`);
             process.exit(1);
         }
+        assetName = path.basename(HARDCODED_URLS[os.platform()] || '');
     }
 
     if (fs.existsSync(FC_TARGET_DIR)) fs.rmSync(FC_TARGET_DIR, { recursive: true, force: true });
     fs.mkdirSync(FC_TARGET_DIR, { recursive: true });
 
-    const zipPath = path.join(FC_TARGET_DIR, '..', 'fc-temp.zip');
-    await downloadFile(downloadUrl, zipPath, 'FP-Chrome ');
-    await extractZip(zipPath, FC_TARGET_DIR);
-    if (fs.existsSync(zipPath)) fs.unlinkSync(zipPath);
+    // 保留原始扩展名，让 extractArchive 按后缀分派解压
+    const archivePath = path.join(FC_TARGET_DIR, '..', assetName || 'fc-download');
+    await downloadFile(downloadUrl, archivePath, 'FP-Chrome ');
+    extractArchive(archivePath, FC_TARGET_DIR);
+    if (fs.existsSync(archivePath)) fs.unlinkSync(archivePath);
     fs.writeFileSync(FC_VERSION_FILE, FC_VERSION);
     console.log(`✅ fingerprint-chromium ${FC_VERSION} installed.`);
 }
