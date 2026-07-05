@@ -187,7 +187,7 @@ curl "http://127.0.0.1:12138/api/profiles/a1b2c3d4-e5f6-7890-abcd-ef1234567890"
 | `proxyStr` | string | 否 | 代理串，支持 `socks5://`、`http://`、`vmess://`、`vless://`、`trojan://`、`ss://`、`ssh://`、`hy2://`、`tuic://`。留空 = 直连 |
 | `tags` | string[] \| string | 否 | 标签，数组或英文/中文逗号分隔 |
 | `notes` | string | 否 | 备注 |
-| `preProxyOverride` | string | 否 | `default` / 指定 pre-proxy ID / `''`。默认 `default` |
+| `preProxyOverride` | string | 否 | 前置代理开关，仅接受 `default` / `on` / `off`。`default`=跟随全局设置；`on`=强制启用；`off`=强制禁用。默认 `default` |
 | `customArgs` | string | 否 | 附加 Chromium 命令行参数（多行或空格分隔的 `--xxx`） |
 | `ignoreCertErrors` | boolean | 否 | 是否忽略证书错误。默认 `false` |
 | `resetOnLaunch` | boolean | 否 | 每次启动是否重置指纹与 user-data。默认 `false` |
