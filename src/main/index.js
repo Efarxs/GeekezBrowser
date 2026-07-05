@@ -196,8 +196,13 @@ function createApiServer(port) {
             if (result && result.__streamHandled) {
                 return;
             }
+            // Handlers use two response shapes:
+            //   Error wrapper: { status, data: {...body} } — pick .data as body.
+            //   Success body:  {...body} (may itself contain a `data` field like YAML export) — use as-is.
+            const hasStatusWrapper = Object.prototype.hasOwnProperty.call(result, 'status');
+            const responseBody = hasStatusWrapper ? result.data : result;
             res.writeHead(result.status || 200);
-            res.end(JSON.stringify(result.data || result));
+            res.end(JSON.stringify(responseBody));
         } catch (err) {
             console.error('API Error:', err);
             res.writeHead(err.status || err.statusCode || 500);
@@ -1423,10 +1428,11 @@ function ensureProxyStrValid(proxyStr) {
         parseProxyLink(raw, 'proxy_validate');
     } catch (err) {
         const msg = String(err && err.message ? err.message : '');
-        if (msg.includes('Unsupported protocol')) {
-            throw new Error('代理链接错误：不支持的协议或格式');
-        }
-        throw new Error(`代理链接错误：${msg || '格式不正确'}`);
+        const validationError = msg.includes('Unsupported protocol')
+            ? new Error('代理链接错误：不支持的协议或格式')
+            : new Error(`代理链接错误：${msg || '格式不正确'}`);
+        validationError.status = 400;
+        throw validationError;
     }
 }
 
@@ -1959,6 +1965,7 @@ async function handleApiRequest(method, pathname, body, params, context = {}) {
         const password = params.get('password');
         if (!password) return { status: 400, data: { success: false, error: 'Password required. Use ?password=yourpassword' } };
 
+        const profiles = await profileDB.getAll();
         const backupData = {
             version: 2,
             createdAt: Date.now(),
@@ -2018,6 +2025,7 @@ async function handleApiRequest(method, pathname, body, params, context = {}) {
 
     // GET /api/export/fingerprint - Export YAML fingerprints
     if (method === 'GET' && pathname === '/api/export/fingerprint') {
+        const profiles = await profileDB.getAll();
         const exportData = profiles.map(p => ({
             id: p.id,
             name: p.name,
@@ -2043,29 +2051,35 @@ async function handleApiRequest(method, pathname, body, params, context = {}) {
 
             if (!content) return { status: 400, data: { success: false, error: 'Content required' } };
 
+            const existingProfiles = await profileDB.getAll();
+
             // Try YAML first
+            let yamlData = null;
             try {
-                const yamlData = yaml.load(content);
-                if (Array.isArray(yamlData)) {
-                    let imported = 0;
-                    for (const item of yamlData) {
-                        const name = generateUniqueName(item.name || `Imported-${Date.now()}`);
-                        const newProfile = {
-                            id: uuidv4(),
-                            name,
-                            proxyStr: item.proxyStr || '',
-                            tags: item.tags || [],
-                            notes: normalizeProfileNotes(firstDefined(item.notes, item.note, item.profileNotes, '')),
-                            fingerprint: item.fingerprint || await generateFingerprint({}),
-                            createdAt: Date.now()
-                        };
-                        await profileDB.insert(newProfile);
-                        imported++;
-                    }
-                    notifyUIRefresh();
-                    return { success: true, message: `Imported ${imported} profiles from YAML`, count: imported };
+                yamlData = yaml.load(content);
+            } catch (yamlErr) {
+                yamlData = null;
+            }
+            if (Array.isArray(yamlData)) {
+                let imported = 0;
+                for (const item of yamlData) {
+                    const name = buildUniqueProfileName(existingProfiles, item.name || `Imported-${Date.now()}`);
+                    const newProfile = {
+                        id: uuidv4(),
+                        name,
+                        proxyStr: item.proxyStr || '',
+                        tags: item.tags || [],
+                        notes: normalizeProfileNotes(firstDefined(item.notes, item.note, item.profileNotes, '')),
+                        fingerprint: item.fingerprint || generateFingerprint({}),
+                        createdAt: Date.now()
+                    };
+                    await profileDB.insert(newProfile);
+                    existingProfiles.push({ name });
+                    imported++;
                 }
-            } catch (yamlErr) { }
+                notifyUIRefresh();
+                return { success: true, message: `Imported ${imported} profiles from YAML`, count: imported };
+            }
 
             // Try encrypted backup
             if (!password) return { status: 400, data: { success: false, error: 'Password required for encrypted backup' } };
@@ -2078,9 +2092,10 @@ async function handleApiRequest(method, pathname, body, params, context = {}) {
 
                 let imported = 0;
                 for (const profile of backupData.profiles || []) {
-                    const name = generateUniqueName(profile.name);
+                    const name = buildUniqueProfileName(existingProfiles, profile.name);
                     const newProfile = { ...profile, id: uuidv4(), name };
                     await profileDB.insert(newProfile);
+                    existingProfiles.push({ name });
                     imported++;
                 }
                 notifyUIRefresh();

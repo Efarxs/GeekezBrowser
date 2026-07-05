@@ -184,7 +184,7 @@ curl "http://127.0.0.1:12138/api/profiles/a1b2c3d4-e5f6-7890-abcd-ef1234567890"
 
 | 字段 | 类型 | 必填 | 说明 |
 |---|---|---|---|
-| `name` | string | 否 | 环境名。若重名会自动追加 `-2/-3`。默认 `Profile-<timestamp>` |
+| `name` | string | 否 | 环境名。若重名会自动追加 `-02`/`-03`（两位补零）。默认 `Profile-<timestamp>` |
 | `proxyStr` | string | 否 | 代理串，支持 `socks5://`、`http://`、`vmess://`、`vless://`、`trojan://`、`ss://`、`ssh://`、`hy2://`、`tuic://`。留空 = 直连 |
 | `tags` | string[] \| string | 否 | 标签，数组或英文/中文逗号分隔 |
 | `notes` | string | 否 | 备注 |
@@ -501,7 +501,7 @@ curl "http://127.0.0.1:12138/api/export/fingerprint"
 
 ### 11) 导入 profile · `POST /api/import`
 
-从 YAML 或加密备份导入 profile。**导入不会覆盖同名 profile**，重名会自动追加 `-2/-3`。
+从 YAML 或加密备份导入 profile。**导入不会覆盖同名 profile**，重名会自动追加 `-02`/`-03`（两位补零）。
 
 **Body 参数**（JSON）：
 
@@ -690,7 +690,7 @@ async function api(method, path, body) {
 ## 七、字段名约定速查
 
 - **profile id**：UUID v4 字符串
-- **profile name**：唯一，Unicode，重名会自动追加 `-2/-3`
+- **profile name**：唯一，Unicode，重名会自动追加 `-02`/`-03`（两位补零）
 - **时间戳**：全部使用 UTC 毫秒（`Date.now()`）
 - **`remote port`**：字段名**含空格**（历史兼容），JS 读取需 `obj['remote port']`
 - **代理字符串留空** = 直连
