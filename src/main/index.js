@@ -1545,12 +1545,12 @@ function normalizeFingerprintOptions(data = {}) {
         geolocation: firstDefined(data.geolocation, inputFp.geolocation),
         language: firstDefined(data.language, inputFp.language),
         languages: firstDefined(data.languages, inputFp.languages),
-        platform: firstDefined(data.platform, inputFp.platform),
-        // Track whether the user chose "Auto Random" so ephemeral (resetOnLaunch)
-        // rerolls can pick a new platform each launch. For a fixed profile this
-        // stays 'fixed' and `platform` above holds the concrete value.
-        platformMode: firstDefined(data.platformMode, inputFp.platformMode,
-            (data.platform === 'auto' || inputFp.platform === 'auto') ? 'auto' : 'fixed'),
+        // Legacy 'auto' platform values (from before we removed the OS auto-random
+        // feature) are silently coerced to Win32 so old profiles keep loading.
+        platform: (() => {
+            const p = firstDefined(data.platform, inputFp.platform);
+            return p === 'auto' ? 'Win32' : p;
+        })(),
         hardwareConcurrency: firstDefined(data.hardwareConcurrency, inputFp.hardwareConcurrency),
         deviceMemory: firstDefined(data.deviceMemory, inputFp.deviceMemory),
         canvasNoise: firstDefined(data.canvasNoise, inputFp.canvasNoise),
@@ -4376,8 +4376,9 @@ const launchProfileHandler = async (event, profileId, preferredLang, launchOptio
     // resetOnLaunch: reroll identity-shaping fields each launch. Preserve fields
     // the user set intentionally (timezone, city, geolocation, language, custom
     // UA). Custom UA takes priority — if user pinned one, don't overwrite it.
-    // For platform: platformMode 'auto' means "reroll each launch" (Win/Mac/Linux
-    // rotates); platformMode 'fixed' pins the concrete platform saved on profile.
+    // Platform is always pinned to the concrete value the user picked at
+    // creation; Win/Mac/Linux auto-random was removed because kernel bits still
+    // leak the true host OS and detectors were catching the mismatch.
     if (profile.resetOnLaunch) {
         const prevFp = profile.fingerprint;
         const carryOver = {
@@ -4389,12 +4390,9 @@ const launchProfileHandler = async (event, profileId, preferredLang, launchOptio
             userAgent: prevFp.userAgent,           // 空串 = 未设 → 内核派生
             uaMode: prevFp.uaMode,
             browserType: prevFp.browserType,
-            platformMode: prevFp.platformMode,
-            platform: prevFp.platformMode === 'auto' ? 'auto' : prevFp.platform
+            platform: prevFp.platform
         };
         profile.fingerprint = generateFingerprint(carryOver);
-        // 让 platformMode 也带到新 fingerprint 里（generateFingerprint 不感知它）
-        profile.fingerprint.platformMode = prevFp.platformMode || 'fixed';
     }
 
     updateLaunchProgress(
@@ -4837,12 +4835,37 @@ const launchProfileHandler = async (event, profileId, preferredLang, launchOptio
 
             const fcBrand = resolveFingerprintChromiumBrand(profile.fingerprint);
             launchArgs.push(`--fingerprint-brand=${fcBrand}`);
+            // Effective UA & brand-version pair:
+            //  - Sec-CH-UA-Full-Version-List (== --fingerprint-brand-version) must be
+            //    a real Chrome stable patch, otherwise browserscan flags us.
+            //  - navigator.userAgent must follow Chrome 101+ UA Reduction: the
+            //    Chrome/... segment ends in .0.0.0. Non-zero patches in the UA
+            //    string trip the "Different browser version" heuristic.
+            // If the caller's stored userAgent still carries a non-reduced patch,
+            // extract it (best user intent) and rewrite the UA to the reduced form.
+            let effectiveUa = customUserAgent;
             let fcBrandVersion = '';
             if (shouldSpoofUa) {
                 fcBrandVersion = resolveFingerprintChromiumBrandVersion(profile.fingerprint, chromiumVersion);
                 if (customUserAgent) {
                     const uaMatch = customUserAgent.match(/(?:Edg|Chrome)\/(\d+\.\d+\.\d+\.\d+)/);
-                    if (uaMatch) fcBrandVersion = uaMatch[1];
+                    if (uaMatch) {
+                        const extracted = uaMatch[1];
+                        const isReducedForm = /^\d+\.0\.0\.0$/.test(extracted);
+                        if (!isReducedForm) {
+                            // User pinned a specific patch — treat it as brand-version and
+                            // strip it from the UA string.
+                            fcBrandVersion = extracted;
+                            const extractedMajor = extracted.split('.')[0];
+                            effectiveUa = customUserAgent.replace(
+                                /((?:Chrome|Edg)\/)\d+\.\d+\.\d+\.\d+/g,
+                                `$1${extractedMajor}.0.0.0`
+                            );
+                        }
+                        // If UA already reduced, keep the profile's stored
+                        // browserFullVersion (populated from BROWSER_FULL_VERSION_POOL) —
+                        // do NOT overwrite fcBrandVersion with "148.0.0.0".
+                    }
                 }
                 if (fcBrandVersion) {
                     launchArgs.push(`--fingerprint-brand-version=${fcBrandVersion}`);
@@ -4867,12 +4890,12 @@ const launchProfileHandler = async (event, profileId, preferredLang, launchOptio
                 launchArgs.push(`--timezone=${profile.fingerprint.timezone}`);
             }
 
-            if (customUserAgent) {
-                launchArgs.push(`--user-agent=${customUserAgent}`);
+            if (effectiveUa) {
+                launchArgs.push(`--user-agent=${effectiveUa}`);
             }
 
             console.log('🔒 fingerprint-chromium engine mode active');
-            console.log(`   Seed: ${fpSeed}, Platform: ${fcPlatform}, Brand: ${fcBrand}${customUserAgent ? ', custom UA' : ''}`);
+            console.log(`   Seed: ${fpSeed}, Platform: ${fcPlatform}, Brand: ${fcBrand}${effectiveUa ? ', custom UA' : ''}${fcBrandVersion ? `, brand-version: ${fcBrandVersion}` : ''}`);
         }
 
         // 4. Remote Debugging Port (仅显式开启且非干净模式)

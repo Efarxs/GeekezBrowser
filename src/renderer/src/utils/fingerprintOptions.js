@@ -14,7 +14,6 @@ export const browserMajorVersionOptions = [
 ];
 
 export const platformOptions = [
-    makeOption('auto', 'Auto Random', '自动随机'),
     makeOption('Win32', 'Windows', 'Windows'),
     makeOption('MacIntel', 'macOS', 'macOS'),
     makeOption('Linux x86_64', 'Linux', 'Linux')
@@ -50,26 +49,44 @@ export function getOptionLabel(option) {
 
 const KERNEL_CHROME_MAJOR = 148;
 
-function randInt(min, max) {
-    return Math.floor(Math.random() * (max - min + 1)) + min;
-}
-
-function buildRandomFullVersion(major) {
-    // Chrome full version format: MAJOR.0.<build>.<patch>
-    const build = randInt(7500, 7999);
-    const patch = randInt(50, 300);
-    return `${major}.0.${build}.${patch}`;
-}
-
 const PLATFORM_UA_TOKEN = {
     Win32: 'Windows NT 10.0; Win64; x64',
     MacIntel: 'Macintosh; Intel Mac OS X 10_15_7',
     'Linux x86_64': 'X11; Linux x86_64'
 };
 
+// Real Google Chrome stable patches for the same major. Must mirror
+// BROWSER_FULL_VERSION_POOL in src/main/fingerprint.js — browserscan-style
+// detectors compare Sec-CH-UA-Full-Version-List against a real-release list,
+// so this pool must stay in sync when the kernel major is upgraded.
+const REAL_CHROME_PATCH_POOL = {
+    148: [
+        '148.0.7778.56',
+        '148.0.7778.96',
+        '148.0.7778.97',
+        '148.0.7778.98',
+        '148.0.7778.167',
+        '148.0.7778.168',
+        '148.0.7778.169',
+        '148.0.7778.178',
+        '148.0.7778.179',
+        '148.0.7778.180',
+        '148.0.7778.181',
+        '148.0.7778.216',
+        '148.0.7778.217',
+        '148.0.7778.218'
+    ]
+};
+
+// Emit a random full 4-part Chrome UA (`Chrome/<major>.<build>.<patch>`) so the
+// user sees a plausible-looking version string in the profile editor. At launch
+// the main process extracts the patch as --fingerprint-brand-version and
+// rewrites the UA to the Chrome 101+ UA-Reduction form (Chrome/<major>.0.0.0)
+// before handing it to fingerprint-chromium.
 export function generateRandomUserAgent({ platform = 'Win32', browserType = 'chrome', major = KERNEL_CHROME_MAJOR } = {}) {
     const token = PLATFORM_UA_TOKEN[platform] || PLATFORM_UA_TOKEN.Win32;
-    const fullVersion = buildRandomFullVersion(major);
+    const pool = REAL_CHROME_PATCH_POOL[major] || [`${major}.0.0.0`];
+    const fullVersion = pool[Math.floor(Math.random() * pool.length)];
     const base = `Mozilla/5.0 (${token}) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/${fullVersion} Safari/537.36`;
     return browserType === 'edge' ? `${base} Edg/${fullVersion}` : base;
 }

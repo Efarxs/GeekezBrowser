@@ -104,7 +104,6 @@
             {{ getOptionLabel(opt) }}
           </option>
         </select>
-        <div v-if="form.platform === 'auto'" class="hint-text">{{ $t('platformAutoHint') }}</div>
 
         <label class="reset-toggle mt-10">
           <input type="checkbox" v-model="form.resetOnLaunch">
@@ -174,14 +173,8 @@ const form = reactive({
 function randomizeCustomUa() {
   const preset = parseBrowserVersionPreset(form.browserVersionPreset);
   const browserType = preset.browserType === 'edge' ? 'edge' : 'chrome';
-  // If the user chose "Auto Random" for platform, pick a concrete one for the UA
-  // string (UA must be tied to a specific OS token).
-  const pool = ['Win32', 'MacIntel', 'Linux x86_64'];
-  const uaPlatform = form.platform === 'auto'
-    ? pool[Math.floor(Math.random() * pool.length)]
-    : form.platform;
   form.customUserAgent = generateRandomUserAgent({
-    platform: uaPlatform,
+    platform: form.platform,
     browserType
   });
 }
@@ -362,7 +355,6 @@ async function handleSave() {
         browserType: browserPreset.browserType,
         browserMajorVersion: browserPreset.browserMajorVersion,
         platform: form.platform,
-        platformMode: form.platform === 'auto' ? 'auto' : 'fixed',
         userAgent: trimmedUa || undefined,
         ignoreCertErrors: true,
         resetOnLaunch: !!form.resetOnLaunch

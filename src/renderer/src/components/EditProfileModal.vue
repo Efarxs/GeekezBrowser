@@ -91,7 +91,6 @@
             {{ getOptionLabel(opt) }}
           </option>
         </select>
-        <div v-if="form.platform === 'auto'" class="hint-text">{{ $t('platformAutoHint') }}</div>
 
         <label class="reset-toggle mt-10">
           <input type="checkbox" v-model="form.resetOnLaunch">
@@ -193,12 +192,8 @@ const form = reactive({
 function randomizeCustomUa() {
   const preset = parseBrowserVersionPreset(form.browserVersionPreset);
   const browserType = preset.browserType === 'edge' ? 'edge' : 'chrome';
-  const pool = ['Win32', 'MacIntel', 'Linux x86_64'];
-  const uaPlatform = form.platform === 'auto'
-    ? pool[Math.floor(Math.random() * pool.length)]
-    : form.platform;
   form.customUserAgent = generateRandomUserAgent({
-    platform: uaPlatform,
+    platform: form.platform,
     browserType
   });
 }
@@ -282,10 +277,8 @@ watch(() => uiStore.editModalVisible, async (visible) => {
     form.debugPort = p.debugPort || null;
     form.customArgs = p.customArgs || '';
     form.browserVersionPreset = toBrowserVersionPreset(fp.uaMode, fp.browserType, fp.browserMajorVersion);
-    // If profile was created with "Auto Random" platform (platformMode='auto'),
-    // show 'auto' in the dropdown so users can flip it off. Otherwise show the
-    // concrete platform they picked.
-    form.platform = fp.platformMode === 'auto' ? 'auto' : (fp.platform || 'Win32');
+    // Legacy 'auto' values (from before we removed OS auto-random) show as Windows.
+    form.platform = (!fp.platform || fp.platform === 'auto') ? 'Win32' : fp.platform;
     form.customUserAgent = fp.userAgent || '';
     form.resetOnLaunch = !!p.resetOnLaunch;
 
@@ -382,7 +375,6 @@ async function handleSave() {
         browserType: browserPreset.browserType,
         browserMajorVersion: browserPreset.browserMajorVersion,
         platform: form.platform,
-        platformMode: form.platform === 'auto' ? 'auto' : 'fixed',
         userAgent: trimmedUa || null
       },
       debugPort: form.debugPort,

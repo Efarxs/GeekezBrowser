@@ -27,8 +27,26 @@ const UTLS_SIGNATURES = [
     'randomized',
     'hellorandomizednoalpn'
 ];
+// Real Google Chrome stable patch numbers for the same major. Keeping the pool
+// tied to *shipped* Chrome releases matters: browserscan-style detectors compare
+// the declared Sec-CH-UA-Full-Version-List value against a known-good list, so
+// invented patches (or the ungoogled-chromium build's own patch id) score as
+// spoofed. Bump this list when we upgrade the fingerprint-chromium major.
 const BROWSER_FULL_VERSION_POOL = [
-    '148.0.7778.215'
+    '148.0.7778.56',
+    '148.0.7778.96',
+    '148.0.7778.97',
+    '148.0.7778.98',
+    '148.0.7778.167',
+    '148.0.7778.168',
+    '148.0.7778.169',
+    '148.0.7778.178',
+    '148.0.7778.179',
+    '148.0.7778.180',
+    '148.0.7778.181',
+    '148.0.7778.216',
+    '148.0.7778.217',
+    '148.0.7778.218'
 ];
 const BROWSER_FULL_VERSION_BY_MAJOR = BROWSER_FULL_VERSION_POOL.reduce((acc, version) => {
     const major = String(version).split('.')[0];
@@ -477,9 +495,6 @@ function asNumber(value) {
 }
 
 function resolveRuntimePlatform(explicitPlatform) {
-    // 'auto' 表示每次调用都随机（用于 resetOnLaunch 模式，或者非 ephemeral profile
-    // 首次创建时抽一次身份）
-    if (explicitPlatform === 'auto') return getRandom(['windows', 'mac', 'linux']);
     if (explicitPlatform === 'Win32') return 'windows';
     if (explicitPlatform === 'MacIntel') return 'mac';
     if (explicitPlatform === 'Linux x86_64') return 'linux';
@@ -591,6 +606,10 @@ function buildBrowserBrands(browserType, majorVersion, fullVersion) {
 }
 
 function buildUserAgent(browserType, fullVersion, uaPlatformToken) {
+    // We keep the full 4-part Chrome patch in the *stored* UA so users see a
+    // realistic version string in the profile editor. The main process rewrites
+    // this to the Chrome UA-Reduction form (Chrome/<major>.0.0.0) at launch
+    // and forwards the extracted patch as --fingerprint-brand-version.
     const base = `Mozilla/5.0 (${uaPlatformToken}) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/${fullVersion} Safari/537.36`;
     if (browserType === 'edge') return `${base} Edg/${fullVersion}`;
     return base;

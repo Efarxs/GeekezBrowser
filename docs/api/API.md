@@ -1,6 +1,6 @@
 # GeekEZ Browser · REST API 参考
 
-> 适用版本：**v1.7.0-beta**
+> 适用版本：**v1.7.0**
 > 更新日期：2026-07-05
 
 GeekEZ Browser 提供一套本地 HTTP REST API，可通过脚本对指纹环境进行增删改查、启动、停止、备份等操作。
@@ -149,11 +149,10 @@ curl "http://127.0.0.1:12138/api/profiles/a1b2c3d4-e5f6-7890-abcd-ef1234567890"
         "fingerprint": {
             "uaMode": "none",
             "platform": "Win32",
-            "platformMode": "fixed",
             "browserType": "chrome",
             "browserMajorVersion": 148,
-            "browserFullVersion": "148.0.7778.215",
-            "userAgent": "",
+            "browserFullVersion": "148.0.7778.167",
+            "userAgent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/148.0.7778.167 Safari/537.36",
             "screen": { "width": 1920, "height": 1080 },
             "window": { "width": 1920, "height": 1080 },
             "language": "en-US",
@@ -202,12 +201,11 @@ curl "http://127.0.0.1:12138/api/profiles/a1b2c3d4-e5f6-7890-abcd-ef1234567890"
 | 字段 | 类型 | 说明 |
 |---|---|---|
 | `uaMode` | string | `spoof`（伪装 UA/品牌）/ `none`（不改 UA，只做隔离）。默认 `none` |
-| `platform` | string | `Win32` / `MacIntel` / `Linux x86_64` / `auto`（每次启动随机选一种，需配合 `resetOnLaunch`）|
-| `platformMode` | string | `fixed`（默认）/ `auto`。选了 `auto` 时每次启动 platform 会重掷 |
+| `platform` | string | `Win32` / `MacIntel` / `Linux x86_64`。必须显式指定（跨启动稳定，不再支持自动随机） |
 | `browserType` | string | `chrome` / `edge`。默认 `chrome`。同时决定 uTLS 指纹（edge→edge，其他→chrome）|
 | `browserMajorVersion` | number | 主版本号。目前**只支持 `148`**（传其他值会被规范化回 148） |
-| `browserFullVersion` | string | 完整版本号。目前**只支持 `148.0.7778.215`** |
-| `userAgent` | string | 显式覆盖 UA 字符串（若传，会同时更新 `sec-ch-ua-full-version`） |
+| `browserFullVersion` | string | 完整 Chrome patch 号（例：`148.0.7778.167`）。不传时从内置真实 Chrome 148 stable patch 池随机抽取。存储在 profile 里的值就是这个完整号，UI 编辑器里显示的 UA 也带这个 patch |
+| `userAgent` | string | 覆盖 UA 字符串。**保留完整版本号**（例：`Chrome/148.0.7778.167`）—— 存储与 UI 显示都是完整版本。启动时主进程会自动做 Chrome 101+ UA-Reduction 转换：(a) 提取 patch 号作为 `--fingerprint-brand-version`（即 `Sec-CH-UA-Full-Version-List`）(b) 把传给 `--user-agent` 的字符串里 `Chrome/X.Y.Z.W` 归零为 `Chrome/X.0.0.0`。这样既保留了用户对具体版本的选择意图，又符合 Chrome 真实浏览器行为、能过 browserscan 校验 |
 | `screen` | object | `{ "width": 1920, "height": 1080 }`。会用作启动窗口大小 |
 | `language` | string | 主语言，如 `en-US`。传 `auto` 或不传 = 根据出口 IP 自动匹配 |
 | `languages` | string[] | 语言列表，如 `["en-US","en"]`。未传会从 `language` 派生 |
