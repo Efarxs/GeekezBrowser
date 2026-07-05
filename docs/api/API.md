@@ -147,21 +147,22 @@ curl "http://127.0.0.1:12138/api/profiles/a1b2c3d4-e5f6-7890-abcd-ef1234567890"
         "isSetup": true,
         "createdAt": 1751000000000,
         "fingerprint": {
-            "uaMode": "auto",
+            "uaMode": "none",
             "platform": "Win32",
+            "platformMode": "fixed",
             "browserType": "chrome",
             "browserMajorVersion": 148,
             "browserFullVersion": "148.0.7778.215",
-            "userAgent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) ...",
+            "userAgent": "",
             "screen": { "width": 1920, "height": 1080 },
+            "window": { "width": 1920, "height": 1080 },
             "language": "en-US",
             "languages": ["en-US", "en"],
             "hardwareConcurrency": 8,
             "deviceMemory": 8,
             "timezone": "America/Los_Angeles",
-            "webglProfile": "win_nvidia_rtx_3060",
-            "canvasNoise": { "r": 3, "g": -2, "b": 5, "a": 1 },
-            "audioNoise": 0.0000005
+            "city": null,
+            "geolocation": null
         },
         "running": true
     }
@@ -194,29 +195,38 @@ curl "http://127.0.0.1:12138/api/profiles/a1b2c3d4-e5f6-7890-abcd-ef1234567890"
 | `debugPort` | number | 否 | 指定固定调试端口。默认按需自动分配（需先开启远程调试） |
 | `fingerprint` | object | 否 | 指纹对象（下方"指纹字段"表） |
 
-**`fingerprint` 常用字段**（都是可选，未传的会自动填充）：
+**`fingerprint` 字段**（都是可选，未传的会自动填充）：
+
+> 📌 v1.7 起，指纹改由 **fingerprint-chromium 内核**统一从 `--fingerprint=<seed>` 派生（seed 稳定绑定 profile ID，`resetOnLaunch=true` 时改用随机 seed）。因此 **Canvas / Audio / WebGL / TLS 指纹会自动随内核生成**，无需在 API 里传。下方列出的都是**真正会影响运行时**的字段：
 
 | 字段 | 类型 | 说明 |
 |---|---|---|
-| `uaMode` | string | `auto` / `custom` / `none`。默认 `auto` |
-| `platform` | string | `Win32` / `MacIntel` / `Linux x86_64` / `auto` |
-| `browserType` | string | `chrome` / `edge`。默认随机 |
-| `browserMajorVersion` | number | 如 `148` |
-| `browserFullVersion` | string | 如 `148.0.7778.215` |
-| `userAgent` | string | 显式覆盖 UA |
-| `tlsClientHello` | string | uTLS 指纹：`chrome` / `edge` / `firefox` / `safari` / `ios` / `android` / `random` / `randomized` / ... |
-| `screen` | object | `{ "width": 1920, "height": 1080 }` |
-| `language` | string | 语言，如 `en-US`。传 `auto` 或不传 = 根据 IP 自动 |
-| `languages` | string[] | `["en-US","en"]` |
-| `hardwareConcurrency` | number | CPU 核数，4/8/12/16 |
-| `deviceMemory` | number | 内存 GB，2/4/8/16 |
-| `timezone` | string | IANA 时区，如 `America/New_York`；传 `auto` = 跟随 IP |
-| `city` | object \| null | `{ "name": "New York", "lat": 40.7, "lng": -74.0 }` |
-| `geolocation` | object \| null | `{ "latitude": 40.7, "longitude": -74.0, "accuracy": 100 }` |
-| `webglProfile` | string | WebGL 预设 ID，如 `win_nvidia_rtx_3060`；`none` = 不改 |
-| `canvasNoise` | object | `{ "r": 3, "g": -2, "b": 5, "a": 1 }` |
-| `audioNoise` | number | 如 `0.0000005` |
-| `noiseSeed` | number | 随机种子（决定 canvas/audio 噪声的稳定性） |
+| `uaMode` | string | `spoof`（伪装 UA/品牌）/ `none`（不改 UA，只做隔离）。默认 `none` |
+| `platform` | string | `Win32` / `MacIntel` / `Linux x86_64` / `auto`（每次启动随机选一种，需配合 `resetOnLaunch`）|
+| `platformMode` | string | `fixed`（默认）/ `auto`。选了 `auto` 时每次启动 platform 会重掷 |
+| `browserType` | string | `chrome` / `edge`。默认 `chrome`。同时决定 uTLS 指纹（edge→edge，其他→chrome）|
+| `browserMajorVersion` | number | 主版本号。目前**只支持 `148`**（传其他值会被规范化回 148） |
+| `browserFullVersion` | string | 完整版本号。目前**只支持 `148.0.7778.215`** |
+| `userAgent` | string | 显式覆盖 UA 字符串（若传，会同时更新 `sec-ch-ua-full-version`） |
+| `screen` | object | `{ "width": 1920, "height": 1080 }`。会用作启动窗口大小 |
+| `language` | string | 主语言，如 `en-US`。传 `auto` 或不传 = 根据出口 IP 自动匹配 |
+| `languages` | string[] | 语言列表，如 `["en-US","en"]`。未传会从 `language` 派生 |
+| `timezone` | string | IANA 时区，如 `America/New_York`；传 `Auto` / `auto` / 不传 = 跟随 IP |
+| `hardwareConcurrency` | number | CPU 核数，取值 `4` / `8` / `12` / `16`。默认随机 |
+| `deviceMemory` | number | 内存 GB，取值 `2` / `4` / `8` / `16`。默认随机 |
+| `geolocation` | object \| null | 地理定位。格式 `{ "latitude": 40.7, "longitude": -74.0, "accuracy": 100 }`。通过内置扩展劫持 `navigator.geolocation` |
+| `city` | object \| null | **仅元数据**，用于 UI 展示（如 `{ "name": "New York", "lat": 40.7, "lng": -74.0 }`）。实际生效的是 `geolocation` |
+
+**已废弃/不再生效的字段**（旧文档 & 旧客户端可能还在传，但当前版本会忽略）：
+
+| 字段 | 状态 |
+|---|---|
+| `canvasNoise` | ❌ 由内核 seed 派生，字段被忽略 |
+| `audioNoise` | ❌ 由内核 seed 派生，字段被忽略 |
+| `noiseSeed` | ❌ 内核 seed 由 profile ID 稳定哈希生成，字段被忽略 |
+| `webgl` / `webglProfile` | ❌ fingerprint-chromium 144+ 已移除 GPU spoof 参数，字段被忽略 |
+| `tlsClientHello` | ❌ 运行时由 `browserType` 派生，字段被忽略 |
+| `userAgentMetadata` | ❌ 由指纹引擎按 `browserType` + `browserFullVersion` 自动构建 |
 
 **请求示例（最简）**：
 ```bash
@@ -239,6 +249,7 @@ curl -X POST http://127.0.0.1:12138/api/profiles \
     "tags": ["amazon", "de"],
     "notes": "德国卖家账号",
     "fingerprint": {
+        "uaMode": "spoof",
         "platform": "Win32",
         "browserType": "chrome",
         "browserMajorVersion": 148,
@@ -248,8 +259,7 @@ curl -X POST http://127.0.0.1:12138/api/profiles \
         "hardwareConcurrency": 8,
         "deviceMemory": 16,
         "screen": { "width": 1920, "height": 1080 },
-        "webglProfile": "win_nvidia_rtx_3060",
-        "tlsClientHello": "chrome"
+        "geolocation": { "latitude": 52.52, "longitude": 13.405, "accuracy": 100 }
     }
   }'
 ```
