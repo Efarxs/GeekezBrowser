@@ -11,6 +11,11 @@ export const useProfileStore = defineStore('profile', () => {
     // Present entry ⇒ ProfileCard renders inline progress bar. Cleared when
     // launch completes or fails so parallel launches don't clobber each other.
     const launchProgress = reactive({});
+    // Per-profile launch/runtime error. Keyed by profile.id.
+    // Present entry ⇒ ProfileCard renders inline error banner.
+    // Cleared on: (a) next launch attempt from this profile, (b) user click
+    // to dismiss, (c) app restart (memory-only, not persisted).
+    const launchError = reactive({});
     const searchText = ref('');
     const selectedTag = ref('');
     const selectedIds = ref([]);
@@ -129,6 +134,23 @@ export const useProfileStore = defineStore('profile', () => {
         delete launchProgress[id];
     };
 
+    const getLaunchError = (id) => launchError[id] || null;
+
+    const setLaunchError = (id, payload) => {
+        if (!id || !payload) return;
+        launchError[id] = {
+            message: payload.message || '',
+            stderrTail: payload.stderrTail || '',
+            kind: payload.kind || 'launch-failed',
+            at: Date.now()
+        };
+    };
+
+    const clearLaunchError = (id) => {
+        if (!id) return;
+        delete launchError[id];
+    };
+
     const createProfile = async (data) => {
         try {
             await profileService.saveProfile(data);
@@ -173,6 +195,10 @@ export const useProfileStore = defineStore('profile', () => {
         getLaunchProgress,
         setLaunchProgress,
         clearLaunchProgress,
+        launchError,
+        getLaunchError,
+        setLaunchError,
+        clearLaunchError,
         searchText,
         selectedTag,
         selectedIds,

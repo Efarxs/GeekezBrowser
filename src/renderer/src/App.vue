@@ -125,20 +125,15 @@ onMounted(async () => {
         });
 
         profileService.onProfileCrash((payload) => {
-            if (!payload) return;
+            if (!payload || !payload.profileId) return;
             const lang = localStorage.getItem('geekez_lang') === 'en' ? 'en' : 'cn';
-            const heading = lang === 'en'
-                ? `Environment "${payload.profileName || payload.profileId}" stopped unexpectedly`
-                : `环境「${payload.profileName || payload.profileId}」异常退出`;
-            const parts = [heading];
-            if (payload.reason) parts.push(payload.reason);
-            let tail = (payload.stderrTail || '').trim();
-            if (tail.length > 600) tail = '...' + tail.slice(-600);
-            if (tail) {
-                parts.push(lang === 'en' ? 'Last output:' : '最后输出：');
-                parts.push(tail);
-            }
-            uiStore.showAlert(parts.join('\n\n'));
+            const message = payload.reason
+                || (lang === 'en' ? 'Environment stopped unexpectedly' : '环境异常退出');
+            profileStore.setLaunchError(payload.profileId, {
+                message,
+                stderrTail: payload.stderrTail || '',
+                kind: payload.kind || 'runtime-crash'
+            });
         });
 
         profileService.onLaunchProgress((payload) => {

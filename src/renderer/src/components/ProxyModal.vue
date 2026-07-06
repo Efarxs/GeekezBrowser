@@ -135,6 +135,9 @@
                 <input v-model="editNodeForm.remark" type="text" maxlength="120" />
 
                 <label style="font-size:12px; opacity:0.75;">{{ $t('proxyLink') }}</label>
+                <div v-if="editingSubscriptionNode" class="sub-node-url-warn">
+                    ⚠ {{ $t('editSubNodeUrlWarn') }}
+                </div>
                 <textarea
                     v-model="editNodeForm.url"
                     rows="5"
@@ -167,6 +170,16 @@ const editNodeForm = ref({
     id: '',
     remark: '',
     url: ''
+});
+
+// True when the currently-open edit modal is editing a node that lives
+// inside a subscription group (not the manual group). URL changes there
+// may be reverted the next time the subscription is synced.
+const editingSubscriptionNode = computed(() => {
+    const id = editNodeForm.value.id;
+    if (!id) return false;
+    const node = proxyStore.settings.preProxies.find(p => p.id === id);
+    return !!(node && node.groupId && node.groupId !== 'manual');
 });
 
 const currentGroupName = computed(() => {
@@ -304,3 +317,15 @@ onMounted(() => {
     proxyStore.loadSettings();
 });
 </script>
+
+<style scoped>
+.sub-node-url-warn {
+    padding: 8px 10px;
+    border-radius: 6px;
+    background: rgba(243, 156, 18, 0.12);
+    border: 1px solid rgba(243, 156, 18, 0.35);
+    color: #f7b267;
+    font-size: 11px;
+    line-height: 1.5;
+}
+</style>

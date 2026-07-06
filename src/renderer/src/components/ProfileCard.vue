@@ -52,6 +52,19 @@
                     <span class="inline-launch-progress-pct">{{ launchProgress.percent }}%</span>
                 </div>
             </div>
+            <div v-if="launchError"
+                class="inline-launch-error"
+                :title="t('inlineLaunchErrorDismissHint')"
+                @click="handleErrorClick">
+                <span class="inline-launch-error-icon">⚠</span>
+                <span class="inline-launch-error-msg">{{ launchError.message }}</span>
+                <button v-if="launchError.stderrTail"
+                    class="inline-launch-error-details no-drag"
+                    @click.stop="showErrorDetails">
+                    {{ t('inlineLaunchErrorDetails') }}
+                </button>
+                <span class="inline-launch-error-close no-drag" @click.stop="dismissError">✕</span>
+            </div>
         </div>
         <div class="actions">
             <div class="launch-group no-drag">
@@ -147,6 +160,27 @@ const displayScreen = computed(() => {
 });
 
 const launchProgress = computed(() => profileStore.getLaunchProgress(props.profile.id));
+const launchError = computed(() => profileStore.getLaunchError(props.profile.id));
+
+const dismissError = () => profileStore.clearLaunchError(props.profile.id);
+
+const showErrorDetails = () => {
+    const err = launchError.value;
+    if (!err) return;
+    const lang = localStorage.getItem('geekez_lang') === 'en' ? 'en' : 'cn';
+    const parts = [err.message || ''];
+    let tail = (err.stderrTail || '').trim();
+    if (tail.length > 800) tail = '...' + tail.slice(-800);
+    if (tail) {
+        parts.push(lang === 'en' ? 'Last output:' : '最后输出：');
+        parts.push(tail);
+    }
+    uiStore.showAlert(parts.filter(Boolean).join('\n\n'));
+};
+
+// The whole banner (excluding the details button) is a click-target for
+// dismiss. Details button stops propagation so it doesn't also dismiss.
+const handleErrorClick = () => dismissError();
 
 const showDebugPort = computed(() => !!(
     settingsStore.enableRemoteDebugging && props.profile.debugPort
@@ -262,18 +296,26 @@ onBeforeUnmount(detachGlobalListeners);
 const launch = async () => {
     if (props.isLaunching) return;
     closeLaunchMenu();
+    profileStore.clearLaunchError(props.profile.id);
     const res = await profileService.launch(props.profile.id);
     if (!res.success && res.message) {
-        uiStore.showAlert(res.message);
+        profileStore.setLaunchError(props.profile.id, {
+            message: res.message,
+            kind: 'launch-failed'
+        });
     }
 };
 
 const launchClean = async () => {
     if (props.isLaunching) return;
     closeLaunchMenu();
+    profileStore.clearLaunchError(props.profile.id);
     const res = await profileService.launch(props.profile.id, { useCleanProfile: true });
     if (!res.success && res.message) {
-        uiStore.showAlert(res.message);
+        profileStore.setLaunchError(props.profile.id, {
+            message: res.message,
+            kind: 'launch-failed'
+        });
     }
 };
 
@@ -317,15 +359,22 @@ const importCookiesFromFile = async () => {
 
 const runFingerprintCheck = async () => {
     closeLaunchMenu();
+    profileStore.clearLaunchError(props.profile.id);
     try {
         const res = await profileService.launch(props.profile.id, {
             initialUrl: 'https://www.browserscan.net/'
         });
         if (!res.success && res.message) {
-            uiStore.showAlert(res.message);
+            profileStore.setLaunchError(props.profile.id, {
+                message: res.message,
+                kind: 'launch-failed'
+            });
         }
     } catch (e) {
-        uiStore.showAlert('Check failed: ' + (e?.message || e));
+        profileStore.setLaunchError(props.profile.id, {
+            message: 'Check failed: ' + (e?.message || e),
+            kind: 'launch-failed'
+        });
     }
 };
 
@@ -447,6 +496,62 @@ const remove = () => {
     font-weight: 600;
     color: var(--accent);
     white-space: nowrap;
+}
+
+.inline-launch-error {
+    display: flex;
+    align-items: center;
+    gap: 8px;
+    margin-top: 8px;
+    padding: 6px 10px;
+    border-radius: 6px;
+    background: rgba(231, 76, 60, 0.10);
+    border: 1px solid rgba(231, 76, 60, 0.35);
+    color: #f5a89f;
+    font-size: 11px;
+    line-height: 1.4;
+    max-width: 520px;
+    cursor: pointer;
+    user-select: none;
+    transition: background 0.15s;
+}
+.inline-launch-error:hover {
+    background: rgba(231, 76, 60, 0.16);
+}
+.inline-launch-error-icon {
+    flex-shrink: 0;
+    color: #e74c3c;
+    font-size: 12px;
+}
+.inline-launch-error-msg {
+    flex: 1;
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+}
+.inline-launch-error-details {
+    flex-shrink: 0;
+    padding: 2px 8px;
+    font-size: 10px;
+    background: transparent;
+    border: 1px solid rgba(245, 168, 159, 0.4);
+    color: #f5a89f;
+    border-radius: 4px;
+    cursor: pointer;
+}
+.inline-launch-error-details:hover {
+    background: rgba(231, 76, 60, 0.2);
+}
+.inline-launch-error-close {
+    flex-shrink: 0;
+    color: #f5a89f;
+    opacity: 0.6;
+    font-size: 12px;
+    padding: 0 2px;
+    cursor: pointer;
+}
+.inline-launch-error-close:hover {
+    opacity: 1;
 }
 
 .launch-group {
