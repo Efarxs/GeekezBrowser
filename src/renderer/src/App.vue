@@ -124,30 +124,40 @@ onMounted(async () => {
             }
         });
 
-        profileService.onLaunchProgress((payload) => {
+        profileService.onProfileCrash((payload) => {
             if (!payload) return;
+            const lang = localStorage.getItem('geekez_lang') === 'en' ? 'en' : 'cn';
+            const heading = lang === 'en'
+                ? `Environment "${payload.profileName || payload.profileId}" stopped unexpectedly`
+                : `环境「${payload.profileName || payload.profileId}」异常退出`;
+            const parts = [heading];
+            if (payload.reason) parts.push(payload.reason);
+            let tail = (payload.stderrTail || '').trim();
+            if (tail.length > 600) tail = '...' + tail.slice(-600);
+            if (tail) {
+                parts.push(lang === 'en' ? 'Last output:' : '最后输出：');
+                parts.push(tail);
+            }
+            uiStore.showAlert(parts.join('\n\n'));
+        });
+
+        profileService.onLaunchProgress((payload) => {
+            if (!payload || !payload.profileId) return;
 
             const visible = payload.visible !== false;
-            uiStore.progressModalVisible = visible;
-
             if (!visible) {
-                uiStore.progressPercent = 0;
-                uiStore.progressMessage = '';
-                uiStore.progressTitle = '';
-                uiStore.progressWarn = '';
-                uiStore.progressStep = 0;
-                uiStore.progressTotalSteps = 0;
-                uiStore.progressProfileName = '';
+                profileStore.clearLaunchProgress(payload.profileId);
                 return;
             }
 
-            uiStore.progressTitle = payload.title || 'Launching Profile';
-            uiStore.progressMessage = payload.message || '...';
-            uiStore.progressPercent = Number.isFinite(payload.percent) ? payload.percent : 0;
-            uiStore.progressWarn = payload.warn || (window.t?.('launchingWarn') || 'Please wait while the environment is starting. Do not close the application.');
-            uiStore.progressStep = Number.isFinite(payload.step) ? payload.step : 0;
-            uiStore.progressTotalSteps = Number.isFinite(payload.totalSteps) ? payload.totalSteps : 0;
-            uiStore.progressProfileName = payload.profileName || '';
+            profileStore.setLaunchProgress(payload.profileId, {
+                percent: Number.isFinite(payload.percent) ? payload.percent : 0,
+                message: payload.message || '...',
+                step: Number.isFinite(payload.step) ? payload.step : 0,
+                totalSteps: Number.isFinite(payload.totalSteps) ? payload.totalSteps : 0,
+                title: payload.title || 'Launching Profile',
+                warn: payload.warn || ''
+            });
         });
         console.log('[App] Initialization completed.');
     } catch (e) {

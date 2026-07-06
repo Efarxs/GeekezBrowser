@@ -46,9 +46,18 @@ async function resolveGetPortApi() {
     return getPortApiPromise;
 }
 
-async function getAvailablePort(options) {
+// Ports we have handed out but whose singbox has not yet successfully bound.
+// `get-port` only checks "is this OS port currently free" — between our check
+// and singbox's actual bind() there is a race window that becomes noticeable
+// during multi-launch. Excluding in-flight ports collapses that window.
+const reservedPorts = new Set();
+
+async function getAvailablePort(options = {}) {
     const { getPortFn } = await resolveGetPortApi();
-    return await getPortFn(options);
+    const exclude = Array.isArray(options.exclude)
+        ? [...options.exclude, ...reservedPorts]
+        : [...reservedPorts];
+    return await getPortFn({ ...options, exclude });
 }
 
 let socksProxyAgentCtorPromise = null;
@@ -2324,6 +2333,16 @@ function broadcastProfileStatus(profileId, status) {
     }
 }
 
+function broadcastProfileCrash(payload) {
+    const windows = BrowserWindow.getAllWindows();
+    for (const win of windows) {
+        try {
+            if (!win || win.isDestroyed() || !win.webContents || win.webContents.isDestroyed()) continue;
+            win.webContents.send('profile-crash', payload);
+        } catch (e) { }
+    }
+}
+
 async function cleanupProfileRuntime(profileId, options = {}) {
     const {
         closeBrowser = false,
@@ -3287,6 +3306,7 @@ async function measureSocksConnectLatency(socksPort, timeoutMs = 4000, customTar
 
 async function runProxyLatencyTest(proxyStr) {
     const tempPort = await getAvailablePort();
+    reservedPorts.add(tempPort);
     const tempConfigPath = path.join(app.getPath('userData'), `test_config_${tempPort}.json`);
     const tunnelLogPath = path.join(app.getPath('userData'), 'proxy_tunnel_test.log');
     let singboxProcess = null;
@@ -3326,6 +3346,9 @@ async function runProxyLatencyTest(proxyStr) {
                 exitCode: singboxProcess.exitCode,
                 stderr: singboxErr.substring(0, 500)
             });
+            try { await forceKill(singboxProcess.pid); } catch (e) { }
+            try { fs.unlinkSync(tempConfigPath); } catch (e) { }
+            reservedPorts.delete(tempPort);
             return { success: false, msg: `sing-box crashed: ${singboxErr.substring(0, 150) || 'unknown'}` };
         }
 
@@ -3340,10 +3363,12 @@ async function runProxyLatencyTest(proxyStr) {
         await forceKill(singboxProcess.pid);
         singboxProcess = null;
         try { fs.unlinkSync(tempConfigPath); } catch (e) { }
+        reservedPorts.delete(tempPort);
         return result;
     } catch (err) {
         if (singboxProcess) try { await forceKill(singboxProcess.pid); } catch (e) { }
         try { fs.unlinkSync(tempConfigPath); } catch (e) { }
+        reservedPorts.delete(tempPort);
         appendProxyTunnelLog(tunnelLogPath, 'test.failed', {
             localPort: tempPort,
             reason: err?.message || String(err || 'unknown')
@@ -4390,7 +4415,12 @@ const launchProfileHandler = async (event, profileId, preferredLang, launchOptio
             userAgent: prevFp.userAgent,           // 空串 = 未设 → 内核派生
             uaMode: prevFp.uaMode,
             browserType: prevFp.browserType,
-            platform: prevFp.platform
+            platform: prevFp.platform,
+            // Preserve physical window size across reroll — resolution is a
+            // hardware property (chosen once at profile creation), not an
+            // identity signal we should re-roll on every launch.
+            screen: prevFp.screen,
+            window: prevFp.window
         };
         profile.fingerprint = generateFingerprint(carryOver);
     }
@@ -4510,6 +4540,7 @@ const launchProfileHandler = async (event, profileId, preferredLang, launchOptio
                 { step: 4, profileName: progressProfileName }
             );
             localPort = await getAvailablePort();
+            reservedPorts.add(localPort);
             const singboxConfigPath = path.join(profileDir, 'config.json');
             singboxLogPath = path.join(profileDir, 'singbox_run.log');
             const upstreamProxy = useDirectNetwork ? activePreProxy?.url : profile.proxyStr;
@@ -4529,6 +4560,10 @@ const launchProfileHandler = async (event, profileId, preferredLang, launchOptio
                 cwd: BIN_DIR,
                 stdio: ['ignore', logFd, logFd],
                 windowsHide: true
+            });
+            const reservedLocalPort = localPort;
+            singboxProcess.once('exit', () => {
+                reservedPorts.delete(reservedLocalPort);
             });
             appendProxyTunnelLog(tunnelLogPath, 'singbox.spawned', {
                 profileId,
@@ -4879,6 +4914,22 @@ const launchProfileHandler = async (event, profileId, preferredLang, launchOptio
                 launchArgs.push(`--fingerprint-platform-version=${fcPlatformVersion}`);
             }
 
+            // Cross-platform font spoof breaks glyph rendering: fingerprint-chromium's
+            // font enumerator filters the host font list to what the spoofed platform
+            // "should" have, but the actual glyph fallback still runs against host
+            // DirectWrite/CoreText. Result on Windows host + macOS profile: CJK text
+            // renders as tofu because Chrome asks for e.g. PingFang SC → filter says
+            // "not present" → Chrome picks a random macOS-look-alike from the filtered
+            // list (Sylfaen, Webdings) that has no CJK glyphs. Same story any other
+            // cross-OS combo. We accept a small fingerprint-detection hit here in
+            // exchange for readable text.
+            const hostPlatform = process.platform === 'darwin'
+                ? 'macos'
+                : (process.platform === 'linux' ? 'linux' : 'windows');
+            if (fcPlatform !== hostPlatform) {
+                launchArgs.push('--disable-spoofing=font');
+            }
+
             if (profile.fingerprint?.hardwareConcurrency) {
                 launchArgs.push(`--fingerprint-hardware-concurrency=${profile.fingerprint.hardwareConcurrency}`);
             }
@@ -4895,7 +4946,7 @@ const launchProfileHandler = async (event, profileId, preferredLang, launchOptio
             }
 
             console.log('🔒 fingerprint-chromium engine mode active');
-            console.log(`   Seed: ${fpSeed}, Platform: ${fcPlatform}, Brand: ${fcBrand}${effectiveUa ? ', custom UA' : ''}${fcBrandVersion ? `, brand-version: ${fcBrandVersion}` : ''}`);
+            console.log(`   Seed: ${fpSeed}, Platform: ${fcPlatform}, Brand: ${fcBrand}${effectiveUa ? ', custom UA' : ''}${fcBrandVersion ? `, brand-version: ${fcBrandVersion}` : ''}${fcPlatform !== hostPlatform ? ', font-spoof=off (cross-platform)' : ''}`);
         }
 
         // 4. Remote Debugging Port (仅显式开启且非干净模式)
@@ -4954,15 +5005,39 @@ const launchProfileHandler = async (event, profileId, preferredLang, launchOptio
         browserProcess = spawn(chromePath, launchArgs, {
             cwd: path.dirname(chromePath),
             env: spawnEnv,
-            stdio: 'ignore',
+            stdio: ['ignore', 'ignore', 'pipe'],
             windowsHide: false,
             detached: false
         });
+        // Rolling tail of Chromium stderr — surfaced to the UI when the
+        // browser dies unexpectedly so the user gets a real reason instead
+        // of a silent "environment stopped".
+        let stderrTail = '';
+        const STDERR_TAIL_MAX = 4096;
+        if (browserProcess.stderr) {
+            browserProcess.stderr.on('data', (chunk) => {
+                stderrTail += chunk.toString();
+                if (stderrTail.length > STDERR_TAIL_MAX) {
+                    stderrTail = stderrTail.slice(-STDERR_TAIL_MAX);
+                }
+            });
+            browserProcess.stderr.on('error', () => { });
+        }
+        const spawnedAt = Date.now();
         browserProcess.once('error', (err) => {
             appendProxyTunnelLog(tunnelLogPath, 'browser.spawn.error', {
                 profileId,
                 message: err?.message || String(err)
             });
+            if (!isAppQuitting) {
+                broadcastProfileCrash({
+                    profileId,
+                    profileName: profile.name || progressProfileName,
+                    kind: 'spawn-error',
+                    reason: err?.message || String(err),
+                    stderrTail: ''
+                });
+            }
         });
         const browserPid = browserProcess.pid;
         browserProcess.once('exit', async (code, signal) => {
@@ -4970,8 +5045,14 @@ const launchProfileHandler = async (event, profileId, preferredLang, launchOptio
                 profileId,
                 pid: browserPid,
                 code,
-                signal
+                signal,
+                stderrTail: stderrTail.slice(-500)
             });
+            // `activeProcesses[profileId]` being set at exit time means the
+            // shutdown wasn't user-initiated (Stop / Quit both delete it before
+            // killing). Everything else is either a real crash, an unexpected
+            // window-close-with-error, or the browser dying during launch.
+            const wasUserInitiated = !activeProcesses[profileId];
             if (activeProcesses[profileId]) {
                 await cleanupProfileRuntime(profileId, {
                     closeBrowser: false,
@@ -4990,6 +5071,29 @@ const launchProfileHandler = async (event, profileId, preferredLang, launchOptio
                 }
 
                 refreshTrayMenu().catch(() => { });
+            }
+            // Alert only for abnormal exits: user closed the window normally
+            // → code 0 → stay silent. Chromium crashes → non-zero code or a
+            // signal → surface to UI.
+            const uptimeMs = Date.now() - spawnedAt;
+            const abnormalExit = (code !== 0 && code !== null) || !!signal;
+            const earlyExit = uptimeMs < 3000;
+            if (!isAppQuitting && !wasUserInitiated && (abnormalExit || earlyExit)) {
+                broadcastProfileCrash({
+                    profileId,
+                    profileName: profile.name || progressProfileName,
+                    kind: earlyExit ? 'startup-crash' : 'runtime-crash',
+                    code,
+                    signal,
+                    reason: earlyExit
+                        ? (preferredLang === 'en'
+                            ? `Browser exited ${uptimeMs}ms after start (code ${code}${signal ? `, ${signal}` : ''})`
+                            : `浏览器启动 ${uptimeMs}ms 后即退出（code ${code}${signal ? `, ${signal}` : ''}）`)
+                        : (preferredLang === 'en'
+                            ? `Browser exited unexpectedly (code ${code}${signal ? `, ${signal}` : ''})`
+                            : `浏览器异常退出（code ${code}${signal ? `, ${signal}` : ''}）`),
+                    stderrTail: stderrTail.slice(-1500)
+                });
             }
         });
 
@@ -5022,7 +5126,7 @@ const launchProfileHandler = async (event, profileId, preferredLang, launchOptio
             true,
             { step: 10, profileName: progressProfileName }
         );
-        setTimeout(() => emitProfileLaunchProgress(sender, { visible: false }), 500);
+        setTimeout(() => emitProfileLaunchProgress(sender, { visible: false, profileId }), 500);
         sender.send('profile-status', { id: profileId, status: 'running' });
         refreshTrayMenu().catch(() => { });
 
@@ -5032,7 +5136,7 @@ const launchProfileHandler = async (event, profileId, preferredLang, launchOptio
         // below can never leave the user staring at a stuck spinner.
         try {
             if (sender && !(typeof sender.isDestroyed === 'function' && sender.isDestroyed())) {
-                emitProfileLaunchProgress(sender, { visible: false });
+                emitProfileLaunchProgress(sender, { visible: false, profileId });
             }
         } catch (e) { }
         // Also drop the launching flag immediately for the same reason —
@@ -5054,6 +5158,9 @@ const launchProfileHandler = async (event, profileId, preferredLang, launchOptio
                 });
             } catch (e) { }
         }
+        // Release the port even if spawn threw before the 'exit' listener could
+        // fire (e.g., BIN_PATH missing). No-op if 'exit' already released it.
+        if (typeof localPort === 'number') reservedPorts.delete(localPort);
 
         if (logFd !== undefined) {
             try { fs.closeSync(logFd); } catch (e) { }

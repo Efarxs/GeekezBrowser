@@ -43,6 +43,15 @@
                     </select>
                 </span>
             </div>
+            <div v-if="launchProgress" class="inline-launch-progress" :title="launchProgress.message">
+                <div class="inline-launch-progress-bar">
+                    <div class="inline-launch-progress-fill" :style="{ width: launchProgress.percent + '%' }"></div>
+                </div>
+                <div class="inline-launch-progress-meta">
+                    <span class="inline-launch-progress-msg">{{ launchProgress.message }}</span>
+                    <span class="inline-launch-progress-pct">{{ launchProgress.percent }}%</span>
+                </div>
+            </div>
         </div>
         <div class="actions">
             <div class="launch-group no-drag">
@@ -125,6 +134,8 @@ const displayScreen = computed(() => {
     }
     return '0x0';
 });
+
+const launchProgress = computed(() => profileStore.getLaunchProgress(props.profile.id));
 
 const showDebugPort = computed(() => !!(
     settingsStore.enableRemoteDebugging && props.profile.debugPort
@@ -336,6 +347,43 @@ const remove = () => {
 .debug-copied {
     margin-left: 2px;
     font-weight: 600;
+}
+
+.inline-launch-progress {
+    margin-top: 8px;
+    width: 100%;
+    max-width: 520px;
+}
+.inline-launch-progress-bar {
+    height: 4px;
+    border-radius: 999px;
+    background: rgba(0, 0, 0, 0.28);
+    border: 1px solid var(--border);
+    overflow: hidden;
+}
+.inline-launch-progress-fill {
+    height: 100%;
+    background: linear-gradient(90deg, #00bcd4, var(--accent), #6ee7f9);
+    transition: width 0.25s ease;
+}
+.inline-launch-progress-meta {
+    display: flex;
+    justify-content: space-between;
+    gap: 12px;
+    margin-top: 4px;
+    font-size: 11px;
+    color: var(--text-secondary);
+}
+.inline-launch-progress-msg {
+    flex: 1;
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+}
+.inline-launch-progress-pct {
+    font-weight: 600;
+    color: var(--accent);
+    white-space: nowrap;
 }
 
 .launch-group {

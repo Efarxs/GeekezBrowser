@@ -156,5 +156,13 @@ export const profileService = {
             return;
         }
         ipcService.on('profile-launch-progress', (_event, payload) => callback(payload));
+    },
+
+    onProfileCrash(callback) {
+        if (window.electronAPI && typeof window.electronAPI.onProfileCrash === 'function') {
+            window.electronAPI.onProfileCrash(callback);
+            return;
+        }
+        ipcService.on('profile-crash', (_event, payload) => callback(payload));
     }
 };

@@ -1,5 +1,5 @@
 import { defineStore } from 'pinia';
-import { ref, computed } from 'vue';
+import { ref, computed, reactive } from 'vue';
 import { profileService } from '../services/profile.service';
 
 export const useProfileStore = defineStore('profile', () => {
@@ -7,6 +7,10 @@ export const useProfileStore = defineStore('profile', () => {
     const profiles = ref([]);
     const runningIds = ref([]);
     const launchingIds = ref([]);
+    // Per-profile launch progress. Keyed by profile.id.
+    // Present entry ⇒ ProfileCard renders inline progress bar. Cleared when
+    // launch completes or fails so parallel launches don't clobber each other.
+    const launchProgress = reactive({});
     const searchText = ref('');
     const selectedTag = ref('');
     const selectedIds = ref([]);
@@ -113,6 +117,17 @@ export const useProfileStore = defineStore('profile', () => {
 
     const isRunning = (id) => runningIds.value.includes(id);
     const isLaunching = (id) => launchingIds.value.includes(id);
+    const getLaunchProgress = (id) => launchProgress[id] || null;
+
+    const setLaunchProgress = (id, payload) => {
+        if (!id) return;
+        launchProgress[id] = payload;
+    };
+
+    const clearLaunchProgress = (id) => {
+        if (!id) return;
+        delete launchProgress[id];
+    };
 
     const createProfile = async (data) => {
         try {
@@ -154,6 +169,10 @@ export const useProfileStore = defineStore('profile', () => {
         profiles,
         runningIds,
         launchingIds,
+        launchProgress,
+        getLaunchProgress,
+        setLaunchProgress,
+        clearLaunchProgress,
         searchText,
         selectedTag,
         selectedIds,
