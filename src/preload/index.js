@@ -22,5 +22,7 @@ contextBridge.exposeInMainWorld('electronAPI', {
     onApiLaunchProfile: (callback) => ipcRenderer.on('api-launch-profile', (event, id) => callback(id)),
     onExtensionInstallProgress: (callback) => ipcRenderer.on('extension-install-progress', (event, payload) => callback(payload)),
     onProfileLaunchProgress: (callback) => ipcRenderer.on('profile-launch-progress', (event, payload) => callback(payload)),
-    onProfileCrash: (callback) => ipcRenderer.on('profile-crash', (event, payload) => callback(payload))
+    onProfileCrash: (callback) => ipcRenderer.on('profile-crash', (event, payload) => callback(payload)),
+    exportCookies: (profileId, format) => ipcRenderer.invoke('cookies-export', profileId, format),
+    importCookies: (profileId, format) => ipcRenderer.invoke('cookies-import', profileId, format)
 });

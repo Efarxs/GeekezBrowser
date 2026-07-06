@@ -76,7 +76,7 @@ async function createSocksProxyAgent(proxyUrl) {
 // Only disable if GPU compatibility issues occur
 
 import { generateSingBoxConfig, parseProxyLink, getProxyRemark } from './utils';
-import { generateFingerprint, getGeolocationScript, getWatermarkScript } from './fingerprint';
+import { generateFingerprint, getGeolocationScript, getWatermarkScript, getClientHintsPatchScript } from './fingerprint';
 
 const isDev = !app.isPackaged;
 const RESOURCES_BIN = isDev ? path.join(app.getAppPath(), 'resources', 'bin') : path.join(process.resourcesPath, 'bin');
@@ -1625,9 +1625,15 @@ function resolveFingerprintChromiumPlatformVersion(fingerprint = {}) {
     }
 
     const platform = resolveFingerprintChromiumPlatform(fingerprint.platform);
-    if (platform === 'macos') return '13.0.0';
+    // Client Hints platform-version defaults must look like current mainstream
+    // installs — old versions leak "long-idle user" signal to fraud engines.
+    //  - macOS 14.5.0 (Sonoma) is the current LTS floor in mid-2026
+    //  - Windows CH-UA uses an internal versioning scheme where Win11 22H2+
+    //    reports "15.0.0" (NOT "11.0.0"). Real Chrome on Win11 sends this.
+    //  - Linux stays at 6.0.0 (kernel 6.x, matches modern Ubuntu/Fedora)
+    if (platform === 'macos') return '14.5.0';
     if (platform === 'linux') return '6.0.0';
-    return '10.0.0';
+    return '15.0.0';
 }
 
 function resolveFingerprintChromiumBrand(fingerprint = {}) {
@@ -2814,11 +2820,12 @@ async function generateExtension(profilePath, fingerprint, profileId, options = 
         ? getWatermarkScript(profileName || profileId || 'Profile', watermarkStyle || 'enhanced')
         : null;
     const geoScriptContent = getGeolocationScript(fingerprint);
+    const chuaScriptContent = getClientHintsPatchScript(fingerprint);
 
     const contentScripts = [
         {
             matches: ["<all_urls>"],
-            js: ["geo.js"],
+            js: ["geo.js", "chua.js"],
             run_at: "document_start",
             all_frames: true,
             match_about_blank: true,
@@ -2838,16 +2845,51 @@ async function generateExtension(profilePath, fingerprint, profileId, options = 
         });
     }
 
+    // Client Hints header fix: fingerprint-chromium 148 leaves
+    // Sec-CH-UA-Bitness empty and Sec-CH-UA-WoW64 defaults are inconsistent.
+    // JS-side patch covers navigator.userAgentData.getHighEntropyValues;
+    // this static declarativeNetRequest rule covers the outbound HTTP header.
+    const chuaRules = [
+        {
+            id: 1,
+            priority: 1,
+            action: {
+                type: 'modifyHeaders',
+                requestHeaders: [
+                    { header: 'sec-ch-ua-bitness', operation: 'set', value: '"64"' },
+                    { header: 'sec-ch-ua-wow64', operation: 'set', value: '?0' }
+                ]
+            },
+            condition: {
+                resourceTypes: [
+                    'main_frame', 'sub_frame', 'xmlhttprequest',
+                    'script', 'stylesheet', 'image', 'font',
+                    'media', 'websocket', 'ping', 'csp_report', 'other'
+                ]
+            }
+        }
+    ];
+
     const manifest = {
         manifest_version: 3,
         name: "GeekEZ Guard",
-        version: "1.2.0",
-        description: "Geolocation spoofing and profile watermark for GeekEZ Browser.",
-        permissions: ["storage"],
-        content_scripts: contentScripts
+        version: "1.3.0",
+        description: "Geolocation spoofing, Client Hints alignment, and profile watermark for GeekEZ Browser.",
+        permissions: ["storage", "declarativeNetRequest"],
+        host_permissions: ["<all_urls>"],
+        content_scripts: contentScripts,
+        declarative_net_request: {
+            rule_resources: [{
+                id: "chua_rules",
+                enabled: true,
+                path: "chua_rules.json"
+            }]
+        }
     };
     await fs.writeJson(path.join(extDir, 'manifest.json'), manifest);
     await fs.writeFile(path.join(extDir, 'geo.js'), geoScriptContent);
+    await fs.writeFile(path.join(extDir, 'chua.js'), chuaScriptContent);
+    await fs.writeJson(path.join(extDir, 'chua_rules.json'), chuaRules);
     if (watermarkContent) {
         await fs.writeFile(path.join(extDir, 'watermark.js'), watermarkContent);
     }
@@ -4319,6 +4361,13 @@ ipcMain.handle('export-data', async (e, type) => {
 const launchProfileHandler = async (event, profileId, preferredLang, launchOptions = {}) => {
     const sender = event.sender;
     const launchArgsOverride = normalizeLaunchOverrideArgs(launchOptions.launchArgsOverride || []);
+    // initialUrl (optional) bypasses the --flag filter — Chrome accepts a
+    // trailing positional URL and opens it on launch. Used by the "fingerprint
+    // self-check" UI to open a detection site as soon as the profile is up.
+    const initialUrl = typeof launchOptions.initialUrl === 'string'
+        && /^https?:\/\//i.test(launchOptions.initialUrl.trim())
+            ? launchOptions.initialUrl.trim()
+            : null;
     const progressTitle = preferredLang === 'en' ? 'Launching Profile' : '正在启动环境';
     const progressWarn = preferredLang === 'en'
         ? 'Please wait while the environment starts. Do not close the application.'
@@ -4416,11 +4465,15 @@ const launchProfileHandler = async (event, profileId, preferredLang, launchOptio
             uaMode: prevFp.uaMode,
             browserType: prevFp.browserType,
             platform: prevFp.platform,
-            // Preserve physical window size across reroll — resolution is a
-            // hardware property (chosen once at profile creation), not an
-            // identity signal we should re-roll on every launch.
+            // Preserve physical hardware properties across reroll — CPU cores,
+            // RAM, and screen resolution are picked once when the profile is
+            // created. Rerolling them per launch produces "user swapped their
+            // motherboard overnight" signal that fraud engines (Amazon,
+            // TikTok Shop) flag hard. Only the derived noise seeds change.
             screen: prevFp.screen,
-            window: prevFp.window
+            window: prevFp.window,
+            hardwareConcurrency: prevFp.hardwareConcurrency,
+            deviceMemory: prevFp.deviceMemory
         };
         profile.fingerprint = generateFingerprint(carryOver);
     }
@@ -4806,11 +4859,21 @@ const launchProfileHandler = async (event, profileId, preferredLang, launchOptio
         const shouldRestoreSession = !useCleanProfile && hasRestorableSession(userDataDir);
 
         // 3. 构建启动参数（内核指纹 + 隐蔽性去噪）
+        // Chrome components that phone home to Google (metrics / Cast / hints /
+        // reliability). Killing them cuts noise the proxy has to carry AND
+        // removes a class of side-channel signals that make it obvious we
+        // aren't a fresh consumer profile. Each entry documented below:
         const disabledFeatures = [
-            'IsolateOrigins',
-            'site-per-process',
-            'ExtensionsMenuAccessControl',
-            'WebGPU'
+            'IsolateOrigins',              // 让扩展 world=MAIN 注入能覆盖顶级 frame
+            'site-per-process',            // 同上
+            'ExtensionsMenuAccessControl', // 让扩展权限菜单不弹
+            'WebGPU',                      // WebGPU 指纹熵极高且不稳定
+            'OptimizationHints',           // Chrome "OptimizationGuide" 会请求 hints server 拿页面加载优化建议 — 打点
+            'MediaRouter',                 // Cast 后台 mDNS 扫描
+            'DialMediaRouteProvider',      // 同上，DIAL 协议
+            'DomainReliability',           // Chrome 的 dr endpoint 上报网络可靠性
+            'AutofillServerCommunication', // Autofill 提交行为上报
+            'CalculateNativeWinOcclusion'  // 窗口遮挡计算，泄露多窗口拓扑
         ];
         if (process.platform === 'win32') {
             disabledFeatures.push('StartupLaunch', 'StartupBoost');
@@ -4832,6 +4895,11 @@ const launchProfileHandler = async (event, profileId, preferredLang, launchOptio
             '--disable-sync',
             '--disable-component-update',
             '--no-service-autorun',
+            '--disable-domain-reliability',           // 补 --disable-features 兜底
+            '--disable-breakpad',                     // 崩溃报告 → Google
+            '--metrics-recording-only',               // 禁 UMA 主动上报
+            '--disable-client-side-phishing-detection',
+            '--disable-prompt-on-repost',
             '--password-store=basic',
             '--disk-cache-size=52428800',
             '--media-cache-size=52428800'
@@ -4985,6 +5053,12 @@ const launchProfileHandler = async (event, profileId, preferredLang, launchOptio
                 true,
                 { step: 7, profileName: progressProfileName }
             );
+        }
+
+        // Positional URL must be the LAST arg — Chrome parses trailing
+        // non-flag tokens as URLs to open. Do this after --flag args.
+        if (initialUrl) {
+            launchArgs.push(initialUrl);
         }
 
         updateLaunchProgress(
@@ -5184,6 +5258,109 @@ const launchProfileHandler = async (event, profileId, preferredLang, launchOptio
     }
 };
 ipcMain.handle('launch-profile', launchProfileHandler);
+
+// Cookie import/export — single-profile, three formats (Netscape / Playwright
+// JSON / EditThisCookie). Requires the profile to be stopped so the sqlite
+// cookie db isn't locked. Uses the same headless-CDP path as full backup.
+const {
+    parseCookies: parseCookiesForImport,
+    serializeCookies: serializeCookiesForExport,
+    toCdpSetCookies
+} = require('./cookie-formats');
+
+async function readProfileCookiesViaCdp(profileId) {
+    const profile = await profileDB.getById(profileId);
+    if (!profile) throw new Error('Profile not found');
+    if (activeProcesses[profileId]) {
+        throw new Error('Profile is running — stop it before exporting cookies');
+    }
+    const chromePath = getChromiumPath();
+    if (!chromePath) throw new Error('Chrome binary not found');
+    const profileDataDir = path.join(DATA_PATH, profileId, 'browser_data');
+    return await withHeadlessChromeCookies(chromePath, profileDataDir, async (session) => {
+        const { cookies } = await session.send('Network.getAllCookies');
+        return cookies || [];
+    });
+}
+
+async function writeProfileCookiesViaCdp(profileId, cookies) {
+    const profile = await profileDB.getById(profileId);
+    if (!profile) throw new Error('Profile not found');
+    if (activeProcesses[profileId]) {
+        throw new Error('Profile is running — stop it before importing cookies');
+    }
+    const chromePath = getChromiumPath();
+    if (!chromePath) throw new Error('Chrome binary not found');
+    const profileDataDir = path.join(DATA_PATH, profileId, 'browser_data');
+    const cdpCookies = toCdpSetCookies(cookies);
+    return await withHeadlessChromeCookies(chromePath, profileDataDir, async (session) => {
+        let ok = 0;
+        for (const c of cdpCookies) {
+            try {
+                await session.send('Network.setCookie', c);
+                ok++;
+            } catch (e) { /* skip individual failures; report count only */ }
+        }
+        return ok;
+    });
+}
+
+ipcMain.handle('cookies-export', async (event, profileId, format) => {
+    try {
+        if (!['netscape', 'json', 'editthiscookie'].includes(format)) {
+            throw new Error('Invalid format');
+        }
+        const cookies = await readProfileCookiesViaCdp(profileId);
+        const canonical = cookies.map(c => ({
+            name: c.name,
+            value: c.value,
+            domain: c.domain,
+            path: c.path,
+            expires: typeof c.expires === 'number' ? c.expires : -1,
+            httpOnly: !!c.httpOnly,
+            secure: !!c.secure,
+            sameSite: c.sameSite || 'Lax',
+            session: !c.expires || c.expires < 0
+        }));
+        const content = serializeCookiesForExport(canonical, format);
+        const profile = await profileDB.getById(profileId);
+        const safeName = String(profile?.name || profileId).replace(/[^\w.-]+/g, '_');
+        const extMap = { netscape: 'txt', json: 'json', editthiscookie: 'json' };
+        const suggested = `${safeName}_cookies.${extMap[format]}`;
+        const win = BrowserWindow.getFocusedWindow();
+        const savePath = await dialog.showSaveDialog(win, {
+            title: 'Export Cookies',
+            defaultPath: suggested,
+            filters: [{ name: 'Cookies', extensions: [extMap[format]] }]
+        });
+        if (savePath.canceled || !savePath.filePath) return { success: false, canceled: true };
+        await fs.writeFile(savePath.filePath, content, 'utf8');
+        return { success: true, count: canonical.length, path: savePath.filePath };
+    } catch (e) {
+        return { success: false, message: e.message || String(e) };
+    }
+});
+
+ipcMain.handle('cookies-import', async (event, profileId, format) => {
+    try {
+        const win = BrowserWindow.getFocusedWindow();
+        const openResult = await dialog.showOpenDialog(win, {
+            title: 'Import Cookies',
+            properties: ['openFile'],
+            filters: [{ name: 'Cookies', extensions: ['txt', 'json'] }]
+        });
+        if (openResult.canceled || !openResult.filePaths?.length) {
+            return { success: false, canceled: true };
+        }
+        const raw = await fs.readFile(openResult.filePaths[0], 'utf8');
+        const canonical = parseCookiesForImport(raw, format || null);
+        if (!canonical.length) return { success: false, message: 'No cookies parsed from file' };
+        const written = await writeProfileCookiesViaCdp(profileId, canonical);
+        return { success: true, count: written, total: canonical.length };
+    } catch (e) {
+        return { success: false, message: e.message || String(e) };
+    }
+});
 
 app.on('before-quit', () => {
     isAppQuitting = true;

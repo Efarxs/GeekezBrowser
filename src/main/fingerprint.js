@@ -1635,26 +1635,39 @@ function getGeolocationScript(fp) {
         accuracy: geo.accuracy || 100
     });
 
+    // Native-looking function toString is done via Function.prototype.toString
+    // Proxy indirection, NOT per-function defineProperty. Reason: detection
+    // engines (FingerprintJS Pro, Cloudflare bot-manager) check for `toString`
+    // as an OWN property or getOwnPropertyDescriptor(fn, 'toString')
+    // returning a truthy descriptor — a defineProperty override fails both
+    // checks. The Proxy pattern keeps the target function's own property
+    // shape identical to real native functions.
     return `
     (function() {
         try {
             const geo = ${geoJson};
             if (!window.Geolocation || !Geolocation.prototype) return;
 
-            const makeNative = (func, name) => {
-                const nativeStr = 'function ' + name + '() { [native code] }';
-                Object.defineProperty(func, 'toString', {
-                    value: function() { return nativeStr; },
-                    configurable: true,
-                    writable: true
-                });
-                Object.defineProperty(func.toString, 'toString', {
-                    value: function() { return 'function toString() { [native code] }'; },
-                    configurable: true,
-                    writable: true
-                });
-                return func;
-            };
+            const patchedFns = new WeakSet();
+            const origFpToString = Function.prototype.toString;
+            const proxiedToString = new Proxy(origFpToString, {
+                apply(target, thisArg, args) {
+                    if (patchedFns.has(thisArg)) {
+                        const name = (thisArg && thisArg.name) || '';
+                        return 'function ' + name + '() { [native code] }';
+                    }
+                    return Reflect.apply(target, thisArg, args);
+                },
+                // A Proxy's toString call flows through the same handler, but
+                // to be safe we also mark the Proxy itself as native-looking
+                // so any \`Function.prototype.toString.toString()\` probe passes.
+                get(target, prop, receiver) {
+                    if (prop === 'name') return 'toString';
+                    return Reflect.get(target, prop, receiver);
+                }
+            });
+            patchedFns.add(proxiedToString);
+            Function.prototype.toString = proxiedToString;
 
             const latitude = geo.latitude;
             const longitude = geo.longitude;
@@ -1679,6 +1692,7 @@ function getGeolocationScript(fp) {
                     if (typeof success === 'function') success(buildPosition());
                 }, 12);
             };
+            patchedFns.add(fakeGetCurrentPosition);
 
             const fakeWatchPosition = function watchPosition(success, error, options) {
                 const watchId = Math.floor(Math.random() * 100000) + 1;
@@ -1690,6 +1704,7 @@ function getGeolocationScript(fp) {
                 }
                 return watchId;
             };
+            patchedFns.add(fakeWatchPosition);
 
             const fakeClearWatch = function clearWatch(watchId) {
                 if (watchTimers.has(watchId)) {
@@ -1697,19 +1712,20 @@ function getGeolocationScript(fp) {
                     watchTimers.delete(watchId);
                 }
             };
+            patchedFns.add(fakeClearWatch);
 
             Object.defineProperty(Geolocation.prototype, 'getCurrentPosition', {
-                value: makeNative(fakeGetCurrentPosition, 'getCurrentPosition'),
+                value: fakeGetCurrentPosition,
                 configurable: true,
                 writable: true
             });
             Object.defineProperty(Geolocation.prototype, 'watchPosition', {
-                value: makeNative(fakeWatchPosition, 'watchPosition'),
+                value: fakeWatchPosition,
                 configurable: true,
                 writable: true
             });
             Object.defineProperty(Geolocation.prototype, 'clearWatch', {
-                value: makeNative(fakeClearWatch, 'clearWatch'),
+                value: fakeClearWatch,
                 configurable: true,
                 writable: true
             });
@@ -1820,4 +1836,69 @@ function getWatermarkScript(profileName, watermarkStyle) {
     `;
 }
 
-export { generateFingerprint, getGeolocationScript, getWatermarkScript };
+// Client Hints high-entropy alignment. Kernel (fingerprint-chromium 148)
+// leaves Sec-CH-UA-Bitness empty and doesn't always emit a stable WoW64
+// value — both are consistent tells for e-commerce fraud engines that
+// treat "empty CH-UA field on a non-mobile UA" as automation signal.
+// Patches JS API only; the extension's declarativeNetRequest static rule
+// covers the outbound HTTP header (both channels must agree).
+function getClientHintsPatchScript(fp) {
+    // arch is spoofed correctly by the kernel from --fingerprint-platform.
+    // We hard-force bitness="64" and wow64=false because every desktop
+    // Chrome build in the wild reports these values (mobile Chrome sends
+    // "" and false — we don't spoof mobile here anyway).
+    const bitness = '64';
+    const wow64 = false;
+    return `
+    (function() {
+        try {
+            if (!navigator.userAgentData) return;
+            const uad = navigator.userAgentData;
+            const orig = uad.getHighEntropyValues && uad.getHighEntropyValues.bind(uad);
+            if (typeof orig !== 'function') return;
+
+            const patchedFns = new WeakSet();
+            const proxied = new Proxy(orig, {
+                apply(target, thisArg, args) {
+                    const promise = Reflect.apply(target, thisArg, args);
+                    return promise.then(result => {
+                        if (result && typeof result === 'object') {
+                            if ('bitness' in result) result.bitness = ${JSON.stringify(bitness)};
+                            if ('wow64' in result) result.wow64 = ${JSON.stringify(wow64)};
+                        }
+                        return result;
+                    });
+                }
+            });
+            patchedFns.add(proxied);
+
+            Object.defineProperty(uad, 'getHighEntropyValues', {
+                value: proxied,
+                configurable: true,
+                writable: true
+            });
+
+            // Keep Function.prototype.toString consistent with the geo patch.
+            // The geo script installs the Proxy on Function.prototype.toString
+            // first; we just piggy-back the same WeakSet by re-installing our
+            // own if geo didn't run (e.g., no geolocation configured).
+            if (Function.prototype.toString.name !== 'toString' ||
+                typeof Function.prototype.toString.call !== 'function') {
+                // Already proxied by geo script — nothing to do.
+            } else {
+                const origFpToString = Function.prototype.toString;
+                Function.prototype.toString = new Proxy(origFpToString, {
+                    apply(target, thisArg, args) {
+                        if (patchedFns.has(thisArg)) {
+                            return 'function getHighEntropyValues() { [native code] }';
+                        }
+                        return Reflect.apply(target, thisArg, args);
+                    }
+                });
+            }
+        } catch (e) { }
+    })();
+    `;
+}
+
+export { generateFingerprint, getGeolocationScript, getWatermarkScript, getClientHintsPatchScript };

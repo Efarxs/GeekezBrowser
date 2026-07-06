@@ -33,6 +33,7 @@ export const profileService = {
             const lang = localStorage.getItem('geekez_lang') === 'en' ? 'en' : 'cn';
             const launchOptions = {};
             if (options && options.useCleanProfile) launchOptions.useCleanProfile = true;
+            if (options && typeof options.initialUrl === 'string') launchOptions.initialUrl = options.initialUrl;
             const msg = await ipcService.invoke('launch-profile', id, lang, launchOptions);
             return {
                 success: true,

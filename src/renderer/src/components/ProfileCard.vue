@@ -77,6 +77,17 @@
                 :style="launchMenuStyle"
             >
                 <div class="launch-menu-item" @click="launchClean">{{ t('launchClean') }}</div>
+                <div class="launch-menu-item" @click="runFingerprintCheck">{{ t('fingerprintCheck') }}</div>
+                <div class="launch-menu-divider"></div>
+                <div class="launch-menu-item" @click="importCookiesFromFile">{{ t('cookieImport') }}</div>
+                <div class="launch-menu-item launch-menu-item-has-sub">
+                    {{ t('cookieExport') }} ▸
+                    <div class="launch-menu-sub">
+                        <div class="launch-menu-item" @click="exportCookiesAs('netscape')">Netscape (.txt)</div>
+                        <div class="launch-menu-item" @click="exportCookiesAs('json')">Playwright JSON</div>
+                        <div class="launch-menu-item" @click="exportCookiesAs('editthiscookie')">EditThisCookie</div>
+                    </div>
+                </div>
             </div>
         </template>
     </Teleport>
@@ -266,6 +277,58 @@ const launchClean = async () => {
     }
 };
 
+const exportCookiesAs = async (format) => {
+    closeLaunchMenu();
+    if (props.isRunning || props.isLaunching) {
+        uiStore.showAlert(t('mustStopFirst') || 'Please stop the profile first');
+        return;
+    }
+    try {
+        const res = await window.electronAPI.exportCookies(props.profile.id, format);
+        if (res?.canceled) return;
+        if (!res?.success) {
+            uiStore.showAlert('Export failed: ' + (res?.message || 'unknown'));
+            return;
+        }
+        uiStore.showAlert(`Exported ${res.count} cookies to ${res.path}`);
+    } catch (e) {
+        uiStore.showAlert('Export failed: ' + (e?.message || e));
+    }
+};
+
+const importCookiesFromFile = async () => {
+    closeLaunchMenu();
+    if (props.isRunning || props.isLaunching) {
+        uiStore.showAlert(t('mustStopFirst') || 'Please stop the profile first');
+        return;
+    }
+    try {
+        const res = await window.electronAPI.importCookies(props.profile.id, null);
+        if (res?.canceled) return;
+        if (!res?.success) {
+            uiStore.showAlert('Import failed: ' + (res?.message || 'unknown'));
+            return;
+        }
+        uiStore.showAlert(`Imported ${res.count}/${res.total} cookies`);
+    } catch (e) {
+        uiStore.showAlert('Import failed: ' + (e?.message || e));
+    }
+};
+
+const runFingerprintCheck = async () => {
+    closeLaunchMenu();
+    try {
+        const res = await profileService.launch(props.profile.id, {
+            initialUrl: 'https://www.browserscan.net/'
+        });
+        if (!res.success && res.message) {
+            uiStore.showAlert(res.message);
+        }
+    } catch (e) {
+        uiStore.showAlert('Check failed: ' + (e?.message || e));
+    }
+};
+
 const edit = () => {
     // Running/launching profiles open in view-only mode (handled inside the modal).
     uiStore.openEditModal(props.profile.id);
@@ -440,5 +503,29 @@ const remove = () => {
 .launch-menu-floating .launch-menu-item:hover {
     background: var(--accent, #4285f4);
     color: #fff;
+}
+.launch-menu-floating .launch-menu-divider {
+    height: 1px;
+    background: var(--border, rgba(255,255,255,0.08));
+    margin: 4px 0;
+}
+.launch-menu-floating .launch-menu-item-has-sub {
+    position: relative;
+}
+.launch-menu-floating .launch-menu-item-has-sub .launch-menu-sub {
+    display: none;
+    position: absolute;
+    left: 100%;
+    top: 0;
+    background: var(--card-bg, #22222c);
+    border: 1px solid var(--border, #444);
+    border-radius: 6px;
+    box-shadow: 0 6px 20px rgba(0, 0, 0, 0.45);
+    padding: 4px 0;
+    min-width: 180px;
+    z-index: 10001;
+}
+.launch-menu-floating .launch-menu-item-has-sub:hover .launch-menu-sub {
+    display: block;
 }
 </style>

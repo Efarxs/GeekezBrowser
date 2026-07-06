@@ -601,8 +601,25 @@ function generateSingBoxConfig(mainProxyStr, localPort, preProxyConfig = null, p
 
     outbounds.push(mainOutbound);
 
+    // DNS: pin resolution to Cloudflare DoH routed through the same proxy
+    // tunnel. Chrome + `--proxy-server=socks5://` does remote DNS in the
+    // main navigation path, but component-update / DoH-prefetch / mDNS
+    // scanning can still hit the host resolver. Doing DNS via the proxy
+    // means the exit IP's ASN matches the resolver, matching timezone/geo —
+    // one less inconsistency for fraud engines to catch.
+    // Kept intentionally minimal (single server, no rules) so we don't
+    // introduce new sing-box config failure modes for existing users.
+    const dnsBlock = {
+        servers: [
+            { tag: 'proxydns', address: 'https://1.1.1.1/dns-query', detour: 'proxy-main' }
+        ],
+        final: 'proxydns',
+        strategy: 'ipv4_only'
+    };
+
     return {
         log: { level: 'warn', timestamp: true },
+        dns: dnsBlock,
         inbounds: [{
             type: 'socks',
             tag: 'socks-in',

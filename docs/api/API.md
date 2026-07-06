@@ -1,6 +1,6 @@
 # GeekEZ Browser · REST API 参考
 
-> 适用版本：**v1.7.1**
+> 适用版本：**v1.7.11**
 > 更新日期：2026-07-05
 
 GeekEZ Browser 提供一套本地 HTTP REST API，可通过脚本对指纹环境进行增删改查、启动、停止、备份等操作。
