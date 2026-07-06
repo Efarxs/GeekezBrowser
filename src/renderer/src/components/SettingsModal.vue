@@ -312,6 +312,25 @@
                                     </select>
                                 </div>
                             </div>
+
+                            <div style="height:1px; background:var(--border); margin:0 16px;"></div>
+
+                            <!-- IP Info Provider -->
+                            <div style="padding:14px 16px;">
+                                <div style="font-size:13px; font-weight:500; color:var(--text-primary);"
+                                    data-i18n="ipInfoProviderTitle">{{ $t('ipInfoProviderTitle') }}</div>
+                                <div style="font-size:11px; color:var(--text-secondary); opacity:0.8; margin-top:4px;"
+                                    data-i18n="ipInfoProviderHint">{{ $t('ipInfoProviderHint') }}</div>
+                                <div style="margin-top:8px;">
+                                    <select :value="settingsStore.ipInfoProvider"
+                                        style="width:100%; max-width:260px; margin:0; font-size:12px; padding:7px 10px;"
+                                        @change="(e) => settingsStore.setIpInfoProvider(e.target.value)">
+                                        <option value="ipinfo">ipinfo.io ({{ $t('ipInfoProviderDefault') }})</option>
+                                        <option value="ipwho">ipwho.is</option>
+                                        <option value="ipapi">ipapi.co</option>
+                                    </select>
+                                </div>
+                            </div>
                         </div>
                     </div>
 

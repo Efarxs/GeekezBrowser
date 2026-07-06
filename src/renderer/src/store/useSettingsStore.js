@@ -11,6 +11,7 @@ export const useSettingsStore = defineStore('settings', {
         watermarkStyle: 'enhanced',
         enableApiServer: false,
         closeBehavior: 'tray',
+        ipInfoProvider: 'ipinfo',
         apiPort: 12138,
         apiRunning: false,
         apiStarting: false,
@@ -35,6 +36,9 @@ export const useSettingsStore = defineStore('settings', {
                 this.watermarkStyle = settings.watermarkStyle || 'enhanced';
                 this.enableApiServer = settings.enableApiServer || false;
                 this.closeBehavior = settings.closeBehavior === 'quit' ? 'quit' : 'tray';
+                this.ipInfoProvider = ['ipinfo', 'ipwho', 'ipapi'].includes(settings.ipInfoProvider)
+                    ? settings.ipInfoProvider
+                    : 'ipinfo';
                 this.apiPort = settings.apiPort || 12138;
 
                 // Load API Status
@@ -127,6 +131,14 @@ export const useSettingsStore = defineStore('settings', {
             this.closeBehavior = mode === 'quit' ? 'quit' : 'tray';
             const settings = await ipcService.getSettings();
             settings.closeBehavior = this.closeBehavior;
+            await ipcService.saveSettings(settings);
+        },
+
+        async setIpInfoProvider(provider) {
+            const allowed = ['ipinfo', 'ipwho', 'ipapi'];
+            this.ipInfoProvider = allowed.includes(provider) ? provider : 'ipinfo';
+            const settings = await ipcService.getSettings();
+            settings.ipInfoProvider = this.ipInfoProvider;
             await ipcService.saveSettings(settings);
         },
 

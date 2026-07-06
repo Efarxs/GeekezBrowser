@@ -1154,6 +1154,9 @@ async function saveSettingsWithNormalizedExtensions(settings) {
 function normalizeSettingsSnapshot(settings) {
     const nextSettings = settings || {};
     if (!['enhanced', 'banner'].includes(nextSettings.watermarkStyle)) nextSettings.watermarkStyle = 'enhanced';
+    if (!Object.prototype.hasOwnProperty.call(IP_INFO_PROVIDERS, nextSettings.ipInfoProvider)) {
+        nextSettings.ipInfoProvider = DEFAULT_IP_INFO_PROVIDER;
+    }
     if (!Array.isArray(nextSettings.preProxies)) nextSettings.preProxies = [];
     if (!Array.isArray(nextSettings.subscriptions)) nextSettings.subscriptions = [];
     if (!['single', 'balance', 'failover'].includes(nextSettings.mode)) nextSettings.mode = 'single';
@@ -1295,33 +1298,99 @@ function isValidTimezoneId(timezone) {
     }
 }
 
-function parseIpInfoSnapshot(payload = {}) {
-    const ip = String(payload.ip || '').trim();
-    if (!ip) return null;
+// IP geolocation providers. Each entry:
+//   - url:   HTTPS endpoint returning a JSON body
+//   - parse: (payload) → canonical snapshot { ip, latitude, longitude,
+//                        accuracy, timezone, city, region, country, org }
+//   - source label recorded on the snapshot for diagnostics
+//
+// Kept intentionally small — three providers cover >99% availability
+// (if one is down / rate-limited, user picks another from Settings).
+const IP_INFO_PROVIDERS = {
+    ipinfo: {
+        url: 'https://ipinfo.io/json',
+        parse: (p) => {
+            if (!p || !p.ip) return null;
+            const [latRaw, lngRaw] = String(p.loc || '').split(',');
+            const lat = Number(latRaw), lng = Number(lngRaw);
+            const hasGeo = Number.isFinite(lat) && Number.isFinite(lng);
+            return {
+                ip: String(p.ip).trim(),
+                latitude: hasGeo ? lat : null,
+                longitude: hasGeo ? lng : null,
+                timezone: isValidTimezoneId(p.timezone) ? String(p.timezone).trim() : null,
+                city: String(p.city || '').trim(),
+                region: String(p.region || '').trim(),
+                country: String(p.country || '').trim(),
+                org: String(p.org || '').trim(),
+                source: 'ipinfo.io'
+            };
+        }
+    },
+    ipwho: {
+        url: 'https://ipwho.is/',
+        parse: (p) => {
+            if (!p || p.success === false || !p.ip) return null;
+            const tzId = p.timezone && typeof p.timezone === 'object' ? p.timezone.id : p.timezone;
+            const org = p.connection && typeof p.connection === 'object' ? p.connection.org : '';
+            return {
+                ip: String(p.ip).trim(),
+                latitude: Number.isFinite(Number(p.latitude)) ? Number(p.latitude) : null,
+                longitude: Number.isFinite(Number(p.longitude)) ? Number(p.longitude) : null,
+                timezone: isValidTimezoneId(tzId) ? String(tzId).trim() : null,
+                city: String(p.city || '').trim(),
+                region: String(p.region || '').trim(),
+                country: String(p.country_code || '').trim(),
+                org: String(org || '').trim(),
+                source: 'ipwho.is'
+            };
+        }
+    },
+    ipapi: {
+        url: 'https://ipapi.co/json/',
+        parse: (p) => {
+            if (!p || !p.ip || p.error) return null;
+            return {
+                ip: String(p.ip).trim(),
+                latitude: Number.isFinite(Number(p.latitude)) ? Number(p.latitude) : null,
+                longitude: Number.isFinite(Number(p.longitude)) ? Number(p.longitude) : null,
+                timezone: isValidTimezoneId(p.timezone) ? String(p.timezone).trim() : null,
+                city: String(p.city || '').trim(),
+                region: String(p.region || '').trim(),
+                country: String(p.country_code || p.country || '').trim(),
+                org: String(p.org || '').trim(),
+                source: 'ipapi.co'
+            };
+        }
+    }
+};
+const DEFAULT_IP_INFO_PROVIDER = 'ipinfo';
 
-    const [latRaw, lngRaw] = String(payload.loc || '').split(',');
-    const latitude = Number(latRaw);
-    const longitude = Number(lngRaw);
-    const hasGeo = Number.isFinite(latitude) && Number.isFinite(longitude);
-    const timezone = isValidTimezoneId(payload.timezone) ? String(payload.timezone).trim() : null;
+function resolveIpInfoProvider(providerName) {
+    return IP_INFO_PROVIDERS[providerName] ? providerName : DEFAULT_IP_INFO_PROVIDER;
+}
 
+function finalizeIpInfoSnapshot(base) {
+    if (!base || !base.ip) return null;
+    const hasGeo = Number.isFinite(base.latitude) && Number.isFinite(base.longitude);
     return {
-        ip,
-        loc: hasGeo ? `${latitude},${longitude}` : '',
-        latitude: hasGeo ? latitude : null,
-        longitude: hasGeo ? longitude : null,
+        ip: base.ip,
+        loc: hasGeo ? `${base.latitude},${base.longitude}` : '',
+        latitude: hasGeo ? base.latitude : null,
+        longitude: hasGeo ? base.longitude : null,
         accuracy: 100,
-        timezone,
-        city: String(payload.city || '').trim(),
-        region: String(payload.region || '').trim(),
-        country: String(payload.country || '').trim(),
-        org: String(payload.org || '').trim(),
-        source: 'ipinfo.io',
+        timezone: base.timezone || null,
+        city: base.city || '',
+        region: base.region || '',
+        country: base.country || '',
+        org: base.org || '',
+        source: base.source || 'unknown',
         updatedAt: Date.now()
     };
 }
 
-async function fetchIpInfoSnapshot(localPort, timeoutMs = 8000) {
+async function fetchIpInfoSnapshot(localPort, timeoutMs = 8000, providerName = DEFAULT_IP_INFO_PROVIDER) {
+    const provider = IP_INFO_PROVIDERS[resolveIpInfoProvider(providerName)];
     const requestOptions = {
         headers: {
             'User-Agent': 'curl/8.7.1',
@@ -1334,24 +1403,25 @@ async function fetchIpInfoSnapshot(localPort, timeoutMs = 8000) {
 
     return await new Promise((resolve, reject) => {
         let raw = '';
-        const req = https.get('https://ipinfo.io/json', requestOptions, (res) => {
+        const req = https.get(provider.url, requestOptions, (res) => {
             const statusCode = Number(res.statusCode || 0);
             res.setEncoding('utf8');
             res.on('data', (chunk) => {
                 raw += chunk;
                 if (raw.length > 128 * 1024) {
-                    req.destroy(new Error('ipinfo response too large'));
+                    req.destroy(new Error(`${provider.url} response too large`));
                 }
             });
             res.on('end', () => {
                 if (statusCode < 200 || statusCode >= 300) {
-                    reject(new Error(`ipinfo HTTP ${statusCode}`));
+                    reject(new Error(`${provider.url} HTTP ${statusCode}`));
                     return;
                 }
                 try {
-                    const snapshot = parseIpInfoSnapshot(JSON.parse(raw));
+                    const parsed = provider.parse(JSON.parse(raw));
+                    const snapshot = finalizeIpInfoSnapshot(parsed);
                     if (!snapshot) {
-                        reject(new Error('ipinfo response missing ip'));
+                        reject(new Error(`${provider.url} response missing ip`));
                         return;
                     }
                     resolve(snapshot);
@@ -1361,7 +1431,7 @@ async function fetchIpInfoSnapshot(localPort, timeoutMs = 8000) {
             });
         });
         req.setTimeout(timeoutMs, () => {
-            req.destroy(new Error('ipinfo request timeout'));
+            req.destroy(new Error(`${provider.url} request timeout`));
         });
         req.on('error', reject);
     });
@@ -1403,12 +1473,12 @@ function buildAutoIpBaseFingerprint(baseFingerprint = {}, source, policy) {
     return nextFingerprint;
 }
 
-async function resolveAutoIpBaseFingerprintAfterLaunch(profileId, baseFingerprint, localPort) {
+async function resolveAutoIpBaseFingerprintAfterLaunch(profileId, baseFingerprint, localPort, providerName = DEFAULT_IP_INFO_PROVIDER) {
     const policy = getAutoIpBasePolicy(baseFingerprint);
     if (!policy.enabled) return null;
 
     const cache = await readAutoIpBaseCache(profileId);
-    const snapshot = await fetchIpInfoSnapshot(localPort);
+    const snapshot = await fetchIpInfoSnapshot(localPort, 8000, providerName);
     const cacheMatchesCurrentIp = cache && cache.ip && snapshot.ip && cache.ip === snapshot.ip;
     const source = cacheMatchesCurrentIp && isAutoIpBaseSourceUsable(cache, policy)
         ? { ...cache, checkedAt: Date.now() }
@@ -4858,7 +4928,7 @@ const launchProfileHandler = async (event, profileId, preferredLang, launchOptio
                     true,
                     { step: 6, profileName: progressProfileName }
                 );
-                const resolved = await resolveAutoIpBaseFingerprintAfterLaunch(profileId, profile.fingerprint, localPort);
+                const resolved = await resolveAutoIpBaseFingerprintAfterLaunch(profileId, profile.fingerprint, localPort, settings.ipInfoProvider);
                 if (resolved && resolved.fingerprint) {
                     profile.fingerprint = resolved.fingerprint;
                     const parts = [];
