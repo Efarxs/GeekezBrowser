@@ -1789,11 +1789,21 @@ async function handleApiRequest(method, pathname, body, params, context = {}) {
     };
 
     const resolveRemoteDebugPortForProfile = async (profileId, fallbackPort = null) => {
+        // If the profile is currently running, trust what activeProcesses
+        // recorded as the bound port. That covers three cases uniformly:
+        //   - global setting on, profile has stored debugPort
+        //   - global setting off, but override args carried an explicit port
+        //   - the port was re-synced by this launch (--remote-debugging-port
+        //     in override args mid-flight)
+        const active = activeProcesses[profileId];
+        if (active && Number.isFinite(active.debugPort)) {
+            return normalizeDebugPort(active.debugPort);
+        }
+        // Not running — only surface a port when the global toggle is on
+        // (otherwise a stale DB value could report a phantom port).
         if (!settings.enableRemoteDebugging) return null;
-
         const fromFallback = normalizeDebugPort(fallbackPort);
         if (fromFallback) return fromFallback;
-
         const latest = await profileDB.getById(profileId);
         return normalizeDebugPort(latest?.debugPort);
     };
@@ -4485,8 +4495,40 @@ const launchProfileHandler = async (event, profileId, preferredLang, launchOptio
         { step: 2, profileName: progressProfileName }
     );
 
-    // Auto-assign a stable remote debugging port when feature is enabled and no explicit port exists.
-    if (settings.enableRemoteDebugging && !normalizeDebugPort(profile.debugPort)) {
+    // Explicit `--remote-debugging-port=NNNN` in the override args (API's
+    // `args=` query) or in the profile's custom args takes priority over the
+    // auto-allocated / settings-assigned port. Extract it early, sync into
+    // profile.debugPort + persist, so:
+    //   - the launch arg is emitted only once (no duplicate --flag)
+    //   - the API response and UI show the port Chrome actually bound
+    //   - "connect debug" clicks in UI hit the correct port
+    const extractDebugPortFromArgs = (args) => {
+        for (let i = args.length - 1; i >= 0; i--) {
+            const m = /^--remote-debugging-port=(\d{2,5})$/.exec(String(args[i] || '').trim());
+            if (m) {
+                const port = Number(m[1]);
+                if (port >= 1024 && port <= 65535) return port;
+            }
+        }
+        return null;
+    };
+    const customArgsList = (settings.enableCustomArgs && typeof profile.customArgs === 'string')
+        ? profile.customArgs.split(/[\n\s]+/).map(s => s.trim()).filter(Boolean)
+        : [];
+    const explicitDebugPort = extractDebugPortFromArgs(launchArgsOverride)
+        ?? extractDebugPortFromArgs(customArgsList);
+
+    if (explicitDebugPort) {
+        // Persist so the UI/API reflect the real bound port.
+        if (Number(profile.debugPort) !== explicitDebugPort) {
+            profile.debugPort = explicitDebugPort;
+            try { await profileDB.update(profile.id, profile); } catch (e) {
+                console.warn(`[debug-port] persist failed for ${profileId}: ${e?.message || e}`);
+            }
+        }
+    } else if (settings.enableRemoteDebugging && !normalizeDebugPort(profile.debugPort)) {
+        // Auto-assign a stable port when feature is enabled and no explicit
+        // port exists (either in profile row or in override args).
         profile.debugPort = await allocateDebugPortIfNeeded(settings, profiles, null);
         await profileDB.update(profile.id, profile);
     }
@@ -5017,39 +5059,53 @@ const launchProfileHandler = async (event, profileId, preferredLang, launchOptio
             console.log(`   Seed: ${fpSeed}, Platform: ${fcPlatform}, Brand: ${fcBrand}${effectiveUa ? ', custom UA' : ''}${fcBrandVersion ? `, brand-version: ${fcBrandVersion}` : ''}${fcPlatform !== hostPlatform ? ', font-spoof=off (cross-platform)' : ''}`);
         }
 
-        // 4. Remote Debugging Port (仅显式开启且非干净模式)
+        // 4. Remote Debugging Port. Emit the flag when EITHER settings has
+        // remote debugging on, OR the caller passed an explicit port via
+        // override args / custom args (`explicitDebugPort` was extracted
+        // earlier and synced into profile.debugPort). Explicit port implies
+        // "user wants debug on, regardless of the global toggle".
         const remoteDebugPort = normalizeDebugPort(profile.debugPort);
-        if (!useCleanProfile && settings.enableRemoteDebugging && remoteDebugPort) {
+        const debugEnabled = !!explicitDebugPort || (settings.enableRemoteDebugging && !!remoteDebugPort);
+        if (!useCleanProfile && debugEnabled && remoteDebugPort) {
             launchArgs.push(`--remote-debugging-port=${remoteDebugPort}`);
             console.log('━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━');
             console.log('⚠️  REMOTE DEBUGGING ENABLED');
-            console.log(`📡 Port: ${remoteDebugPort}`);
+            console.log(`📡 Port: ${remoteDebugPort}${explicitDebugPort ? ' (from launch args)' : ''}`);
             console.log(`🔗 Connect: chrome://inspect or ws://localhost:${remoteDebugPort}`);
             console.log('⚠️  WARNING: May increase automation detection risk!');
             console.log('━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━');
         }
 
-        // 5. Custom Launch Arguments (if enabled)
+        // 5. Custom Launch Arguments (if enabled). Strip any
+        // --remote-debugging-port= we already emitted above to avoid a
+        // duplicate flag (Chrome takes the LAST duplicate — harmless when
+        // values match, confusing to debug when they don't).
         if (!useCleanProfile && settings.enableCustomArgs && profile.customArgs) {
-            const customArgsList = profile.customArgs
+            const parsedCustomArgs = profile.customArgs
                 .split(/[\n\s]+/)
                 .map(arg => arg.trim())
-                .filter(arg => arg && arg.startsWith('--'));
+                .filter(arg => arg && arg.startsWith('--'))
+                .filter(arg => !/^--remote-debugging-port=/.test(arg));
 
-            if (customArgsList.length > 0) {
-                launchArgs.push(...customArgsList);
-                console.log('⚡ Custom Args:', customArgsList.join(' '));
+            if (parsedCustomArgs.length > 0) {
+                launchArgs.push(...parsedCustomArgs);
+                console.log('⚡ Custom Args:', parsedCustomArgs.join(' '));
             }
         }
 
-        if (!useCleanProfile && launchArgsOverride.length > 0) {
-            launchArgs.push(...launchArgsOverride);
-            console.log('⚡ API Launch Args Override:', launchArgsOverride.join(' '));
+        // Same dedupe for the API's transient override args.
+        const dedupedOverrideArgs = launchArgsOverride.filter(
+            arg => !/^--remote-debugging-port=/.test(arg)
+        );
+
+        if (!useCleanProfile && dedupedOverrideArgs.length > 0) {
+            launchArgs.push(...dedupedOverrideArgs);
+            console.log('⚡ API Launch Args Override:', dedupedOverrideArgs.join(' '));
             updateLaunchProgress(
                 84,
                 preferredLang === 'en'
-                    ? `Applying temporary launch args: ${launchArgsOverride.join(' ')}`
-                    : `正在应用本次临时启动参数：${launchArgsOverride.join(' ')}`,
+                    ? `Applying temporary launch args: ${dedupedOverrideArgs.join(' ')}`
+                    : `正在应用本次临时启动参数：${dedupedOverrideArgs.join(' ')}`,
                 true,
                 { step: 7, profileName: progressProfileName }
             );
@@ -5184,7 +5240,12 @@ const launchProfileHandler = async (event, profileId, preferredLang, launchOptio
             browserProcess,
             tunnelLogPath,
             logFd,
-            cleanProfile: useCleanProfile
+            cleanProfile: useCleanProfile,
+            // Port Chrome actually bound this launch, whether from global
+            // settings or an explicit override arg. Consumed by
+            // resolveRemoteDebugPortForProfile so the API/UI shows the
+            // real port, not a stale DB value.
+            debugPort: debugEnabled ? remoteDebugPort : null
         };
         appendProxyTunnelLog(tunnelLogPath, 'runtime.launch.ready', {
             profileId,
