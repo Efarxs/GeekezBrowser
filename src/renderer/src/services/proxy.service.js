@@ -1,5 +1,6 @@
 import { ipcService } from './ipc.service';
 import { decodeBase64Content, getProxyRemark, uuidv4 } from '../utils/helpers';
+import { looksLikeClashYaml, parseClashYamlToUriList } from '../utils/clash-yaml';
 
 /**
  * 代理与订阅服务 - 处理节点测试、订阅同步与数据解析
@@ -45,35 +46,41 @@ export const proxyService = {
     async syncSubscription(sub) {
         try {
             const content = await ipcService.invoke('fetch-url', sub.url);
-            let decoded = content;
-            
-            // 尝试处理 Base64 编码的订阅内容
-            try { 
-                if (!content.includes('://')) {
-                    decoded = decodeBase64Content(content);
+
+            // Route detection: three subscription flavors in the wild —
+            //   (a) Clash / Mihomo YAML (has "proxies:" key)
+            //   (b) URI-list, base64-wrapped (no "://" in the payload)
+            //   (c) URI-list, plaintext (has "://" in first non-empty line)
+            let uriLines = [];
+            if (looksLikeClashYaml(content)) {
+                uriLines = parseClashYamlToUriList(content);
+            } else {
+                let decoded = content;
+                try {
+                    if (!content.includes('://')) {
+                        decoded = decodeBase64Content(content);
+                    }
+                } catch (e) {
+                    console.warn('[Proxy Service] Base64 decode failed, using raw content');
                 }
-            } catch (e) {
-                console.warn('[Proxy Service] Base64 decode failed, using raw content');
+                uriLines = decoded.split(/[\r\n]+/)
+                    .map(line => line.trim())
+                    .filter(line => line && line.includes('://'));
             }
 
-            const lines = decoded.split(/[\r\n]+/);
             const newNodes = [];
             let count = 0;
-
-            lines.forEach(line => {
-                line = line.trim();
-                if (line && line.includes('://')) {
-                    const remark = getProxyRemark(line) || `Node ${count + 1}`;
-                    newNodes.push({
-                        id: uuidv4(),
-                        remark,
-                        url: line,
-                        enable: true,
-                        groupId: sub.id
-                    });
-                    count++;
-                }
-            });
+            for (const line of uriLines) {
+                const remark = getProxyRemark(line) || `Node ${count + 1}`;
+                newNodes.push({
+                    id: uuidv4(),
+                    remark,
+                    url: line,
+                    enable: true,
+                    groupId: sub.id
+                });
+                count++;
+            }
 
             return { success: true, count, nodes: newNodes };
         } catch (error) {
