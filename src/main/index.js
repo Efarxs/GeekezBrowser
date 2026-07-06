@@ -3474,6 +3474,17 @@ async function runProxyLatencyTest(proxyStr) {
             return { success: false, msg: `sing-box crashed: ${singboxErr.substring(0, 150) || 'unknown'}` };
         }
 
+        // Warmup: sing-box binds the local SOCKS port instantly, but the
+        // upstream tunnel needs a handshake round-trip before it can pipe
+        // data. For lightweight protocols (raw socks5, http, direct ss)
+        // that's ~50ms and warmup adds a bit of unnecessary latency. For
+        // vless-grpc / vless-reality / hy2 / tuic the handshake is 300-
+        // 700ms — probing before it completes produces a burst of parallel
+        // ECONNRESETs on all three probe targets and shows the node as
+        // "Fail" even though the tunnel is fully functional 500ms later.
+        // The launch path solves this with the same 300ms floor.
+        await new Promise(resolve => setTimeout(resolve, 400));
+
         const result = await measureSocksConnectLatency(tempPort, 4000);
         appendProxyTunnelLog(tunnelLogPath, result.success ? 'test.singbox.ok' : 'test.singbox.unusable', {
             localPort: tempPort,
