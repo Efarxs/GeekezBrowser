@@ -34,17 +34,13 @@
                     {{ currentGroupName }} ({{ proxyStore.currentGroupNodes.length }})
                 </div>
                 <div style="display:flex; gap:8px; flex-wrap:wrap;">
-                    <template v-if="showBulkSelectButtons">
-                        <!-- One state-aware toggle handles select-all + deselect-all
-                             based on current group state, avoiding a redundant button. -->
-                        <button class="outline" @click="handleGroupToggle" style="font-size:11px;"
-                            :title="groupToggleLabel.tip">
-                            {{ groupToggleLabel.icon }} {{ groupToggleLabel.text }}
-                        </button>
-                        <button class="outline" @click="handleGroupInvert" style="font-size:11px;" :title="$t('groupInvertHint')">
-                            ⇄ {{ $t('groupInvert') }}
-                        </button>
-                    </template>
+                    <!-- Invert alone covers all-off↔all-on toggling (starting from
+                         a uniform state, invert flips to the other extreme) and
+                         the mixed-state case (flip each). A dedicated select-all
+                         button was redundant. -->
+                    <button v-if="showBulkSelectButtons" class="outline" @click="handleGroupInvert" style="font-size:11px;" :title="$t('groupInvertHint')">
+                        ⇄ {{ $t('groupInvert') }}
+                    </button>
                     <button class="outline" @click="handleTestGroup" style="font-size:11px;">
                         ⚡ {{ $t('btnTestGroup') }}
                     </button>
@@ -195,35 +191,6 @@ const showBulkSelectButtons = computed(
         && proxyStore.currentGroupNodes.length > 0
 );
 
-// Tri-state toggle: shows a checkbox glyph reflecting group state
-// (☐ none / ▣ some / ☑ all). Clicking "selects all" unless we're already
-// at "all", in which case it deselects all. This folds two of the three
-// old buttons into one context-sensitive control.
-const groupToggleLabel = computed(() => {
-    const nodes = proxyStore.currentGroupNodes;
-    const enabledCount = nodes.filter(n => n.enable !== false).length;
-    const allOn = enabledCount === nodes.length && nodes.length > 0;
-    const noneOn = enabledCount === 0;
-    const t = (key, fallback) => (window.t ? window.t(key) : fallback);
-    if (allOn) return {
-        icon: '☑',
-        text: t('groupSelectNone', 'Deselect all'),
-        tip: t('groupSelectNoneHint', 'Disable every node in this tab'),
-        nextAction: 'off'
-    };
-    if (noneOn) return {
-        icon: '☐',
-        text: t('groupSelectAll', 'Select all'),
-        tip: t('groupSelectAllHint', 'Enable every node in this tab'),
-        nextAction: 'on'
-    };
-    return {
-        icon: '▣',
-        text: t('groupSelectAll', 'Select all'),
-        tip: t('groupSelectAllHint', 'Enable every node in this tab'),
-        nextAction: 'on'
-    };
-});
 
 const isNodeSelected = (id) => {
     return proxyStore.settings.mode === 'single' && proxyStore.settings.selectedId === id;
@@ -333,10 +300,6 @@ const handleCancelBatch = () => {
     uiStore.batchAddProxyModalVisible = false;
 };
 
-const handleGroupToggle = async () => {
-    const next = groupToggleLabel.value.nextAction === 'on';
-    await proxyStore.setGroupEnabled(proxyStore.currentGroup, next);
-};
 const handleGroupInvert = async () => {
     await proxyStore.invertGroupEnabled(proxyStore.currentGroup);
 };

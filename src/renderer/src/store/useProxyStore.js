@@ -264,11 +264,6 @@ export const useProxyStore = defineStore('proxy', () => {
             : nodes.filter(p => p.groupId === groupId);
     };
 
-    const setGroupEnabled = async (groupId, enabled) => {
-        for (const node of nodesInGroup(groupId)) node.enable = !!enabled;
-        await saveSettings();
-    };
-
     const invertGroupEnabled = async (groupId) => {
         for (const node of nodesInGroup(groupId)) node.enable = !(node.enable !== false);
         await saveSettings();
@@ -306,7 +301,6 @@ export const useProxyStore = defineStore('proxy', () => {
         updateSubscription,
         deleteSub,
         batchAddProxy,
-        setGroupEnabled,
         invertGroupEnabled,
         updateNode
     };
