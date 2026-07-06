@@ -257,7 +257,11 @@ async function main() {
         console.error(`Hint: launch a profile with --remote-debugging-port=${PORT} and try again.`);
         process.exit(2);
     }
-    const page = targets.find(t => t.type === 'page');
+    // Prefer a real-URL tab — extensions don't inject on chrome://newtab
+    // and probes there see un-patched values, producing false FAILs on
+    // extension-based patches (Sec-CH-UA-Bitness in particular).
+    let page = targets.find(t => t.type === 'page' && t.url && !/^(chrome[-:]|about:)/i.test(t.url));
+    if (!page) page = targets.find(t => t.type === 'page');
     if (!page) {
         console.error('No page target found. Open any tab in the profile browser first.');
         process.exit(2);
@@ -268,6 +272,21 @@ async function main() {
     console.log(`UA: ${version['User-Agent']}\n`);
 
     const session = await connectPage(page);
+
+    // If we're on a chrome-scheme page, navigate to https://example.com/ so
+    // extension content scripts inject before we probe.
+    const startUrl = await session.evalJs('location.href');
+    if (typeof startUrl === 'string' && /^(chrome[-:]|about:)/i.test(startUrl)) {
+        console.log(`  (bootstrapping from ${startUrl} → https://example.com/ for extension injection)`);
+        await session.send('Page.enable');
+        await session.send('Page.navigate', { url: 'https://example.com/' });
+        for (let i = 0; i < 40; i++) {
+            await new Promise(r => setTimeout(r, 250));
+            const rs = await session.evalJs('document.readyState');
+            if (rs === 'interactive' || rs === 'complete') break;
+        }
+    }
+
     const results = [];
     for (const check of CHECKS) {
         const value = await session.evalJs(check.probe);

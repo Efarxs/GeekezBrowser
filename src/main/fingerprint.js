@@ -1642,32 +1642,37 @@ function getGeolocationScript(fp) {
     // returning a truthy descriptor — a defineProperty override fails both
     // checks. The Proxy pattern keeps the target function's own property
     // shape identical to real native functions.
+    //
+    // Shared registry: geo.js and chua.js both install patched functions
+    // that need native-looking toString. Instead of stacking two Proxies,
+    // both scripts register into a single WeakSet stored under Symbol.for
+    // and share ONE Function.prototype.toString proxy.
     return `
     (function() {
         try {
             const geo = ${geoJson};
             if (!window.Geolocation || !Geolocation.prototype) return;
 
-            const patchedFns = new WeakSet();
-            const origFpToString = Function.prototype.toString;
-            const proxiedToString = new Proxy(origFpToString, {
-                apply(target, thisArg, args) {
-                    if (patchedFns.has(thisArg)) {
-                        const name = (thisArg && thisArg.name) || '';
-                        return 'function ' + name + '() { [native code] }';
+            const REGISTRY_KEY = Symbol.for('__geekez_native_hide__');
+            let patchedFns = globalThis[REGISTRY_KEY];
+            if (!patchedFns) {
+                patchedFns = new WeakSet();
+                Object.defineProperty(globalThis, REGISTRY_KEY, {
+                    value: patchedFns, configurable: false, writable: false, enumerable: false
+                });
+                const origFpToString = Function.prototype.toString;
+                const proxiedToString = new Proxy(origFpToString, {
+                    apply(target, thisArg, args) {
+                        if (patchedFns.has(thisArg)) {
+                            const name = (thisArg && thisArg.name) || '';
+                            return 'function ' + name + '() { [native code] }';
+                        }
+                        return Reflect.apply(target, thisArg, args);
                     }
-                    return Reflect.apply(target, thisArg, args);
-                },
-                // A Proxy's toString call flows through the same handler, but
-                // to be safe we also mark the Proxy itself as native-looking
-                // so any \`Function.prototype.toString.toString()\` probe passes.
-                get(target, prop, receiver) {
-                    if (prop === 'name') return 'toString';
-                    return Reflect.get(target, prop, receiver);
-                }
-            });
-            patchedFns.add(proxiedToString);
-            Function.prototype.toString = proxiedToString;
+                });
+                patchedFns.add(proxiedToString);
+                Function.prototype.toString = proxiedToString;
+            }
 
             const latitude = geo.latitude;
             const longitude = geo.longitude;
@@ -1853,49 +1858,56 @@ function getClientHintsPatchScript(fp) {
     (function() {
         try {
             if (!navigator.userAgentData) return;
-            const uad = navigator.userAgentData;
-            const orig = uad.getHighEntropyValues && uad.getHighEntropyValues.bind(uad);
-            if (typeof orig !== 'function') return;
+            // navigator.userAgentData returns a NEW NavigatorUAData instance
+            // on each access — patching the instance is lost immediately.
+            // Patch the prototype so every fresh instance inherits our fix.
+            const proto = Object.getPrototypeOf(navigator.userAgentData);
+            if (!proto || typeof proto.getHighEntropyValues !== 'function') return;
+            const orig = proto.getHighEntropyValues;
 
-            const patchedFns = new WeakSet();
-            const proxied = new Proxy(orig, {
-                apply(target, thisArg, args) {
-                    const promise = Reflect.apply(target, thisArg, args);
-                    return promise.then(result => {
-                        if (result && typeof result === 'object') {
-                            if ('bitness' in result) result.bitness = ${JSON.stringify(bitness)};
-                            if ('wow64' in result) result.wow64 = ${JSON.stringify(wow64)};
-                        }
-                        return result;
-                    });
+            // Preserve the async-function signature so ` + '`typeof x === "function"`' + ` and
+            // ` + '`x instanceof AsyncFunction`' + ` checks stay unchanged.
+            const patched = async function getHighEntropyValues(hints) {
+                const result = await orig.call(this, hints);
+                if (result && typeof result === 'object') {
+                    if ('bitness' in result) result.bitness = ${JSON.stringify(bitness)};
+                    if ('wow64' in result) result.wow64 = ${JSON.stringify(wow64)};
                 }
-            });
-            patchedFns.add(proxied);
+                return result;
+            };
 
-            Object.defineProperty(uad, 'getHighEntropyValues', {
-                value: proxied,
+            Object.defineProperty(proto, 'getHighEntropyValues', {
+                value: patched,
                 configurable: true,
-                writable: true
+                writable: true,
+                enumerable: false
             });
 
-            // Keep Function.prototype.toString consistent with the geo patch.
-            // The geo script installs the Proxy on Function.prototype.toString
-            // first; we just piggy-back the same WeakSet by re-installing our
-            // own if geo didn't run (e.g., no geolocation configured).
-            if (Function.prototype.toString.name !== 'toString' ||
-                typeof Function.prototype.toString.call !== 'function') {
-                // Already proxied by geo script — nothing to do.
-            } else {
+            // Register with the shared native-hide registry (see geo.js). If
+            // geo didn't run first for whatever reason, initialize a minimal
+            // registry + Function.prototype.toString proxy so our patched
+            // function still passes toString detection.
+            const REGISTRY_KEY = Symbol.for('__geekez_native_hide__');
+            let patchedFns = globalThis[REGISTRY_KEY];
+            if (!patchedFns) {
+                patchedFns = new WeakSet();
+                Object.defineProperty(globalThis, REGISTRY_KEY, {
+                    value: patchedFns, configurable: false, writable: false, enumerable: false
+                });
                 const origFpToString = Function.prototype.toString;
-                Function.prototype.toString = new Proxy(origFpToString, {
+                const proxiedToString = new Proxy(origFpToString, {
                     apply(target, thisArg, args) {
                         if (patchedFns.has(thisArg)) {
-                            return 'function getHighEntropyValues() { [native code] }';
+                            const name = (thisArg && thisArg.name) || '';
+                            return 'function ' + name + '() { [native code] }';
                         }
                         return Reflect.apply(target, thisArg, args);
                     }
                 });
+                patchedFns.add(proxiedToString);
+                Function.prototype.toString = proxiedToString;
             }
+            patchedFns.add(patched);
         } catch (e) { }
     })();
     `;

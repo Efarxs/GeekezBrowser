@@ -13,6 +13,7 @@ export default defineConfig({
           'close-behavior': resolve(__dirname, 'src/main/close-behavior.js'),
           'singbox-assets': resolve(__dirname, 'src/main/singbox-assets.js'),
           'cdp-cookie-client': resolve(__dirname, 'src/main/cdp-cookie-client.js'),
+          'cookie-formats': resolve(__dirname, 'src/main/cookie-formats.js'),
           'release-check': resolve(__dirname, 'src/main/release-check.js'),
           'profile-db': resolve(__dirname, 'src/main/profile-db.js'),
           'db/config': resolve(__dirname, 'src/main/db/config.js'),
