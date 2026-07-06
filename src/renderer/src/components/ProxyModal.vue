@@ -29,11 +29,22 @@
                 </div>
             </div>
             
-            <div style="display:flex; justify-content:space-between; align-items:center; background:rgba(0,0,0,0.1); padding:8px 12px; border-radius:4px; margin-bottom:10px; flex-shrink:0;">
+            <div style="display:flex; justify-content:space-between; align-items:center; background:rgba(0,0,0,0.1); padding:8px 12px; border-radius:4px; margin-bottom:10px; flex-shrink:0; flex-wrap:wrap; gap:8px;">
                 <div style="font-weight:bold; font-size:13px; color:var(--accent);">
                     {{ currentGroupName }} ({{ proxyStore.currentGroupNodes.length }})
                 </div>
-                <div style="display:flex; gap:8px;">
+                <div style="display:flex; gap:8px; flex-wrap:wrap;">
+                    <template v-if="showBulkSelectButtons">
+                        <button class="outline" @click="handleGroupSelectAll" style="font-size:11px;" :title="$t('groupSelectAllHint')">
+                            ☑ {{ $t('groupSelectAll') }}
+                        </button>
+                        <button class="outline" @click="handleGroupSelectNone" style="font-size:11px;" :title="$t('groupSelectNoneHint')">
+                            ☐ {{ $t('groupSelectNone') }}
+                        </button>
+                        <button class="outline" @click="handleGroupInvert" style="font-size:11px;" :title="$t('groupInvertHint')">
+                            ⇄ {{ $t('groupInvert') }}
+                        </button>
+                    </template>
                     <button class="outline" @click="handleTestGroup" style="font-size:11px;">
                         ⚡ {{ $t('btnTestGroup') }}
                     </button>
@@ -78,7 +89,7 @@
                         <button class="outline no-drag" @click="proxyStore.testLatency(p.id)" :disabled="proxyStore.testingIds.has(p.id)">
                             {{ proxyStore.testingIds.has(p.id) ? '...' : $t('btnTest') }}
                         </button>
-                        <button v-if="proxyStore.currentGroup === 'manual'" class="outline no-drag" @click="handleEditNode(p)">
+                        <button class="outline no-drag" @click="handleEditNode(p)">
                             {{ $t('btnEdit') }}
                         </button>
                         <button class="danger no-drag" @click="proxyStore.deleteProxy(p.id)">✕</button>
@@ -100,11 +111,14 @@
         <div class="modal-content" style="max-width: 500px;">
             <div class="modal-header">
                 <span>{{ $t('batchAdd') || 'Batch Add Nodes' }}</span>
-                <span style="cursor:pointer" @click="uiStore.batchAddProxyModalVisible = false">✕</span>
+                <span style="cursor:pointer" @click="handleCancelBatch">✕</span>
             </div>
             <p style="font-size:12px; opacity:0.7; margin: 10px 0;">Paste links here (one per line). Supports vmess, vless, trojan, ss, socks5.</p>
-            <textarea v-model="batchInput" style="height:250px; font-family:monospace; font-size:11px; width: 100%; box-sizing: border-box;" placeholder="vmess://...&#10;ss://..."></textarea>
+            <label style="font-size:12px; opacity:0.75; display:block; margin-bottom:4px;">{{ $t('batchNamePrefix') }}</label>
+            <input v-model="batchName" type="text" maxlength="60" :placeholder="$t('batchNamePrefixPh')" style="width:100%; box-sizing:border-box; margin-bottom:10px;" />
+            <textarea v-model="batchInput" style="height:220px; font-family:monospace; font-size:11px; width: 100%; box-sizing: border-box;" placeholder="vmess://...&#10;ss://..."></textarea>
             <div style="text-align:right; margin-top:15px;">
+                <button class="outline" @click="handleCancelBatch" style="margin-right:8px;">{{ $t('cancel') }}</button>
                 <button class="primary" @click="handleSubmitBatch" :disabled="!batchInput.trim()">{{ $t('save') }}</button>
             </div>
         </div>
@@ -147,6 +161,7 @@ const uiStore = useUIStore();
 const proxyStore = useProxyStore();
 
 const batchInput = ref('');
+const batchName = ref('');
 const editNodeModalVisible = ref(false);
 const editNodeForm = ref({
     id: '',
@@ -159,6 +174,13 @@ const currentGroupName = computed(() => {
     const sub = proxyStore.subscriptions.find(s => s.id === proxyStore.currentGroup);
     return sub ? sub.name : 'Sub';
 });
+
+// Bulk-selection controls only make sense in balance/failover — single
+// mode uses a radio, so "select all" is meaningless.
+const showBulkSelectButtons = computed(
+    () => proxyStore.settings.mode !== 'single'
+        && proxyStore.currentGroupNodes.length > 0
+);
 
 const isNodeSelected = (id) => {
     return proxyStore.settings.mode === 'single' && proxyStore.settings.selectedId === id;
@@ -245,16 +267,37 @@ const handleSubmitEditNode = async () => {
 
 const handleSubmitBatch = async () => {
     if (!batchInput.value.trim()) return;
-    
-    const count = await proxyStore.batchAddProxy(batchInput.value, proxyStore.currentGroup);
+
+    const count = await proxyStore.batchAddProxy(
+        batchInput.value,
+        proxyStore.currentGroup,
+        batchName.value
+    );
     if (count > 0) {
         uiStore.showAlert(window.t('batchAddSuccess') || `Successfully added ${count} nodes.`);
         batchInput.value = '';
+        batchName.value = '';
         uiStore.batchAddProxyModalVisible = false;
         await proxyStore.loadSettings();
     } else {
         uiStore.showAlert(window.t('batchAddFail') || 'No valid proxy nodes found.');
     }
+};
+
+const handleCancelBatch = () => {
+    batchInput.value = '';
+    batchName.value = '';
+    uiStore.batchAddProxyModalVisible = false;
+};
+
+const handleGroupSelectAll = async () => {
+    await proxyStore.setGroupEnabled(proxyStore.currentGroup, true);
+};
+const handleGroupSelectNone = async () => {
+    await proxyStore.setGroupEnabled(proxyStore.currentGroup, false);
+};
+const handleGroupInvert = async () => {
+    await proxyStore.invertGroupEnabled(proxyStore.currentGroup);
 };
 
 onMounted(() => {

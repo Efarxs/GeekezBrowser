@@ -162,7 +162,26 @@ export const useProxyStore = defineStore('proxy', () => {
 
         const res = await proxyService.syncSubscription(sub);
         if (res.success) {
-            settings.value.preProxies = settings.value.preProxies.filter(p => p.groupId !== subId).concat(res.nodes);
+            // Preserve user-edited remarks across sync. Rule: if the old
+            // remark differs from what URL-derivation would produce, treat
+            // it as user-edited and carry it over. Auto-derived remarks
+            // get replaced with the fresh source value normally.
+            const oldByUrl = new Map();
+            settings.value.preProxies
+                .filter(p => p.groupId === subId)
+                .forEach(p => oldByUrl.set(p.url, p));
+            const mergedNodes = res.nodes.map(newNode => {
+                const old = oldByUrl.get(newNode.url);
+                if (!old) return newNode;
+                const autoDerived = getProxyRemark(old.url);
+                const wasEdited = old.remark && old.remark !== autoDerived;
+                return {
+                    ...newNode,
+                    remark: wasEdited ? old.remark : newNode.remark,
+                    enable: old.enable !== undefined ? old.enable : newNode.enable
+                };
+            });
+            settings.value.preProxies = settings.value.preProxies.filter(p => p.groupId !== subId).concat(mergedNodes);
             sub.lastUpdated = Date.now();
             await saveSettings();
         }
@@ -200,16 +219,23 @@ export const useProxyStore = defineStore('proxy', () => {
         await saveSettings();
     };
 
-    const batchAddProxy = async (text, groupId = 'manual') => {
+    const batchAddProxy = async (text, groupId = 'manual', namePrefix = '') => {
         if (!text) return 0;
         const lines = text.split('\n').map(l => l.trim()).filter(l => l);
         if (lines.length === 0) return 0;
 
+        const prefix = String(namePrefix || '').trim();
         let addedCount = 0;
         const newNodes = [];
         for (const line of lines) {
             if (!line.includes('://') && !line.includes(':')) continue;
-            const remark = getProxyRemark(line) || 'Batch Node';
+            // When user supplied a batch name, apply it to every imported
+            // node with a 2-digit suffix so they stay distinguishable in the
+            // list (e.g. "US-Residential-01", "US-Residential-02"). Without
+            // a prefix, fall back to the URL-derived remark.
+            const remark = prefix
+                ? `${prefix}-${String(addedCount + 1).padStart(2, '0')}`
+                : (getProxyRemark(line) || 'Batch Node');
             newNodes.push({
                 id: uuidv4(),
                 remark,
@@ -226,6 +252,35 @@ export const useProxyStore = defineStore('proxy', () => {
             return addedCount;
         }
         return 0;
+    };
+
+    // Bulk selection helpers for balance / failover mode. Only touch nodes
+    // in the given group so switching between subscription tabs doesn't
+    // clobber selections in the others.
+    const nodesInGroup = (groupId) => {
+        const nodes = settings.value.preProxies || [];
+        return groupId === 'manual'
+            ? nodes.filter(p => !p.groupId || p.groupId === 'manual')
+            : nodes.filter(p => p.groupId === groupId);
+    };
+
+    const setGroupEnabled = async (groupId, enabled) => {
+        for (const node of nodesInGroup(groupId)) node.enable = !!enabled;
+        await saveSettings();
+    };
+
+    const invertGroupEnabled = async (groupId) => {
+        for (const node of nodesInGroup(groupId)) node.enable = !(node.enable !== false);
+        await saveSettings();
+    };
+
+    const updateNode = async (nodeId, patch) => {
+        const target = settings.value.preProxies.find(p => p.id === nodeId);
+        if (!target) return false;
+        if (typeof patch.remark === 'string') target.remark = patch.remark;
+        if (typeof patch.url === 'string' && patch.url.trim()) target.url = patch.url.trim();
+        await saveSettings();
+        return true;
     };
 
     return {
@@ -250,6 +305,9 @@ export const useProxyStore = defineStore('proxy', () => {
         addSubscription,
         updateSubscription,
         deleteSub,
-        batchAddProxy
+        batchAddProxy,
+        setGroupEnabled,
+        invertGroupEnabled,
+        updateNode
     };
 });

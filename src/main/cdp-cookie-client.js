@@ -122,7 +122,10 @@ async function withHeadlessChromeCookies(chromePath, userDataDir, fn) {
     try {
         const wsUrl = await waitForDebugger(port, 10000);
         session = await connectCdp(wsUrl);
-        await session.send('Network.enable');
+        // Don't send Network.enable here — this is a browser-level CDP
+        // session and Network domain isn't attached at that scope. Callers
+        // should use browser-level equivalents (Storage.getCookies,
+        // Storage.setCookies) which DO work here.
         return await fn(session);
     } finally {
         if (session) {

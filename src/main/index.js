@@ -2094,7 +2094,7 @@ async function handleApiRequest(method, pathname, body, params, context = {}) {
             if (!backupData.browserData[profile.id]) backupData.browserData[profile.id] = {};
             try {
                 const cookies = await withHeadlessChromeCookies(chromePath, profileDataDir, async (session) => {
-                    const { cookies } = await session.send('Network.getAllCookies');
+                    const { cookies } = await session.send('Storage.getCookies');
                     return cookies;
                 });
                 backupData.browserData[profile.id]._cookies = cookies;
@@ -4159,7 +4159,7 @@ ipcMain.handle('export-full-backup', async (e, { profileIds, password, filePath 
             // 2a. Cookie: 无头启动浏览器 → CDP 获取明文 Cookie
             try {
                 const cookies = await withHeadlessChromeCookies(chromePath, profileDataDir, async (session) => {
-                    const { cookies } = await session.send('Network.getAllCookies');
+                    const { cookies } = await session.send('Storage.getCookies');
                     return cookies;
                 });
                 backupData.browserData[profile.id]._cookies = cookies;
@@ -4317,7 +4317,7 @@ ipcMain.handle('import-full-backup', async (e, { filePath, password }) => {
                                     sameSite: cookie.sameSite || 'Lax',
                                 };
                                 if (cookie.expires > 0) params.expires = cookie.expires;
-                                await session.send('Network.setCookie', params);
+                                await session.send('Storage.setCookies', { cookies: [params] });
                                 cookieCount++;
                             } catch (ce) { }
                         }
@@ -5409,7 +5409,7 @@ async function readProfileCookiesViaCdp(profileId) {
     if (!chromePath) throw new Error('Chrome binary not found');
     const profileDataDir = path.join(DATA_PATH, profileId, 'browser_data');
     return await withHeadlessChromeCookies(chromePath, profileDataDir, async (session) => {
-        const { cookies } = await session.send('Network.getAllCookies');
+        const { cookies } = await session.send('Storage.getCookies');
         return cookies || [];
     });
 }
@@ -5428,7 +5428,7 @@ async function writeProfileCookiesViaCdp(profileId, cookies) {
         let ok = 0;
         for (const c of cdpCookies) {
             try {
-                await session.send('Network.setCookie', c);
+                await session.send('Storage.setCookies', { cookies: [c] });
                 ok++;
             } catch (e) { /* skip individual failures; report count only */ }
         }
