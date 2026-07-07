@@ -1,6 +1,6 @@
 # GeekEZ Browser · REST API 参考
 
-> 适用版本：**v1.7.13**
+> 适用版本：**v1.7.14**
 > 更新日期：2026-07-07
 
 GeekEZ Browser 提供一套本地 HTTP REST API，可通过脚本对指纹环境进行增删改查、启动、停止、备份等操作。
@@ -35,7 +35,7 @@ GeekEZ Browser 提供一套本地 HTTP REST API，可通过脚本对指纹环境
 | 修改 | PUT  | `/api/profiles/:idOrName` | 修改 profile |
 | 复制 | POST | `/api/profiles/:idOrName/duplicate` | 克隆一个 profile |
 | 删除 | DELETE | `/api/profiles/:idOrName` | 删除 profile |
-| 启动 | GET  | `/api/open/:idOrName` | 启动 profile（支持 `?clean=true` 干净启动） |
+| 启动 | GET  | `/api/open/:idOrName` | 启动 profile（支持 `?clean=true` 干净启动、`?verify=browser` 浏览器级验证） |
 | 停止 | POST | `/api/profiles/:idOrName/stop` | 停止（支持 `?keepProxy=true`） |
 | 导出 | GET  | `/api/export/all` | 导出加密全量备份 |
 | 导出 | GET  | `/api/export/fingerprint` | 导出 YAML 指纹清单 |
@@ -835,6 +835,67 @@ curl "http://127.0.0.1:12138/api/open/TikTok-US-01?stream=false&clean=true"
 
 ---
 
+### 15.5) 浏览器级代理验证 · `GET /api/open/:idOrName?verify=browser`
+
+**问题背景**：默认的 launch 只探测到 sing-box 隧道层（拿 Node 起个 socks5 client 打 gstatic），拿到"通"就返回响应。这在极少数情况下会误判 —— sing-box 隧道通不代表 Chrome 一定能用（Chrome 策略覆盖代理设置、扩展干扰、缓存中毒的 PAC 等），大约 2-5% 概率。
+
+**加 `?verify=browser` 后**：sing-box 探测通过 + Chrome 起来之后，再通过 CDP 主动 `Page.navigate` 一个探测 URL（默认 `https://www.gstatic.com/generate_204`），等收到浏览器视角的 top-level HTTP 响应才算成功。**响应成功 = 用户脚本立刻 CDP 接管一定能用**。
+
+**代价**：响应延迟增加 2-10s（Chrome 首屏导航时间）；总延迟从"5-15s"变为"10-25s"。
+
+**前置条件**：Settings → 远程调试**必须打开**（无 CDP 无从验证）。
+
+**参数**：
+| 参数 | 默认 | 说明 |
+|---|---|---|
+| `verify` | `off` | `browser` = 开启浏览器级验证 |
+| `verifyUrl` | `https://www.gstatic.com/generate_204` | 覆盖探测目标 |
+
+**验证失败时**：**profile 会被自动 stop**（避免留着一个坏 profile），返回 HTTP 500：
+```json
+{
+    "success": false,
+    "error": "navigation failed: net::ERR_TUNNEL_CONNECTION_FAILED",
+    "phase": "browser-verify",
+    "profileId": "..."
+}
+```
+
+**验证成功时**：正常返回，附加 `verify` 字段：
+```json
+{
+    "success": true,
+    "message": "Launched",
+    "profileId": "...",
+    "remote port": 24010,
+    "verify": {
+        "ok": true,
+        "status": 204,
+        "latencyMs": 7830,
+        "target": "https://www.gstatic.com/generate_204"
+    }
+}
+```
+
+**请求示例**：
+```bash
+# 默认目标
+curl "http://127.0.0.1:12138/api/open/TikTok-US-01?stream=false&verify=browser"
+
+# 换成自己的探测 URL
+curl "http://127.0.0.1:12138/api/open/TikTok-US-01?stream=false&verify=browser&verifyUrl=https://httpbin.org/status/200"
+
+# 流式模式也支持，会打印"正在验证浏览器代理连通性..."
+curl -N "http://127.0.0.1:12138/api/open/TikTok-US-01?stream=true&verify=browser"
+```
+
+**推荐用法**：
+- 一次性 provision 脚本（要求 100% 稳）→ 建议开
+- 大批量并发 launch（追求速度）→ 别开
+- 交互式 UI 用户 → 默认不开
+
+---
+
 ### 16) 应用设置读写 · `GET / PATCH /api/settings`
 
 **读取**：`GET /api/settings` 返回整个设置快照（包括 preProxies / subscriptions / userExtensions 等）。
@@ -911,22 +972,42 @@ curl -X POST http://127.0.0.1:12138/api/kernels/144.0.7559.132
 
 ### 18) 代理测试 · `POST /api/proxy/latency`
 
-**Body**（二选一）：
+对代理做一次真实的 handshake + 探测 gstatic/cloudflare，返回延迟和是否可用。
+
+**Body**（三种模式）：
+
 ```json
 { "proxyStr": "socks5://user:pass@1.2.3.4:1080" }
 ```
-或
+直接测这个 URL —— 从本机到代理**单跳**，不套任何 preProxy。
+
 ```json
 { "profileId": "TikTok-US-01" }
 ```
-（后者会拿该 profile 的 `proxyStr`）
+拿该 profile 的 proxyStr **走完整链路**测。如果 profile 的 `preProxyOverride: 'on'` 或全局 `enablePreProxy: true`，探测会**通过 App 内配置的 preProxy 节点**再到 profile 的代理。**这是推荐用法** —— 因为很多境外代理需要走 preProxy 才通（比如某些地区封锁直连或代理服务本身有地域限制）。
+
+```json
+{ "profileId": "TikTok-US-01", "chain": false }
+```
+即使 profile 有 preProxy 也**强制单跳**（用于隔离诊断：判断 profile 自身代理是不是真死了还是路由问题）。
 
 **响应**：
 ```json
-{ "success": true, "latencyMs": 187, "ok": true }
+{
+    "success": true,
+    "latency": 187,
+    "target": "www.google.com",
+    "chain": { "preProxy": "192.220.57.173-vless-reality" }
+}
 ```
 
-用途：批量启动前预筛"哪些 profile 的 proxy 死了"。
+- `success`: 是否连通
+- `latency`: 首次响应延迟（毫秒，字段名不叫 `latencyMs`，注意别拼错）
+- `target`: 实际打通的探测 URL host
+- `chain`: 用了哪个 preProxy 做前置；`null` 表示单跳
+- 失败时会有 `msg` + `details[]` 数组，包含每个探测目标的失败原因
+
+用途：批量启动前预筛"哪些 profile 的 proxy 死了" —— 建议用 `{ profileId }` 模式，因为**单跳往往测不出真实可用性**（例：US HTTP 代理直接从中国 IP 打就 ECONNRESET，但套上 preProxy 走就通）。
 
 ---
 

@@ -383,6 +383,164 @@ function getApiLaunchUiSender() {
     return null;
 }
 
+// After sing-box probe passes and Chrome is running, drive a real fetch
+// FROM WITHIN the browser (via CDP Runtime.evaluate) to confirm HTTP
+// requests actually make it out through the profile's proxy. Catches
+// the ~2-5% of cases where sing-box says "tunnel usable" but Chrome's
+// proxy config didn't take effect (Chrome policy override, extension
+// interference, cache-poisoned PAC, etc.). Cheap when it works — one
+// HEAD-equivalent request through an already-open tab.
+async function verifyBrowserThroughProxy(debugPort, options = {}) {
+    const probeUrl = options.probeUrl || 'https://www.gstatic.com/generate_204';
+    const expectedStatus = Number.isFinite(options.expectedStatus) ? options.expectedStatus : 204;
+    const timeoutMs = Number.isFinite(options.timeoutMs) ? options.timeoutMs : 15000;
+    const WebSocket = require('ws');
+    const http = require('http');
+
+    const started = Date.now();
+
+    // Raw http.get (not fetch) — under Electron the global fetch sometimes
+    // inherits userland proxy env vars even when the target is 127.0.0.1
+    // and the app's own NO_PROXY says localhost. http.get bypasses that
+    // entirely.
+    const getJson = (path, timeout = 2000) => new Promise((resolve, reject) => {
+        const req = http.get({ host: '127.0.0.1', port: debugPort, path, timeout }, (res) => {
+            let body = '';
+            res.on('data', c => body += c);
+            res.on('end', () => {
+                try { resolve(JSON.parse(body)); } catch (e) { reject(new Error(`bad JSON: ${e.message}`)); }
+            });
+        });
+        req.on('timeout', () => { req.destroy(new Error('timeout')); });
+        req.on('error', reject);
+    });
+
+    // 1. Find a CDP-attachable tab. Chrome takes 1-3s to expose CDP
+    // after spawn, so we poll for up to 5s.
+    let tabs = null;
+    const tabsDeadline = Date.now() + 5000;
+    let lastErr = null;
+    while (Date.now() < tabsDeadline) {
+        try {
+            tabs = await getJson('/json');
+            if (Array.isArray(tabs)) break;
+        } catch (e) {
+            lastErr = e;
+        }
+        await sleep(300);
+    }
+    if (!Array.isArray(tabs)) {
+        throw new Error(`CDP endpoint didn't respond on port ${debugPort} within 5s: ${lastErr?.message || 'no response'}`);
+    }
+
+    const tab = tabs.find(t => t.webSocketDebuggerUrl && t.type === 'page')
+        || tabs.find(t => t.webSocketDebuggerUrl);
+    if (!tab?.webSocketDebuggerUrl) {
+        throw new Error(`No CDP tab with a websocketDebuggerUrl (${tabs.length} tab(s))`);
+    }
+
+    // 2. Open WS + Runtime.evaluate a fetch. `awaitPromise: true` makes
+    //    CDP itself await the fetch before returning; `returnByValue`
+    //    gives us the plain object back instead of a remote handle.
+    return new Promise((resolve, reject) => {
+        const ws = new WebSocket(tab.webSocketDebuggerUrl, { perMessageDeflate: false });
+        let done = false;
+        const finish = (err, val) => {
+            if (done) return;
+            done = true;
+            try { ws.close(); } catch { /* already closed */ }
+            if (err) reject(err); else resolve(val);
+        };
+        const timer = setTimeout(
+            () => finish(new Error(`browser-verify fetch timeout after ${timeoutMs}ms (target: ${probeUrl})`)),
+            timeoutMs
+        );
+
+        // We use Page.navigate + wait for Page.loadEventFired instead of
+        // fetch() from about:blank. Reasons:
+        //   1. Chrome's fetch from a data:/about: origin is subject to
+        //      per-scheme fetch policy that varies by version — we saw
+        //      "TypeError: Failed to fetch" that turned out to be
+        //      about-scheme restrictions, not a real proxy issue.
+        //   2. Page.navigate exercises Chrome's actual navigation stack,
+        //      which is what real usage looks like. If it can't navigate,
+        //      the proxy setting has a real problem.
+        //   3. We get Network.responseReceived so we know the actual
+        //      HTTP status the server sent (or the fact of a network
+        //      error).
+        // Wait for the FIRST Network.responseReceived on the main frame.
+        // Don't wait for Page.loadEventFired — a 204 with an empty body
+        // (typical for generate_204 probes) can suppress the load event
+        // in newer Chrome builds. As soon as we see a response header
+        // for the main resource, we know Chrome got a real HTTP round-
+        // trip through the proxy. That's all "browser can reach the
+        // proxy" needs to prove.
+        let mainFrameId = null;
+        let mainRequestId = null;
+        ws.on('open', () => {
+            ws.send(JSON.stringify({ id: 1, method: 'Page.enable' }));
+            ws.send(JSON.stringify({ id: 2, method: 'Network.enable' }));
+            ws.send(JSON.stringify({ id: 3, method: 'Page.navigate', params: { url: probeUrl } }));
+        });
+
+        const probeUrlBase = probeUrl.split('?')[0];
+
+        ws.on('message', (data) => {
+            let msg;
+            try { msg = JSON.parse(data.toString()); } catch { return; }
+            if (msg.id === 3) {
+                if (msg.error) return finish(new Error(`Page.navigate: ${msg.error.message}`));
+                mainFrameId = msg.result?.frameId || null;
+                if (msg.result?.errorText) {
+                    return finish(new Error(`navigation error: ${msg.result.errorText}`));
+                }
+                return;
+            }
+            if (msg.method === 'Network.requestWillBeSent') {
+                const p = msg.params || {};
+                // Identify the main document request so we can match its
+                // response / failure. `type: Document` + main frame OR
+                // requestId matches documentURL.
+                if (p.type === 'Document' && ((mainFrameId && p.frameId === mainFrameId) ||
+                    (p.request?.url || '').startsWith(probeUrlBase))) {
+                    mainRequestId = p.requestId;
+                }
+                return;
+            }
+            if (msg.method === 'Network.responseReceived') {
+                const p = msg.params || {};
+                const isMain = (mainRequestId && p.requestId === mainRequestId)
+                    || (p.type === 'Document' && p.frameId === mainFrameId)
+                    || (p.type === 'Document' && (p.response?.url || '').startsWith(probeUrlBase));
+                if (!isMain) return;
+                clearTimeout(timer);
+                const status = p.response?.status || 0;
+                const latencyMs = Date.now() - started;
+                if (options.strictStatus && status !== expectedStatus) {
+                    return finish(new Error(`expected HTTP ${expectedStatus}, got ${status}`));
+                }
+                if (status >= 200 && status < 400) {
+                    return finish(null, { ok: true, status, latencyMs, target: probeUrl });
+                }
+                return finish(new Error(`proxy returned HTTP ${status}`));
+            }
+            if (msg.method === 'Network.loadingFailed') {
+                const p = msg.params || {};
+                const isMain = (mainRequestId && p.requestId === mainRequestId)
+                    || (p.type === 'Document' && p.frameId === mainFrameId);
+                if (!isMain) return;
+                clearTimeout(timer);
+                return finish(new Error(`navigation failed: ${p.errorText || 'unknown'}`));
+            }
+        });
+
+        ws.on('error', (e) => {
+            clearTimeout(timer);
+            finish(new Error(`CDP websocket error: ${e.message}`));
+        });
+    });
+}
+
 async function streamApiOpenProfile({ req, res, params, settings, profile, resolveRemoteDebugPortForProfile, launchOverrideArgs = [], useCleanProfile = false }) {
     const lang = resolveApiPreferredLang(params, settings);
     const profileName = profile.name || profile.id || (lang === 'en' ? 'Profile' : '环境');
@@ -432,6 +590,26 @@ async function streamApiOpenProfile({ req, res, params, settings, profile, resol
             streamSender.writeLine(lang === 'en'
                 ? `Remote debugging port: ${launchedPort}`
                 : `远程调试端口：${launchedPort}`);
+        }
+
+        // Optional browser-level verify (same contract as the JSON
+        // variant — see the /api/open handler comment for details).
+        if (params.get('verify') === 'browser' && launchedPort) {
+            streamSender.writeLine(lang === 'en'
+                ? 'Verifying browser can reach the proxy...'
+                : '正在验证浏览器代理连通性...');
+            try {
+                const probeUrl = params.get('verifyUrl') || 'https://www.gstatic.com/generate_204';
+                const verifyRes = await verifyBrowserThroughProxy(launchedPort, { probeUrl });
+                streamSender.writeLine(lang === 'en'
+                    ? `Browser verify OK: ${probeUrl} (${verifyRes.latencyMs}ms)`
+                    : `浏览器代理验证通过：${probeUrl}（${verifyRes.latencyMs}ms）`);
+            } catch (verifyErr) {
+                streamSender.writeLine(lang === 'en'
+                    ? `Browser verify FAILED: ${verifyErr.message}`
+                    : `浏览器代理验证失败：${verifyErr.message}`);
+                await stopRunningProfile(profile.id).catch(() => {});
+            }
         }
     } catch (err) {
         streamSender.writeLine(lang === 'en'
@@ -2063,6 +2241,20 @@ async function handleApiRequest(method, pathname, body, params, context = {}) {
     //                          (matches UI's "Launch with clean profile").
     //                          Strips existing debug port / extensions /
     //                          session-restore state for this run only.
+    //   ?verify=browser     — after sing-box probe passes and Chrome is
+    //                          up, drive a real fetch from inside the
+    //                          browser (via CDP) to confirm HTTP traffic
+    //                          actually flows through the profile's
+    //                          proxy. Adds ~2-10s to happy-path launches
+    //                          but eliminates the ~2-5% case where
+    //                          sing-box says OK but Chrome's proxy
+    //                          setting didn't stick. On verify failure
+    //                          the browser is stopped and 500 is
+    //                          returned with details.
+    //                          Requires "设置 → 远程调试" enabled — no
+    //                          CDP without a debug port.
+    //   ?verifyUrl=<url>    — override the verify target
+    //                          (default: https://www.gstatic.com/generate_204).
     const openMatch = pathname.match(/^\/api\/open\/([^\/]+)$/);
     if (method === 'GET' && openMatch) {
         const profile = await findProfile(decodeURIComponent(openMatch[1]));
@@ -2123,6 +2315,34 @@ async function handleApiRequest(method, pathname, body, params, context = {}) {
         };
         if (launchedPort) {
             launchedPayload['remote port'] = launchedPort;
+        }
+
+        // Optional browser-level verify. Only kicks in when the caller
+        // asked for it AND we actually have a CDP port to talk to.
+        if (params.get('verify') === 'browser') {
+            if (!launchedPort) {
+                await stopRunningProfile(profile.id).catch(() => {});
+                return { status: 500, data: {
+                    success: false,
+                    error: 'verify=browser requires remote debugging enabled — profile has no CDP port',
+                    phase: 'browser-verify'
+                }};
+            }
+            try {
+                const probeUrl = params.get('verifyUrl') || 'https://www.gstatic.com/generate_204';
+                const verifyRes = await verifyBrowserThroughProxy(launchedPort, { probeUrl });
+                launchedPayload.verify = verifyRes;
+            } catch (e) {
+                // Verify failed: tear down so the caller isn't left with
+                // a running-but-broken profile.
+                await stopRunningProfile(profile.id).catch(() => {});
+                return { status: 500, data: {
+                    success: false,
+                    error: e.message,
+                    phase: 'browser-verify',
+                    profileId: profile.id
+                }};
+            }
         }
         return launchedPayload;
     }
@@ -2391,23 +2611,65 @@ async function handleApiRequest(method, pathname, body, params, context = {}) {
     }
 
     // POST /api/proxy/latency — TCP + handshake latency probe against a
-    // proxy URL. Body: { "proxyStr": "socks5://..." } or
-    // { "profileId": "<uuid or name>" } (looks up the profile's proxy).
-    // Response: { success, latencyMs, error? }.
+    // proxy URL.
+    // Body: one of
+    //   { "proxyStr": "socks5://..." }              — raw URL, direct probe
+    //   { "profileId": "<uuid or name>" }           — probe the profile's
+    //                                                  proxy through its
+    //                                                  actual pre-proxy
+    //                                                  chain if enabled
+    //   { "profileId": "...", "chain": false }      — force direct probe
+    //                                                  even for a chained
+    //                                                  profile (useful
+    //                                                  when you want to
+    //                                                  isolate whether the
+    //                                                  proxy itself is
+    //                                                  reachable at all)
+    // Response: { success, latencyMs, msg?, details?, chain? }
+    // The `chain` field reports whether the probe actually went through
+    // a pre-proxy so callers can see what was tested.
     if (method === 'POST' && pathname === '/api/proxy/latency') {
         const parsed = parseApiBody(body) || {};
         let proxyStr = parsed.proxyStr;
+        let preProxyConfig = null;
+        let chainRemark = null;
         if (!proxyStr && parsed.profileId) {
             const p = await findProfile(String(parsed.profileId));
             if (!p) return { status: 404, data: { success: false, error: 'Profile not found' } };
             proxyStr = p.proxyStr;
+            // Mirror the exact chain-selection the launch flow does
+            // (index.js:5079-5099). Skip if the caller explicitly said
+            // chain=false.
+            if (parsed.chain !== false) {
+                const override = p.preProxyOverride || 'default';
+                const shouldUsePreProxy = (override === 'on' || (override === 'default' && settings.enablePreProxy));
+                if (shouldUsePreProxy && Array.isArray(settings.preProxies) && settings.preProxies.length > 0) {
+                    const active = settings.preProxies.filter(x => x.enable !== false);
+                    if (active.length > 0) {
+                        let picked;
+                        if (settings.mode === 'single') {
+                            picked = active.find(x => x.id === settings.selectedId) || active[0];
+                        } else if (settings.mode === 'balance') {
+                            picked = active[Math.floor(Math.random() * active.length)];
+                        } else {
+                            picked = active[0]; // failover default
+                        }
+                        preProxyConfig = { preProxies: [picked] };
+                        chainRemark = picked?.remark || null;
+                    }
+                }
+            }
         }
         if (!proxyStr) {
             return { status: 400, data: { success: false, error: 'Body needs { proxyStr } or { profileId }' } };
         }
         try {
-            const result = await runProxyLatencyTest(proxyStr);
-            return { success: true, ...result };
+            const result = await runProxyLatencyTest(proxyStr, { preProxyConfig });
+            return {
+                success: true,
+                ...result,
+                chain: preProxyConfig ? { preProxy: chainRemark } : null
+            };
         } catch (e) {
             return { status: 500, data: { success: false, error: e.message } };
         }
@@ -3880,18 +4142,23 @@ async function measureSocksConnectLatency(socksPort, timeoutMs = 4000, customTar
     });
 }
 
-async function runProxyLatencyTest(proxyStr) {
+// Optional `options.preProxyConfig` passes { preProxies: [...] } through
+// to sing-box so the probe tests the same chain a launch would use.
+// Without it, only the direct URL is tested — which fails for proxies
+// that geo-restrict / require going through a pre-proxy first (common
+// case: paid US HTTP proxies that don't accept direct China IPs).
+async function runProxyLatencyTest(proxyStr, options = {}) {
     const tempPort = await getAvailablePort();
     reservedPorts.add(tempPort);
     const tempConfigPath = path.join(app.getPath('userData'), `test_config_${tempPort}.json`);
     const tunnelLogPath = path.join(app.getPath('userData'), 'proxy_tunnel_test.log');
     let singboxProcess = null;
     try {
-        appendProxyTunnelLog(tunnelLogPath, 'test.start', { localPort: tempPort });
+        appendProxyTunnelLog(tunnelLogPath, 'test.start', { localPort: tempPort, chained: !!options.preProxyConfig });
 
         let config;
         try {
-            config = generateSingBoxConfig(proxyStr, tempPort, null, null);
+            config = generateSingBoxConfig(proxyStr, tempPort, options.preProxyConfig || null, null);
         } catch (err) {
             return { success: false, msg: 'Format Err' };
         }
@@ -5293,7 +5560,14 @@ const launchProfileHandler = async (event, profileId, preferredLang, launchOptio
                             fastProbeTimeoutMs: 1000,
                             slowReadyTimeoutMs: 5500,
                             slowProbeTimeoutMs: 3500,
-                            extendedReadyTimeoutMs: 8000,
+                            // Bumped from 8s → 12s: two-hop chains
+                            // (pre-proxy + upstream) commonly need
+                            // 14-16s wall clock for the second-hop
+                            // handshake on slow international paths.
+                            // Real-world reproducer: US HTTP proxy
+                            // via JP vless pre-proxy — 4/5 succeeded
+                            // at 8s budget, 5/5 with 12s.
+                            extendedReadyTimeoutMs: 12000,
                             extendedProbeTimeoutMs: 5000
                         }
                         : {
