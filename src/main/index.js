@@ -3579,20 +3579,28 @@ const DEFAULT_PROXY_PROBE_TARGETS = [
     { url: 'https://www.google.com/generate_204', expectedStatus: 204 }
 ];
 
+// "Hard" errors: probing again won't help, we should fail fast rather
+// than eat up the ready-budget. What's tricky: ECONNRESET / ECONNREFUSED
+// / EPIPE look permanent but sing-box actually emits them during the
+// first ~1s of tunnel warmup (TCP half-open race between local listener
+// binding and upstream handshake completing). Same for TLSV1_ALERT
+// mid-handshake. Historically we treated them as hard and bailed
+// immediately — which produced the exact "代理启动失败" flake on slow
+// international upstreams that we get user reports about.
+//
+// Now these are treated as retryable. Only signals that genuinely
+// won't change on retry stay hard:
+//   · ENETUNREACH / EHOSTUNREACH — routing dead, not a warmup issue
+//   · ERR_SSL — cert / cipher mismatch, permanent
+//   · HTTP 4xx — proxy config error (auth, path), permanent
+// HTTP 5xx and gateway timeouts moved to retryable — upstream service
+// hiccups can pass in 2-3 seconds.
 const HARD_PROXY_PROBE_PATTERNS = [
-    /\bECONNRESET\b/i,
-    /\bECONNREFUSED\b/i,
     /\bENETUNREACH\b/i,
     /\bEHOSTUNREACH\b/i,
-    /\bECONNABORTED\b/i,
-    /\bEPIPE\b/i,
-    /\bEPROTO\b/i,
     /\bERR_SSL\b/i,
-    /\bTLSV1_ALERT\b/i,
-    /\bUNEXPECTED_EOF\b/i,
     /\bHTTP 4\d\d\b/i,
-    /\bHTTP 5\d\d\b/i,
-    /returned HTTP\s+[45]\d\d/i
+    /returned HTTP\s+4\d\d/i
 ];
 
 function normalizeProxyProbeTarget(target) {
@@ -3648,11 +3656,22 @@ async function startPreProxyHealthCheck(url) {
     }
 }
 
+// Three-phase probe: fast → slow → extended. Each phase only starts if
+// the previous one's failure mode looks retryable (see
+// shouldRetryProxyProbe). This lets us fail fast on a genuinely broken
+// upstream (dead route, cert issue) while still giving a slow
+// international node up to ~15s of total wall-clock to warm up before
+// we declare "代理启动失败".
 async function waitForProxyChainReady(socksPort, processRef = null, options = {}) {
     const fastReadyTimeoutMs = Number.isFinite(options.fastReadyTimeoutMs) ? options.fastReadyTimeoutMs : 2600;
     const fastProbeTimeoutMs = Number.isFinite(options.fastProbeTimeoutMs) ? options.fastProbeTimeoutMs : 1000;
     const slowReadyTimeoutMs = Number.isFinite(options.slowReadyTimeoutMs) ? options.slowReadyTimeoutMs : 7000;
     const slowProbeTimeoutMs = Number.isFinite(options.slowProbeTimeoutMs) ? options.slowProbeTimeoutMs : 2200;
+    // Extended phase: opt-out via extendedReadyTimeoutMs=0. Kicks in only
+    // when slow phase's failures are still warmup-like — i.e. the
+    // upstream is responding, just slowly.
+    const extendedReadyTimeoutMs = Number.isFinite(options.extendedReadyTimeoutMs) ? options.extendedReadyTimeoutMs : 6000;
+    const extendedProbeTimeoutMs = Number.isFinite(options.extendedProbeTimeoutMs) ? options.extendedProbeTimeoutMs : 4000;
     const targets = Array.isArray(options.targets) ? options.targets : null;
 
     const fastResult = await waitForSocksProxyUsable(
@@ -3676,7 +3695,24 @@ async function waitForProxyChainReady(socksPort, processRef = null, options = {}
         processRef,
         { targets }
     );
-    return { ...slowResult, phase: 'slow' };
+    if (slowResult.success) {
+        return { ...slowResult, phase: 'slow' };
+    }
+    if (extendedReadyTimeoutMs <= 0 || !shouldRetryProxyProbe(slowResult.details, slowResult.msg)) {
+        return { ...slowResult, phase: 'slow' };
+    }
+
+    // Give the upstream one final long-window pass. Common trigger:
+    // slow international upstream where first TLS handshake takes 2-3s
+    // and the fast+slow phases both timed out mid-handshake.
+    const extendedResult = await waitForSocksProxyUsable(
+        socksPort,
+        extendedReadyTimeoutMs,
+        extendedProbeTimeoutMs,
+        processRef,
+        { targets }
+    );
+    return { ...extendedResult, phase: 'extended' };
 }
 
 
@@ -5243,6 +5279,10 @@ const launchProfileHandler = async (event, profileId, preferredLang, launchOptio
                 true,
                 { step: 5, profileName: progressProfileName }
             );
+            // Timings tuned for slow international upstreams. Slow-phase
+            // probes get 3-4s each (was 1.4-1.8s) — single TLS handshake
+            // through a 400-800ms RTT node commonly takes 1.5s+. Extended
+            // phase adds one more 6-8s window before we give up.
             const proxyUsable = await awaitWithPreProxyPriority(
                 waitForProxyChainReady(
                     localPort,
@@ -5251,14 +5291,18 @@ const launchProfileHandler = async (event, profileId, preferredLang, launchOptio
                         ? {
                             fastReadyTimeoutMs: 2600,
                             fastProbeTimeoutMs: 1000,
-                            slowReadyTimeoutMs: 4200,
-                            slowProbeTimeoutMs: 1800
+                            slowReadyTimeoutMs: 5500,
+                            slowProbeTimeoutMs: 3500,
+                            extendedReadyTimeoutMs: 8000,
+                            extendedProbeTimeoutMs: 5000
                         }
                         : {
                             fastReadyTimeoutMs: 2200,
                             fastProbeTimeoutMs: 900,
-                            slowReadyTimeoutMs: 2600,
-                            slowProbeTimeoutMs: 1400
+                            slowReadyTimeoutMs: 4000,
+                            slowProbeTimeoutMs: 3000,
+                            extendedReadyTimeoutMs: 6000,
+                            extendedProbeTimeoutMs: 4000
                         }
                 )
             );
