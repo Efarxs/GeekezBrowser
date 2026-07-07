@@ -43,7 +43,6 @@
         <div class="kernel-panel-section">
             <div class="kernel-panel-section-head">
                 <span class="kernel-panel-section-title">{{ t('kernelPanelAvailableHeader') }}</span>
-                <span class="kernel-panel-upstream">{{ t('kernelPanelUpstream') }}: adryfish/fingerprint-chromium</span>
             </div>
 
             <div v-if="uninstalledAvailable.length === 0" class="kernel-panel-empty">
@@ -197,10 +196,6 @@ onMounted(refreshAll);
     text-transform: uppercase;
     letter-spacing: 0.6px;
     color: var(--text-secondary);
-}
-.kernel-panel-upstream {
-    font-size: 11px;
-    opacity: 0.55;
 }
 .link-btn {
     background: transparent;
