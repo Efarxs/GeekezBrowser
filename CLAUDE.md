@@ -2,7 +2,7 @@
 
 > 这份文件是给未来 Claude session 用的快速上手 + 避坑清单。
 > 项目背景、用户画像已经在 memory 里（[[project-purpose]]、[[fingerprint-chromium-flags]]），不重复。
-> 当前版本：**1.7.14** · 主分支：`main` · 开发分支：`dev`（PR 汇合点）· feat 分支从 dev 拉
+> 当前版本：**1.7.17** · 主分支：`main` · 开发分支：`dev`（PR 汇合点）· feat 分支从 dev 拉
 
 ---
 
@@ -113,6 +113,36 @@ warning: in the working copy of 'x.vue', LF will be replaced by CRLF the next ti
 
 7 个 `kernel:*` handler 不在 `src/main/index.js` 里，在 `src/main/kernel/ipc-bridge.js`。index.js 只留一行 `registerKernelIpc({ profileDB, getActiveProcesses: () => activeProcesses })`。launch flow 里读 in-flight install 用 `getActiveInstall()`（不是访问局部变量）。
 
+### 11. Launch flow 里"提前捕获 override flag"是反模式（v1.7.17 修复的坑）
+
+历史 bug：`--lang` / `--accept-lang` 的推送 gate 是**一次性 const**（`hasLanguageOverride = language !== 'auto'`），在 Auto-IP-base pass **之前**算好。当 `language: 'auto'` 时，gate 永远是 false — 即使 Auto-IP-base 之后把 `profile.fingerprint.language` 更新成了 `en-US`，`--lang` 也不会被推给 Chrome。Chrome fallback 到宿主 locale，US 代理的 profile 泄漏 `zh-CN`。
+
+正确模式（timezone / geolocation 一直是这么写的）：**每次读当前值**：
+
+```js
+// ❌ 反模式
+const hasOverride = fp.language !== 'auto';
+// ... Auto-IP-base 跑，可能改 fp.language ...
+if (hasOverride) launchArgs.push(`--lang=${fp.language}`);   // 用了过期的 gate
+
+// ✅ 对的写法
+// ... Auto-IP-base 跑 ...
+const finalLang = fp.language;
+if (finalLang && finalLang !== 'auto') launchArgs.push(`--lang=${finalLang}`);
+```
+
+**规则**：Auto-IP-base pass（`resolveAutoIpBaseFingerprintAfterLaunch`，其实是 spawn 之前跑的）会 in-memory 更新 `fingerprint.language` / `timezone` / `geolocation` / `city`。任何依赖这些字段的 flag 推送都必须**在 pass 之后**读当前值，不能提前算一个"要不要推"的 const。回归测试在 `scripts/api-smoke-v2.mjs` 里的 language-Auto CDP 检查（`navigator.language === 'fr-FR'` 断言）会兜住这一点。
+
+### 12. `profile.headless` 是顶层 boolean（不在 fingerprint 内）
+
+v1.7.17 加的字段，跟 `resetOnLaunch` / `ignoreCertErrors` 同层，不是 `fingerprint` 子对象里的。启动时 gate `if (profile.headless)` 会追加：
+
+- `--headless=new`（`--headless=old` 上游 Chrome 132 已删）
+- `--disable-blink-features=AutomationControlled`（屏蔽 `navigator.webdriver`）
+- 若 `effectiveUa` 空则用平台+kernel major 合成一段 Chrome UA（避免 `HeadlessChrome/…` 后缀）
+
+Duplicate flow 走 `...source` 自动带过来。DB schema 三套（sqlite/pg/mysql）都有 ALTER TABLE 迁移。UI 复选框在 Create/Edit 两个 modal 的 Advanced tab。**不要**当作 fingerprint 字段 —— 反欺诈可能靠"UA 是不是无头"来判定，但 UA 本身不是"想不想开无头"的元数据，两者分层。
+
 ---
 
 ## 一眼速查表
@@ -135,8 +165,9 @@ warning: in the working copy of 'x.vue', LF will be replaced by CRLF the next ti
 ## 测试策略
 
 - **单测**（`node --test`）：只在**纯 CJS + 无 Electron 依赖**的模块加。目前只有 `kernel-versions.test.mjs`（15 assertions：pool 完整性、`pickFullVersionForMajor` 各种输入、`buildBrowserBrands` 品牌/顺序不变量）。想加新单测 → 先把目标函数抽到 CJS 模块
-- **API 黑盒**：`scripts/api-smoke.mjs`（23）+ `api-smoke-v2.mjs`（17）——**需要 dev 跑着**。改 API 契约必须两边都过。写新 endpoint 时同步补 test case
-- **E2E 手动**：没有 Playwright/CDP 自动化。UI 改动要**真起 dev 用一下**（tabs 里的 tap，检查 CDP port chip 等）
+- **API 黑盒**：`scripts/api-smoke.mjs`（23）+ `api-smoke-v2.mjs`（33，v1.7.17 涨到 +4 headless / +2 language-Auto CDP）——**需要 dev 跑着**。改 API 契约必须两边都过。写新 endpoint 时同步补 test case
+- **E2E CDP eval**（v1.7.17 起）：`api-smoke-v2.mjs` 里有一个 `cdpEval(port, expr)` helper（~40 行，用 `ws` 依赖），能对真实浏览器跑 `Runtime.evaluate`。目前只有 language-Auto 用它验证 `navigator.language` —— 要检查其他能只在真实浏览器里观察的东西（例如 `navigator.webdriver`、`navigator.languages`、`navigator.hardwareConcurrency`）都可以复用。**注意**：CDP 需要 profile 有 `--remote-debugging-port`，而 `?clean=true` 会**抑制**这个 flag（`src/main/index.js:6302` 的 `!useCleanProfile` gate），所以 CDP 断言不能跟 `clean=true` 组合
+- **E2E 手动**：没有 Playwright 自动化。UI 改动要**真起 dev 用一下**（tabs 里的 tap，检查 CDP port chip 等）
 - **网络能力**：真机测试代理相关变更用 `scripts/test-1024proxy-chain.mjs`（需要用户 Settings 里配置好的 preProxies）
 
 **测试代理**：`socks5://127.0.0.1:7890`（用户机器上跑的 Clash）—— smoke 脚本硬编码了这个
@@ -152,7 +183,7 @@ warning: in the working copy of 'x.vue', LF will be replaced by CRLF the next ti
 - 详细章节 + `curl` 示例
 - 版本号在 `package.json` 也要 bump
 
-**已有先例**：v1.7.12 加 `disabledSpoofing` / `kernelVersion` 字段、v1.7.13 加 duplicate/runtime/kernels/settings 等 7 个新 endpoint、v1.7.14 加 `?verify=browser` + chain-aware latency。每次都跟随 semver patch bump + 完整 doc 更新。
+**已有先例**：v1.7.12 加 `disabledSpoofing` / `kernelVersion` 字段、v1.7.13 加 duplicate/runtime/kernels/settings 等 7 个新 endpoint、v1.7.14 加 `?verify=browser` + chain-aware latency、v1.7.15-16 是 audit 后连续两轮加固（race / leak 修复，无字段变化）、v1.7.17 加 `headless` 字段 + 修 language-Auto 泄漏宿主 locale 的 bug。每次都跟随 semver patch bump + 完整 doc 更新。
 
 **破坏性变更**：**避免**。用可选参数 + 默认关（如 `?verify=browser` / `?clean=true` / `?keepProxy=true`）扩展。
 

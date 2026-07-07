@@ -231,7 +231,7 @@ curl "http://127.0.0.1:12138/api/profiles/a1b2c3d4-e5f6-7890-abcd-ef1234567890"
 | `browserFullVersion` | string | 完整 Chrome patch 号（例：`148.0.7778.167`）。不传时从内置真实 Chrome 148 stable patch 池随机抽取。存储在 profile 里的值就是这个完整号，UI 编辑器里显示的 UA 也带这个 patch |
 | `userAgent` | string | 覆盖 UA 字符串。**保留完整版本号**（例：`Chrome/148.0.7778.167`）—— 存储与 UI 显示都是完整版本。启动时主进程会自动做 Chrome 101+ UA-Reduction 转换：(a) 提取 patch 号作为 `--fingerprint-brand-version`（即 `Sec-CH-UA-Full-Version-List`）(b) 把传给 `--user-agent` 的字符串里 `Chrome/X.Y.Z.W` 归零为 `Chrome/X.0.0.0`。这样既保留了用户对具体版本的选择意图，又符合 Chrome 真实浏览器行为、能过 browserscan 校验 |
 | `screen` | object | `{ "width": 1920, "height": 1080 }`。会用作启动窗口大小 |
-| `language` | string | 主语言，如 `en-US`。传 `auto` 或不传 = 根据出口 IP 自动匹配 |
+| `language` | string | 主语言，如 `en-US`。传 `auto` 或不传 = 根据出口 IP 自动匹配（`COUNTRY_TO_LANG` 表映射代理出口国 → 语言）。**v1.7.17 修复**：此前 `--lang` / `--accept-lang` 的推送 gate 在 Auto-IP 派生之前被固化，导致 `auto` 时 IP 派生的语言不会真的推给 Chrome，`navigator.language` 反而暴露宿主系统 locale（zh-CN 之类）。1.7.17 起 gate 改为读派生**后**的 `fingerprint.language`，行为与文档一致。如果你之前 API 传 `"language": "auto"` 且脚本依赖 Chrome 报出宿主 locale，请显式改传目标语言（如 `"en-US"`）以保持旧行为 |
 | `languages` | string[] | 语言列表，如 `["en-US","en"]`。未传会从 `language` 派生 |
 | `timezone` | string | IANA 时区，如 `America/New_York`；传 `Auto` / `auto` / 不传 = 跟随 IP |
 | `hardwareConcurrency` | number | CPU 核数，取值 `4` / `8` / `12` / `16`。默认随机 |
