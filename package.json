@@ -1,16 +1,20 @@
 {
   "name": "geekez-browser",
-  "version": "1.7.12",
+  "version": "1.7.13",
   "description": "Stealthy Anti-Detect Browser for E-Commerce",
   "main": "out/main/index.js",
   "author": "EchoHS",
   "scripts": {
     "dev": "chcp 65001 >nul && electron-vite dev",
+    "predev": "node scripts/ensure-native-abi.mjs",
     "build": "electron-vite build",
     "postinstall": "node setup.js && npx @electron/rebuild -f -w better-sqlite3",
     "build:win": "npm run build && electron-builder --win",
     "build:mac": "npm run build && electron-builder --mac",
     "build:linux": "npm run build && electron-builder --linux",
+    "postbuild:win": "node scripts/ensure-native-abi.mjs --restore",
+    "postbuild:mac": "node scripts/ensure-native-abi.mjs --restore",
+    "postbuild:linux": "node scripts/ensure-native-abi.mjs --restore",
     "test": "node --test scripts/*.test.mjs",
     "test:api": "node scripts/api-smoke.mjs"
   },
