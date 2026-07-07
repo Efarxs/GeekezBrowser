@@ -1,6 +1,6 @@
 # GeekEZ Browser · REST API 参考
 
-> 适用版本：**v1.7.12**
+> 适用版本：**v1.7.13**
 > 更新日期：2026-07-07
 
 GeekEZ Browser 提供一套本地 HTTP REST API，可通过脚本对指纹环境进行增删改查、启动、停止、备份等操作。
@@ -30,14 +30,22 @@ GeekEZ Browser 提供一套本地 HTTP REST API，可通过脚本对指纹环境
 | 状态 | GET  | `/api/status` | 查询正在运行的环境列表 |
 | 查询 | GET  | `/api/profiles` | 查询所有 profile |
 | 查询 | GET  | `/api/profiles/:idOrName` | 查询单个 profile 详情 |
+| 查询 | GET  | `/api/profiles/:idOrName/runtime` | 查询单个 profile 的运行状态 |
 | 创建 | POST | `/api/profiles` | 创建一个 profile |
 | 修改 | PUT  | `/api/profiles/:idOrName` | 修改 profile |
+| 复制 | POST | `/api/profiles/:idOrName/duplicate` | 克隆一个 profile |
 | 删除 | DELETE | `/api/profiles/:idOrName` | 删除 profile |
-| 启动 | GET  | `/api/open/:idOrName` | 启动 profile（返回调试端口） |
-| 停止 | POST | `/api/profiles/:idOrName/stop` | 停止运行中的 profile |
+| 启动 | GET  | `/api/open/:idOrName` | 启动 profile（支持 `?clean=true` 干净启动） |
+| 停止 | POST | `/api/profiles/:idOrName/stop` | 停止（支持 `?keepProxy=true`） |
 | 导出 | GET  | `/api/export/all` | 导出加密全量备份 |
 | 导出 | GET  | `/api/export/fingerprint` | 导出 YAML 指纹清单 |
 | 导入 | POST | `/api/import` | 导入 YAML 或加密备份 |
+| 设置 | GET  | `/api/settings` | 读取应用设置 |
+| 设置 | PATCH | `/api/settings` | 部分更新设置（白名单字段） |
+| 内核 | GET  | `/api/kernels` | 列出已安装 / 可安装的 fingerprint-chromium 版本 |
+| 内核 | POST | `/api/kernels/:version` | 安装指定内核版本 |
+| 内核 | DELETE | `/api/kernels/:version` | 卸载内核版本 |
+| 代理 | POST | `/api/proxy/latency` | 测试代理连通性与延迟 |
 
 ---
 
@@ -745,7 +753,184 @@ async function api(method, path, body) {
 
 ---
 
-## 七、字段名约定速查
+## 七、v1.7.13 新增接口
+
+### 12) 复制 profile · `POST /api/profiles/:idOrName/duplicate`
+
+克隆一个 profile。原 profile 的 fingerprint / customArgs / kernelVersion / preProxyOverride / resetOnLaunch 都会带过来；新 profile 拿到新的 UUID（→ 新的 fingerprint-chromium seed → canvas/audio/WebGL 哈希跟原 profile 天然不同），以及自动分配的新 `debugPort`。
+
+**Body 参数**（全部可选，用于覆盖复制默认值）：
+| 字段 | 类型 | 说明 |
+|---|---|---|
+| `name` | string | 新名字。留空则用 `<原名>-copy`（重名自动追加 `-02`） |
+| `tags` | string[] | 覆盖 tags |
+| `proxyStr` | string | 覆盖代理 |
+| `notes` | string | 覆盖备注 |
+| `fingerprint` | object | 部分覆盖 fingerprint 字段（会跟原 fp deep-merge） |
+
+**请求示例**：
+```bash
+curl -X POST "http://127.0.0.1:12138/api/profiles/TikTok-US-01/duplicate" \
+  -H "Content-Type: application/json" \
+  -d '{ "name": "TikTok-US-01-backup", "tags": ["tiktok", "us", "backup"] }'
+```
+
+**响应**：
+```json
+{
+    "success": true,
+    "source": { "id": "...", "name": "TikTok-US-01" },
+    "profile": { "id": "<new UUID>", "name": "TikTok-US-01-backup", ... },
+    "remoteDebugPort": 24012
+}
+```
+
+---
+
+### 13) 查询运行状态 · `GET /api/profiles/:idOrName/runtime`
+
+比 `/api/status` 更细：只关心一个 profile 时不用捞全表。
+
+**响应**：
+```json
+{
+    "success": true,
+    "profileId": "f47ac10b-58cc-4372-a567-0e02b2c3d479",
+    "name": "TikTok-US-01",
+    "running": true,
+    "launching": false,
+    "remote port": 24009,
+    "persistedDebugPort": 24009,
+    "kernelVersion": "148.0.7778.215"
+}
+```
+
+`"remote port"` 是**本次实际绑定**的端口（可能被 OS 冲突降级为动态端口），`persistedDebugPort` 是 profile 表里存的值。停止时 `"remote port"` 为 `null`。
+
+---
+
+### 14) 停止 profile 的增强 · `POST /api/profiles/:idOrName/stop`
+
+新增查询参数：
+| 参数 | 默认 | 说明 |
+|---|---|---|
+| `keepProxy` | `false` | `true` = 只关浏览器，保留 sing-box 代理隧道运行。用于把该 profile 的 socks 端口留给别的工具接管 |
+| `closeBrowser` | `true` | `false` = 只杀代理不关浏览器（罕见，调试隧道用） |
+
+**示例**：
+```bash
+# 关浏览器，代理留着
+curl -X POST "http://127.0.0.1:12138/api/profiles/TikTok-US-01/stop?keepProxy=true"
+```
+
+---
+
+### 15) 启动的 clean 模式 · `GET /api/open/:idOrName?clean=true`
+
+对应 UI "使用干净 profile 启动"：本次启动用一个临时的 user-data 目录，不加载已装扩展、不恢复上次会话，退出后不留痕。适合每次都要 fresh 的自动化流程。
+
+```bash
+curl "http://127.0.0.1:12138/api/open/TikTok-US-01?stream=false&clean=true"
+```
+
+---
+
+### 16) 应用设置读写 · `GET / PATCH /api/settings`
+
+**读取**：`GET /api/settings` 返回整个设置快照（包括 preProxies / subscriptions / userExtensions 等）。
+
+**部分更新**（PATCH）：只接受下面这些**标量**字段。数组类字段（preProxies / subscriptions / userExtensions）有专门的 UI 管理入口，PATCH 会拒绝（400）：
+
+| 字段 | 类型 | 说明 |
+|---|---|---|
+| `enableRemoteDebugging` | boolean | 全局远程调试开关 |
+| `enableCustomArgs` | boolean | 允许 profile 使用 customArgs |
+| `enableUaModify` / `enableUaWebglModify` | boolean | UA/WebGL 修改 |
+| `enablePreProxy` | boolean | 全局前置代理开关 |
+| `enableApiServer` | boolean | 本 API 开关（**关掉会立刻中断本连接**） |
+| `enableWatermark` | boolean | 水印 |
+| `closeBehavior` | string | `tray` / `exit` |
+| `lang` | string | `en` / `cn` |
+| `notify` | boolean | 通知 |
+| `apiPort` | number | API 端口（改动**立即生效**，注意连接会断） |
+| `watermarkStyle` | string | 水印样式 |
+| `ipInfoProvider` | string | `ipinfo` / `ipwho` / `ipapi` |
+| `mode` | string | 代理模式 `single`/`failover` |
+| `selectedId` | string | UI 侧选中的 profile ID |
+
+```bash
+# 打开远程调试
+curl -X PATCH http://127.0.0.1:12138/api/settings \
+  -H "Content-Type: application/json" \
+  -d '{ "enableRemoteDebugging": true }'
+```
+
+**响应**：
+```json
+{
+    "success": true,
+    "updated": { "enableRemoteDebugging": true },
+    "settings": { ... }
+}
+```
+
+---
+
+### 17) 内核管理 · `/api/kernels`
+
+对应 UI "设置 → 🧠 浏览器内核" 面板。
+
+**GET `/api/kernels`** — 列出已装内核。
+| 参数 | 默认 | 说明 |
+|---|---|---|
+| `available` | `false` | `true` = 同时拉取 GitHub 上游可下载版本 |
+| `measureSize` | `false` | `true` = 计算每个已装内核占用的磁盘字节 |
+
+```json
+{
+    "success": true,
+    "pinned": "148.0.7778.215",
+    "installed": [
+        { "version": "148.0.7778.215", "execPath": "...", "installedAt": 1751000000000, "size": 0 }
+    ],
+    "available": [
+        { "version": "148.0.7778.218", "assetName": "...", "assetSize": 445122048, "publishedAt": "..." }
+    ]
+}
+```
+
+**POST `/api/kernels/:version`** — 安装。**同步阻塞**直到下载+解压完成（可能几分钟）；已装则立即返回 `alreadyInstalled: true`。
+
+```bash
+curl -X POST http://127.0.0.1:12138/api/kernels/144.0.7559.132
+```
+
+**DELETE `/api/kernels/:version`** — 卸载。拒绝卸载 pinned 版本（409）、拒绝卸载正在被运行 profile 使用的版本（409）。
+
+---
+
+### 18) 代理测试 · `POST /api/proxy/latency`
+
+**Body**（二选一）：
+```json
+{ "proxyStr": "socks5://user:pass@1.2.3.4:1080" }
+```
+或
+```json
+{ "profileId": "TikTok-US-01" }
+```
+（后者会拿该 profile 的 `proxyStr`）
+
+**响应**：
+```json
+{ "success": true, "latencyMs": 187, "ok": true }
+```
+
+用途：批量启动前预筛"哪些 profile 的 proxy 死了"。
+
+---
+
+## 八、字段名约定速查
 
 - **profile id**：UUID v4 字符串
 - **profile name**：唯一，Unicode，重名会自动追加 `-02`/`-03`（两位补零）
