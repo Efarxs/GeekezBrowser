@@ -76,5 +76,22 @@ onMounted(async () => {
 </script>
 
 <style scoped>
-.kernel-version-select { margin-top: 10px; }
+/* Match the profile modals' label + hint typography so a KernelVersionSelect
+   rendered inside them doesn't look out of place. These classes are scoped to
+   this component (Vue scoped styles don't cross the boundary from the parent),
+   so define them locally. */
+.kernel-version-select .label-tiny {
+    font-size: 11px;
+    font-weight: 600;
+    opacity: 0.85;
+    display: block;
+    margin-bottom: 4px;
+    letter-spacing: 0.2px;
+}
+.kernel-version-select .hint-text {
+    font-size: 11px;
+    opacity: 0.55;
+    line-height: 1.45;
+    margin-top: 6px;
+}
 </style>

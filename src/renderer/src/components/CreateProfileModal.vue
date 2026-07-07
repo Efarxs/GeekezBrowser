@@ -6,39 +6,36 @@
         <span style="cursor:pointer" @click="uiStore.closeAddModal">✕</span>
       </div>
       <div class="modal-body">
-        <label class="label-tiny">{{ $t('profileName') }}</label>
-        <input v-model="form.name" type="text" placeholder="Name" spellcheck="false" autocomplete="off">
-
-        <label class="label-tiny">{{ $t('tagsLabel') }}</label>
-        <input v-model="form.tags" type="text" placeholder="tiktok, fb..." spellcheck="false" autocomplete="off">
-
-        <label class="label-tiny">{{ $t('profileNotesLabel') }}</label>
-        <textarea
-          v-model="form.notes"
-          rows="4"
-          class="profile-notes-textarea"
-          :placeholder="$t('profileNotesPlaceholder')"
-          spellcheck="false"
-          autocomplete="off"
-        ></textarea>
-        <div class="hint-text">{{ $t('profileNotesHint') }}</div>
-
-        <label class="label-tiny">{{ $t('timezoneLabel') }}</label>
-        <div class="timezone-wrapper">
-          <input v-model="timezoneSearch" type="text" placeholder="Type to search or select..." autocomplete="off" @focus="showTimezoneList = true">
-          <div v-if="showTimezoneList" class="timezone-dropdown active">
-            <div v-for="tz in filteredTimezones" :key="tz" class="timezone-item" @click="selectTimezone(tz)">
-              {{ tz }}
-            </div>
+        <div class="form-grid">
+          <div class="field">
+            <label class="label-tiny">{{ $t('profileName') }}</label>
+            <input v-model="form.name" type="text" placeholder="Name" spellcheck="false" autocomplete="off">
           </div>
-        </div>
+          <div class="field">
+            <label class="label-tiny">{{ $t('tagsLabel') }}</label>
+            <input v-model="form.tags" type="text" placeholder="tiktok, fb..." spellcheck="false" autocomplete="off">
+          </div>
 
-        <label class="label-tiny">{{ $t('proxyLink') }}</label>
-        <textarea v-model="form.proxyStr" rows="4" placeholder="vless://, vmess://, trojan://, ss://, hysteria2://, tuic://, socks5://, ssh://... (one per line for batch)" spellcheck="false" autocomplete="off"></textarea>
-        <div class="hint-text">{{ $t('batchHint') }}</div>
+          <div class="field field-full">
+            <label class="label-tiny">{{ $t('profileNotesLabel') }}</label>
+            <textarea
+              v-model="form.notes"
+              rows="3"
+              class="profile-notes-textarea"
+              :placeholder="$t('profileNotesPlaceholder')"
+              spellcheck="false"
+              autocomplete="off"
+            ></textarea>
+            <div class="hint-text">{{ $t('profileNotesHint') }}</div>
+          </div>
 
-        <div class="flex-row">
-          <div class="flex-1">
+          <div class="field field-full">
+            <label class="label-tiny">{{ $t('proxyLink') }}</label>
+            <textarea v-model="form.proxyStr" rows="3" placeholder="vless://, vmess://, trojan://, ss://, hysteria2://, tuic://, socks5://, ssh://... (one per line for batch)" spellcheck="false" autocomplete="off"></textarea>
+            <div class="hint-text">{{ $t('batchHint') }}</div>
+          </div>
+
+          <div class="field">
             <label class="label-tiny">{{ $t('preProxySetting') }}</label>
             <select v-model="form.preProxyOverride">
               <option value="default">{{ $t('optDefault') }}</option>
@@ -46,94 +43,127 @@
               <option value="off">{{ $t('optOff') }}</option>
             </select>
           </div>
-          <div class="flex-1">
+          <div class="field">
             <label class="label-tiny">{{ $t('screenRes') }}</label>
             <div class="flex-row gap-5">
               <input v-model.number="form.resW" type="number" placeholder="W">
               <input v-model.number="form.resH" type="number" placeholder="H">
             </div>
           </div>
-        </div>
 
-        <label class="label-tiny mt-10">{{ $t('locationLabel') }}</label>
-        <div class="timezone-wrapper">
-          <input v-model="citySearch" type="text" placeholder="Type to search city..." autocomplete="off" @focus="showCityList = true">
-          <div v-if="showCityList" class="timezone-dropdown active">
-            <div v-for="city in filteredCities" :key="city.name" class="timezone-item" @click="selectCity(city)">
-              {{ city.name }}
+          <div class="field">
+            <label class="label-tiny">{{ $t('timezoneLabel') }}</label>
+            <div class="timezone-wrapper">
+              <input v-model="timezoneSearch" type="text" placeholder="Type to search or select..." autocomplete="off" @focus="showTimezoneList = true">
+              <div v-if="showTimezoneList" class="timezone-dropdown active">
+                <div v-for="tz in filteredTimezones" :key="tz" class="timezone-item" @click="selectTimezone(tz)">
+                  {{ tz }}
+                </div>
+              </div>
             </div>
           </div>
-        </div>
-        <div class="hint-text">{{ $t('geoHint') }}</div>
-
-        <label class="label-tiny mt-10">{{ $t('languageLabel') }}</label>
-        <div class="timezone-wrapper">
-          <input v-model="languageSearch" type="text" placeholder="Type to search language..." autocomplete="off" @focus="showLanguageList = true">
-          <div v-if="showLanguageList" class="timezone-dropdown active">
-            <div v-for="lang in filteredLanguages" :key="lang.code" class="timezone-item" @click="selectLanguage(lang)">
-              {{ lang.name }} ({{ lang.code }})
+          <div class="field">
+            <label class="label-tiny">{{ $t('languageLabel') }}</label>
+            <div class="timezone-wrapper">
+              <input v-model="languageSearch" type="text" placeholder="Type to search language..." autocomplete="off" @focus="showLanguageList = true">
+              <div v-if="showLanguageList" class="timezone-dropdown active">
+                <div v-for="lang in filteredLanguages" :key="lang.code" class="timezone-item" @click="selectLanguage(lang)">
+                  {{ lang.name }} ({{ lang.code }})
+                </div>
+              </div>
             </div>
           </div>
-        </div>
-        <template v-if="showUaModify">
-          <label class="label-tiny">{{ $t('browserVersionPresetLabel') }}</label>
-          <select v-model="form.browserVersionPreset">
-            <option v-for="opt in browserVersionPresetOptions" :key="opt.value" :value="opt.value">
-              {{ getOptionLabel(opt) }}
-            </option>
-          </select>
 
-          <label class="label-tiny mt-10">{{ $t('customUaLabel') }}</label>
-          <textarea
-            v-model="form.customUserAgent"
-            rows="3"
-            class="mono-text custom-ua-textarea"
-            :placeholder="$t('customUaPlaceholder')"
-            spellcheck="false"
-            autocomplete="off"
-          ></textarea>
-          <div class="ua-actions">
-            <button type="button" class="outline ua-random-btn" @click="randomizeCustomUa">{{ $t('randomizeUa') }}</button>
-            <span class="hint-text ua-hint">{{ $t('customUaHint') }}</span>
+          <div class="field field-full">
+            <label class="label-tiny">{{ $t('locationLabel') }}</label>
+            <div class="timezone-wrapper">
+              <input v-model="citySearch" type="text" placeholder="Type to search city..." autocomplete="off" @focus="showCityList = true">
+              <div v-if="showCityList" class="timezone-dropdown active">
+                <div v-for="city in filteredCities" :key="city.name" class="timezone-item" @click="selectCity(city)">
+                  {{ city.name }}
+                </div>
+              </div>
+            </div>
+            <div class="hint-text">{{ $t('geoHint') }}</div>
           </div>
-        </template>
 
-        <label class="label-tiny">{{ $t('platformLabel') }}</label>
-        <select v-model="form.platform">
-          <option v-for="opt in platformOptions" :key="opt.value" :value="opt.value">
-            {{ getOptionLabel(opt) }}
-          </option>
-        </select>
+          <template v-if="showUaModify">
+            <div class="field">
+              <label class="label-tiny">{{ $t('browserVersionPresetLabel') }}</label>
+              <select v-model="form.browserVersionPreset">
+                <option v-for="opt in browserVersionPresetOptions" :key="opt.value" :value="opt.value">
+                  {{ getOptionLabel(opt) }}
+                </option>
+              </select>
+            </div>
+            <div class="field">
+              <label class="label-tiny">{{ $t('platformLabel') }}</label>
+              <select v-model="form.platform">
+                <option v-for="opt in platformOptions" :key="opt.value" :value="opt.value">
+                  {{ getOptionLabel(opt) }}
+                </option>
+              </select>
+            </div>
 
-        <label class="reset-toggle mt-10">
-          <input type="checkbox" v-model="form.resetOnLaunch">
-          <span class="reset-toggle-checkmark"></span>
-          <div class="reset-toggle-body">
-            <div class="reset-toggle-title">{{ $t('resetOnLaunchLabel') }}</div>
-            <div class="hint-text">{{ $t('resetOnLaunchHint') }}</div>
+            <div class="field field-full">
+              <label class="label-tiny">{{ $t('customUaLabel') }}</label>
+              <textarea
+                v-model="form.customUserAgent"
+                rows="3"
+                class="mono-text custom-ua-textarea"
+                :placeholder="$t('customUaPlaceholder')"
+                spellcheck="false"
+                autocomplete="off"
+              ></textarea>
+              <div class="ua-actions">
+                <button type="button" class="outline ua-random-btn" @click="randomizeCustomUa">{{ $t('randomizeUa') }}</button>
+                <span class="hint-text ua-hint">{{ $t('customUaHint') }}</span>
+              </div>
+            </div>
+          </template>
+          <template v-else>
+            <div class="field field-full">
+              <label class="label-tiny">{{ $t('platformLabel') }}</label>
+              <select v-model="form.platform">
+                <option v-for="opt in platformOptions" :key="opt.value" :value="opt.value">
+                  {{ getOptionLabel(opt) }}
+                </option>
+              </select>
+            </div>
+          </template>
+
+          <label class="reset-toggle field field-full">
+            <input type="checkbox" v-model="form.resetOnLaunch">
+            <span class="reset-toggle-checkmark"></span>
+            <div class="reset-toggle-body">
+              <div class="reset-toggle-title">{{ $t('resetOnLaunchLabel') }}</div>
+              <div class="hint-text">{{ $t('resetOnLaunchHint') }}</div>
+            </div>
+          </label>
+
+          <div v-if="settings.enableCustomArgs" class="field field-full">
+            <label class="label-tiny">{{ $t('customArgsLabel') }}</label>
+            <textarea v-model="form.customArgs" rows="2" placeholder="--start-maximized" class="mono-text"></textarea>
+            <div class="hint-text">{{ $t('customArgsHint') }}</div>
           </div>
-        </label>
 
-        <div v-if="settings.enableCustomArgs" class="mt-10">
-          <label class="label-tiny">{{ $t('customArgsLabel') }}</label>
-          <textarea v-model="form.customArgs" rows="2" placeholder="--start-maximized" class="mono-text"></textarea>
-          <div class="hint-text">{{ $t('customArgsHint') }}</div>
-        </div>
-
-        <div v-if="settings.enableCustomArgs" class="mt-10">
-          <label class="label-tiny">{{ $t('disableSpoofingLabel') }}</label>
-          <div class="disable-spoof-grid">
-            <label v-for="cat in disableSpoofCategories" :key="cat.value" class="disable-spoof-item">
-              <input type="checkbox" :value="cat.value" v-model="form.disabledSpoofing">
-              <span>{{ $t(cat.i18n) }}</span>
-            </label>
+          <div v-if="settings.enableCustomArgs" class="field field-full">
+            <label class="label-tiny">{{ $t('disableSpoofingLabel') }}</label>
+            <div class="disable-spoof-grid">
+              <label v-for="cat in disableSpoofCategories" :key="cat.value" class="disable-spoof-item">
+                <input type="checkbox" :value="cat.value" v-model="form.disabledSpoofing">
+                <span>{{ $t(cat.i18n) }}</span>
+              </label>
+            </div>
+            <div class="hint-text">{{ $t('disableSpoofingHint') }}</div>
           </div>
-          <div class="hint-text">{{ $t('disableSpoofingHint') }}</div>
+
+          <div class="field field-full">
+            <KernelVersionSelect v-model="form.kernelVersion" />
+          </div>
+
+          <div class="field field-full hint-text auto-fingerprint-hint">{{ $t('autoFingerprint') }}</div>
         </div>
-
-        <KernelVersionSelect v-model="form.kernelVersion" />
-
-        <div class="hint-text mt-10">{{ $t('autoFingerprint') }}</div>
       </div>
       <div class="modal-footer">
         <button class="outline" @click="uiStore.closeAddModal">{{ $t('cancel') }}</button>
@@ -407,48 +437,54 @@ async function handleSave() {
 </script>
 
 <style scoped>
+.modal-content {
+  width: min(720px, 92vw);
+}
+
+.form-grid {
+  display: grid;
+  grid-template-columns: 1fr 1fr;
+  column-gap: 14px;
+  row-gap: 12px;
+}
+.field {
+  min-width: 0;
+}
+.field-full {
+  grid-column: 1 / -1;
+}
+
 .label-tiny {
   font-size: 11px;
-  font-weight: bold;
-  opacity: 0.8;
+  font-weight: 600;
+  opacity: 0.85;
   display: block;
+  margin-bottom: 4px;
+  letter-spacing: 0.2px;
 }
 
 .hint-text {
-  font-size: 10px;
-  opacity: 0.5;
-  margin-bottom: 8px;
+  font-size: 11px;
+  opacity: 0.55;
+  line-height: 1.45;
+  margin-top: 6px;
 }
 
-.checkbox-label {
-  font-size: 12px;
-  font-weight: bold;
-  display: flex;
-  align-items: center;
-  gap: 6px;
-  cursor: pointer;
-}
-
-.flex-row {
-  display: flex;
-  gap: 10px;
-}
-
-.flex-1 {
-  flex: 1;
-}
-
-.mt-10 {
-  margin-top: 10px;
-}
-
-.gap-5 {
-  gap: 5px;
-}
+.flex-row { display: flex; gap: 10px; }
+.gap-5 { gap: 5px; }
 
 .mono-text {
   font-family: monospace;
   font-size: 11px;
+}
+
+.field input,
+.field select,
+.field textarea {
+  margin-bottom: 0;
+}
+.field .timezone-wrapper {
+  margin-bottom: 0;
 }
 
 .profile-notes-textarea {
@@ -465,7 +501,7 @@ async function handleSave() {
   display: flex;
   align-items: center;
   gap: 10px;
-  margin-top: 4px;
+  margin-top: 6px;
 }
 .ua-random-btn {
   white-space: nowrap;
@@ -473,7 +509,7 @@ async function handleSave() {
   font-size: 12px;
 }
 .ua-hint {
-  margin-bottom: 0;
+  margin-top: 0;
   flex: 1;
 }
 
@@ -487,6 +523,7 @@ async function handleSave() {
   cursor: pointer;
   background: rgba(255, 255, 255, 0.03);
   transition: background 0.15s, border-color 0.15s;
+  margin: 0;
 }
 .reset-toggle:hover {
   background: rgba(255, 255, 255, 0.06);
@@ -502,17 +539,19 @@ async function handleSave() {
 .reset-toggle-checkmark { display: none; }
 .reset-toggle-body { flex: 1; min-width: 0; }
 .reset-toggle-title {
-  font-size: 13px;
+  font-size: 12px;
   font-weight: 600;
   color: var(--text-primary);
   margin-bottom: 3px;
+}
+.reset-toggle-body .hint-text {
+  margin-top: 0;
 }
 .disable-spoof-grid {
   display: grid;
   grid-template-columns: repeat(4, 1fr);
   gap: 6px 12px;
   margin-top: 4px;
-  margin-bottom: 4px;
 }
 .disable-spoof-item {
   display: flex;
@@ -527,5 +566,13 @@ async function handleSave() {
   height: 14px;
   accent-color: var(--accent);
   cursor: pointer;
+}
+
+/* "Fingerprint auto-generated" tip: reserve a visual gap above so it
+   doesn't hug the kernel select above it. */
+.auto-fingerprint-hint {
+  margin-top: 0;
+  text-align: center;
+  opacity: 0.5;
 }
 </style>
