@@ -16,17 +16,6 @@
                 >
                     {{ isLaunching ? t('launchingStatus') : t('runningStatus') }}
                 </span>
-                <span
-                    v-if="showDebugPort"
-                    class="debug-port-chip no-drag"
-                    :class="{ live: isRunning, idle: !isRunning }"
-                    :title="debugPortTitle"
-                    @click.stop="copyDebugUrl"
-                >
-                    <span class="debug-port-dot"></span>
-                    :{{ profile.debugPort }}
-                    <span v-if="debugCopiedFlash" class="debug-copied">✓</span>
-                </span>
             </div>
             <div class="profile-meta">
                 <span v-for="tag in profile.tags" :key="tag" class="tag"
@@ -41,6 +30,17 @@
                         <option value="on">{{ t('qsOn') }}</option>
                         <option value="off">{{ t('qsOff') }}</option>
                     </select>
+                </span>
+                <span
+                    v-if="showDebugPort"
+                    class="debug-port-chip no-drag"
+                    :class="{ live: isRunning, idle: !isRunning }"
+                    :title="debugPortTitle"
+                    @click.stop="copyDebugUrl"
+                >
+                    <span class="debug-port-dot"></span>
+                    :{{ profile.debugPort }}
+                    <span v-if="debugCopiedFlash" class="debug-copied">✓</span>
                 </span>
             </div>
             <div v-if="launchProgress" class="inline-launch-progress" :title="launchProgress.message">
@@ -407,7 +407,6 @@ const remove = () => {
     display: inline-flex;
     align-items: center;
     gap: 5px;
-    margin-left: 8px;
     padding: 2px 8px;
     border-radius: 999px;
     font-size: 11px;
