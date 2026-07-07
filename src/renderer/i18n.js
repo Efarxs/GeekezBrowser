@@ -258,7 +258,30 @@ const enTranslations = {
     watermarkToggle: "🏷️ Profile Watermark",
     watermarkToggleHint: "Show a floating badge with the profile name in each browser window",
     watermarkStyleEnhanced: "🎯 Bottom-right badge",
-    watermarkStyleBanner: "🔹 Top banner"
+    watermarkStyleBanner: "🔹 Top banner",
+    // Kernel download modal
+    kernelInstallingTitle: "Installing browser kernel",
+    kernelReadyTitle: "Kernel ready",
+    kernelFailedTitle: "Kernel install failed",
+    kernelPhasePreparing: "PREPARING",
+    kernelPhaseNetwork: "CHECKING NETWORK",
+    kernelPhaseResolve: "RESOLVING RELEASE",
+    kernelPhaseDownload: "DOWNLOADING KERNEL",
+    kernelPhaseAssemble: "ASSEMBLING",
+    kernelPhaseExtract: "EXTRACTING",
+    kernelPhaseVerify: "VERIFYING",
+    kernelPhaseDone: "DONE",
+    kernelPhaseError: "ERROR",
+    kernelStatDownloaded: "Downloaded",
+    kernelStatSpeed: "Speed",
+    kernelStatEta: "ETA",
+    kernelHelpNetwork: "Detecting whether GitHub is reachable directly...",
+    kernelHelpDownload: "This is a one-time download. It is saved to your user data folder and reused across upgrades.",
+    kernelHelpExtract: "Unpacking the browser kernel. Do not close this window.",
+    kernelHelpDefault: "Preparing the browser kernel. Please keep this window open.",
+    kernelBtnCancel: "Cancel",
+    kernelBtnRetry: "Retry",
+    kernelUnknownError: "Unknown error"
 };
 
 // Global i18n Manager

@@ -153,6 +153,8 @@ onMounted(async () => {
                 if (Array.isArray(payload.chunks)) uiStore.kernelChunks = payload.chunks;
                 if (uiStore.kernelTotal > 0 && uiStore.kernelPhase === 'download') {
                     uiStore.kernelPercent = Math.min(100, Math.round((uiStore.kernelBytes / uiStore.kernelTotal) * 100));
+                } else if (payload.phase === 'assemble') {
+                    uiStore.kernelPercent = Math.max(uiStore.kernelPercent, 93);
                 } else if (payload.phase === 'extract') {
                     uiStore.kernelPercent = Math.max(uiStore.kernelPercent, 95);
                 } else if (payload.phase === 'verify') {

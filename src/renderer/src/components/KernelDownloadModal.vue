@@ -14,21 +14,21 @@
             </div>
 
             <div class="kernel-meta">
-                <span class="kernel-message">{{ uiStore.kernelMessage || '...' }}</span>
+                <span class="kernel-message">{{ metaLine }}</span>
                 <span class="kernel-percent">{{ uiStore.kernelPercent }}%</span>
             </div>
 
             <div class="kernel-stats" v-if="uiStore.kernelPhase === 'download'">
                 <div class="kernel-stat">
-                    <span class="stat-label">Downloaded</span>
+                    <span class="stat-label">{{ t('kernelStatDownloaded') }}</span>
                     <span class="stat-value">{{ fmt(uiStore.kernelBytes) }} / {{ fmt(uiStore.kernelTotal) }}</span>
                 </div>
                 <div class="kernel-stat">
-                    <span class="stat-label">Speed</span>
+                    <span class="stat-label">{{ t('kernelStatSpeed') }}</span>
                     <span class="stat-value">{{ fmt(uiStore.kernelSpeed) }}/s</span>
                 </div>
                 <div class="kernel-stat">
-                    <span class="stat-label">ETA</span>
+                    <span class="stat-label">{{ t('kernelStatEta') }}</span>
                     <span class="stat-value">{{ fmtEta(uiStore.kernelEta) }}</span>
                 </div>
             </div>
@@ -44,12 +44,12 @@
             </div>
 
             <div class="kernel-error" v-if="uiStore.kernelPhase === 'error'">
-                {{ uiStore.kernelError || 'Unknown error' }}
+                {{ uiStore.kernelError || t('kernelUnknownError') }}
             </div>
 
             <div class="kernel-actions">
-                <button v-if="uiStore.kernelPhase === 'error'" class="btn-retry" @click="retry">Retry</button>
-                <button v-if="showCancel" class="btn-cancel" @click="cancel">Cancel</button>
+                <button v-if="uiStore.kernelPhase === 'error'" class="btn-retry" @click="retry">{{ t('kernelBtnRetry') }}</button>
+                <button v-if="showCancel" class="btn-cancel" @click="cancel">{{ t('kernelBtnCancel') }}</button>
             </div>
         </div>
     </div>
@@ -60,32 +60,44 @@ import { computed } from 'vue';
 import { useUIStore } from '../store/useUIStore';
 
 const uiStore = useUIStore();
+const t = (key) => window.t ? window.t(key) : key;
 
 const phaseLabel = computed(() => {
     const map = {
-        idle: 'PREPARING',
-        network: 'CHECKING NETWORK',
-        resolve: 'RESOLVING RELEASE',
-        download: 'DOWNLOADING KERNEL',
-        extract: 'EXTRACTING',
-        verify: 'VERIFYING',
-        done: 'DONE',
-        error: 'ERROR'
+        idle:     'kernelPhasePreparing',
+        network:  'kernelPhaseNetwork',
+        resolve:  'kernelPhaseResolve',
+        download: 'kernelPhaseDownload',
+        assemble: 'kernelPhaseAssemble',
+        extract:  'kernelPhaseExtract',
+        verify:   'kernelPhaseVerify',
+        done:     'kernelPhaseDone',
+        error:    'kernelPhaseError'
     };
-    return map[uiStore.kernelPhase] || 'INSTALLING KERNEL';
+    return t(map[uiStore.kernelPhase] || 'kernelPhasePreparing');
 });
 
 const title = computed(() => {
-    if (uiStore.kernelPhase === 'done') return 'Kernel ready';
-    if (uiStore.kernelPhase === 'error') return 'Kernel install failed';
-    return `Installing fingerprint-chromium ${uiStore.kernelVersion || ''}`.trim();
+    if (uiStore.kernelPhase === 'done') return t('kernelReadyTitle');
+    if (uiStore.kernelPhase === 'error') return t('kernelFailedTitle');
+    const base = t('kernelInstallingTitle');
+    return uiStore.kernelVersion ? `${base} ${uiStore.kernelVersion}` : base;
 });
 
 const helpText = computed(() => {
-    if (uiStore.kernelPhase === 'network') return 'Detecting whether GitHub is reachable directly...';
-    if (uiStore.kernelPhase === 'download') return 'This is a one-time download. It is saved to your user data folder and reused across upgrades.';
-    if (uiStore.kernelPhase === 'extract') return 'Unpacking the browser kernel. Do not close this window.';
-    return 'Preparing the browser kernel. Please keep this window open.';
+    if (uiStore.kernelPhase === 'network') return t('kernelHelpNetwork');
+    if (uiStore.kernelPhase === 'download') return t('kernelHelpDownload');
+    if (uiStore.kernelPhase === 'extract' || uiStore.kernelPhase === 'assemble') return t('kernelHelpExtract');
+    return t('kernelHelpDefault');
+});
+
+// The meta line above the progress bar. During download, stats section
+// already shows numbers — echo the phase label here for narration.
+// During other phases fall back to the raw backend message (already
+// short technical hints; not user-facing chrome).
+const metaLine = computed(() => {
+    if (uiStore.kernelPhase === 'download') return phaseLabel.value;
+    return uiStore.kernelMessage || phaseLabel.value;
 });
 
 const showCancel = computed(() => {
