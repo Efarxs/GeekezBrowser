@@ -130,6 +130,21 @@ class ProfileDB {
         return (rows[0]?.cnt || 0) > 0;
     }
 
+    // Only pulls the debugPort column and only rows where it's set —
+    // used by the port allocator to avoid collisions without dragging
+    // the full 100K profile fingerprints into memory each save.
+    async getUsedDebugPorts() {
+        const rows = await this.db.select({ debugPort: this.table.debugPort })
+            .from(this.table)
+            .where(sql`${this.table.debugPort} IS NOT NULL`);
+        const set = new Set();
+        for (const r of rows) {
+            const n = Number(r.debugPort);
+            if (Number.isFinite(n)) set.add(n);
+        }
+        return set;
+    }
+
     async getPaged(page = 1, pageSize = 20, search = '', tag = '', sortOrder = 'DESC') {
         const conditions = [];
 

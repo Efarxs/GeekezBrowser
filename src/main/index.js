@@ -1569,11 +1569,16 @@ function hasRestorableSession(userDataDir) {
     return false;
 }
 
-function buildUniqueProfileName(profiles, baseName) {
+// `nameExists` is an async predicate `(name) => Promise<boolean>`. In the
+// CRUD path we back it with `profileDB.nameExists()` (a `SELECT COUNT`
+// against an indexed name column, not a full-table load). For bulk-import
+// paths where the caller already has a working Set of "names about to be
+// used", it can just wrap the Set — the async signature is uniform.
+async function buildUniqueProfileName(baseName, nameExists) {
     const safeBaseName = (baseName || '').toString().trim() || `Profile-${Date.now()}`;
-    if (!profiles.find(p => p.name === safeBaseName)) return safeBaseName;
+    if (!(await nameExists(safeBaseName))) return safeBaseName;
     let suffix = 2;
-    while (profiles.find(p => p.name === `${safeBaseName}-${String(suffix).padStart(2, '0')}`)) {
+    while (await nameExists(`${safeBaseName}-${String(suffix).padStart(2, '0')}`)) {
         suffix++;
     }
     return `${safeBaseName}-${String(suffix).padStart(2, '0')}`;
@@ -1731,16 +1736,17 @@ function resolveFingerprintChromiumBrandVersion(fingerprint = {}, fallbackVersio
     return String(explicit).trim();
 }
 
-async function allocateDebugPortIfNeeded(settings, profiles, requestedPort) {
+// `getUsedPorts` is an async producer `() => Promise<Set<number>>`.
+// Previously we received a full profile array and materialized the set
+// here — at 100K profiles that's a 500MB detour every save. Now callers
+// pass a lambda that hits `profileDB.getUsedDebugPorts()` (a single
+// indexed column read).
+async function allocateDebugPortIfNeeded(settings, requestedPort, getUsedPorts) {
     const requested = normalizeDebugPort(requestedPort);
     if (requested) return requested;
     if (!settings?.enableRemoteDebugging) return null;
 
-    const usedPorts = new Set(
-        (profiles || [])
-            .map(p => normalizeDebugPort(p?.debugPort))
-            .filter(Boolean)
-    );
+    const usedPorts = getUsedPorts ? await getUsedPorts() : new Set();
 
     const { makeRange } = await resolveGetPortApi();
     for (let i = 0; i < 10; i++) {
@@ -1751,12 +1757,22 @@ async function allocateDebugPortIfNeeded(settings, profiles, requestedPort) {
     return await getAvailablePort();
 }
 
-async function buildProfileFromInput(rawData, profiles, settings, existingProfile = null) {
+// `profiles` used to be a pre-loaded full-table array — now the two
+// things we needed it for (name uniqueness + debug-port collision) go
+// through DB-scoped predicates so this scales to 100K profiles without
+// materializing them. The optional `deps` override is for tests /
+// import batches that hold their own working set.
+async function buildProfileFromInput(rawData, settings, existingProfile = null, deps = null) {
     const data = rawData || {};
+    const nameExists = deps?.nameExists
+        || ((name) => profileDB.nameExists(name, existingProfile?.id || null));
+    const getUsedDebugPorts = deps?.getUsedDebugPorts
+        || (() => profileDB.getUsedDebugPorts());
+
     const baseName = firstDefined(data.name, existingProfile?.name, `Profile-${Date.now()}`);
     const uniqueName = existingProfile && baseName === existingProfile.name
         ? existingProfile.name
-        : buildUniqueProfileName(profiles, baseName);
+        : await buildUniqueProfileName(baseName, nameExists);
     const proxyStr = firstDefined(data.proxyStr, existingProfile?.proxyStr, '') || '';
     const proxyChanged = !existingProfile || (hasOwn(data, 'proxyStr') && proxyStr !== (existingProfile?.proxyStr || ''));
     if (proxyChanged) {
@@ -1834,7 +1850,11 @@ async function buildProfileFromInput(rawData, profiles, settings, existingProfil
     }
 
     const fingerprint = normalizeFingerprint(mergedFingerprintSource);
-    const debugPort = await allocateDebugPortIfNeeded(settings, profiles, firstDefined(data.debugPort, existingProfile?.debugPort));
+    const debugPort = await allocateDebugPortIfNeeded(
+        settings,
+        firstDefined(data.debugPort, existingProfile?.debugPort),
+        getUsedDebugPorts
+    );
     const normalizedCustomArgs = hasOwn(data, 'args')
         ? normalizeStoredCustomArgs(data.args, existingProfile?.customArgs || '')
         : normalizeStoredCustomArgs(firstDefined(data.customArgs, existingProfile?.customArgs, ''), existingProfile?.customArgs || '');
@@ -1921,8 +1941,7 @@ async function handleApiRequest(method, pathname, body, params, context = {}) {
     // POST /api/profiles - Create with unique name
     if (method === 'POST' && pathname === '/api/profiles') {
         const data = parseApiBody(body);
-        const allProfiles = await profileDB.getAll();
-        const newProfile = await buildProfileFromInput(data, allProfiles, settings);
+        const newProfile = await buildProfileFromInput(data, settings);
         await profileDB.insert(newProfile);
         notifyUIRefresh();
         return {
@@ -1940,8 +1959,7 @@ async function handleApiRequest(method, pathname, body, params, context = {}) {
             return { status: 409, data: { success: false, error: 'Cannot edit a running or launching profile. Please stop the browser first.' } };
         }
         const data = parseApiBody(body);
-        const otherProfiles = (await profileDB.getAll()).filter(p => p.id !== profile.id);
-        const rebuilt = await buildProfileFromInput(data, otherProfiles, settings, profile);
+        const rebuilt = await buildProfileFromInput(data, settings, profile);
         await profileDB.update(profile.id, rebuilt);
         notifyUIRefresh();
         return {
@@ -2201,7 +2219,14 @@ async function handleApiRequest(method, pathname, body, params, context = {}) {
 
             if (!content) return { status: 400, data: { success: false, error: 'Content required' } };
 
-            const existingProfiles = await profileDB.getAll();
+            // Bulk import needs to see names it JUST inserted (subsequent
+            // items in the batch collide with them, not just DB pre-state).
+            // Each check hits an indexed `SELECT COUNT` — for a 100-item
+            // batch on 100K existing profiles that's ~100 small queries
+            // instead of one 500MB full-table load.
+            const batchNames = new Set();
+            const importNameExists = async (n) =>
+                batchNames.has(n) || await profileDB.nameExists(n);
 
             // Try YAML first
             let yamlData = null;
@@ -2213,7 +2238,7 @@ async function handleApiRequest(method, pathname, body, params, context = {}) {
             if (Array.isArray(yamlData)) {
                 let imported = 0;
                 for (const item of yamlData) {
-                    const name = buildUniqueProfileName(existingProfiles, item.name || `Imported-${Date.now()}`);
+                    const name = await buildUniqueProfileName(item.name || `Imported-${Date.now()}`, importNameExists);
                     const newProfile = {
                         id: uuidv4(),
                         name,
@@ -2224,7 +2249,7 @@ async function handleApiRequest(method, pathname, body, params, context = {}) {
                         createdAt: Date.now()
                     };
                     await profileDB.insert(newProfile);
-                    existingProfiles.push({ name });
+                    batchNames.add(name);
                     imported++;
                 }
                 notifyUIRefresh();
@@ -2242,10 +2267,10 @@ async function handleApiRequest(method, pathname, body, params, context = {}) {
 
                 let imported = 0;
                 for (const profile of backupData.profiles || []) {
-                    const name = buildUniqueProfileName(existingProfiles, profile.name);
+                    const name = await buildUniqueProfileName(profile.name, importNameExists);
                     const newProfile = { ...profile, id: uuidv4(), name };
                     await profileDB.insert(newProfile);
-                    existingProfiles.push({ name });
+                    batchNames.add(name);
                     imported++;
                 }
                 notifyUIRefresh();
@@ -3621,17 +3646,14 @@ ipcMain.handle('update-profile', async (event, updatedProfile) => {
     if (!existing) return false;
 
     const settings = fs.existsSync(SETTINGS_FILE) ? await fs.readJson(SETTINGS_FILE) : {};
-    const allProfiles = await profileDB.getAll();
-    const others = allProfiles.filter(p => p.id !== updatedProfile.id);
-    const rebuilt = await buildProfileFromInput(updatedProfile, others, settings, existing);
+    const rebuilt = await buildProfileFromInput(updatedProfile, settings, existing);
     await profileDB.update(updatedProfile.id, rebuilt);
     notifyUIRefresh();
     return true;
 });
 ipcMain.handle('save-profile', async (event, data) => {
-    const allProfiles = await profileDB.getAll();
     const settings = fs.existsSync(SETTINGS_FILE) ? await fs.readJson(SETTINGS_FILE) : {};
-    const newProfile = await buildProfileFromInput(data, allProfiles, settings);
+    const newProfile = await buildProfileFromInput(data, settings);
     await profileDB.insert(newProfile);
     notifyUIRefresh();
     return newProfile;
@@ -4601,9 +4623,7 @@ const launchProfileHandler = async (event, profileId, preferredLang, launchOptio
     }));
     const uiLang = preferredLang === 'en' ? 'en' : (settings.lang === 'en' ? 'en' : 'cn');
 
-    const profiles = await profileDB.getAll();
-    const profileIndex = profiles.findIndex(p => p.id === profileId);
-    const profile = profileIndex > -1 ? profiles[profileIndex] : null;
+    const profile = await profileDB.getById(profileId);
     if (!profile) throw new Error('Profile not found');
     const progressProfileName = profile.name || profileId;
 
@@ -4682,7 +4702,7 @@ const launchProfileHandler = async (event, profileId, preferredLang, launchOptio
     } else if (settings.enableRemoteDebugging && !normalizeDebugPort(profile.debugPort)) {
         // Auto-assign a stable port when feature is enabled and no explicit
         // port exists (either in profile row or in override args).
-        profile.debugPort = await allocateDebugPortIfNeeded(settings, profiles, null);
+        profile.debugPort = await allocateDebugPortIfNeeded(settings, null, () => profileDB.getUsedDebugPorts());
         await profileDB.update(profile.id, profile);
     }
 
