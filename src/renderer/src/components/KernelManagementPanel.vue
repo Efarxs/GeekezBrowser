@@ -93,12 +93,13 @@ async function refreshAll() {
     loading.value = true;
     try {
         const [inst, avail] = await Promise.all([
-            window.electronAPI?.listInstalledKernels?.() || Promise.resolve({ ok: false }),
+            // Ask main to walk each install dir for real byte size.
+            window.electronAPI?.listInstalledKernels?.({ measureSize: true }) || Promise.resolve({ ok: false }),
             window.electronAPI?.listAvailableKernels?.() || Promise.resolve({ ok: false })
         ]);
         if (inst?.ok) {
             pinned.value = inst.pinned || '';
-            installed.value = await hydrateSizes(inst.installed || []);
+            installed.value = inst.installed || [];
         }
         if (avail?.ok) {
             available.value = avail.available || [];
@@ -108,15 +109,6 @@ async function refreshAll() {
     } finally {
         loading.value = false;
     }
-}
-
-// The main-process list-installed handler doesn't need to walk each
-// version's tree to compute size — do it here (cheaper if the app has
-// many kernels, since we only render a handful).
-async function hydrateSizes(list) {
-    // No IPC channel exists yet for du-style measurement, so fall back
-    // to a fixed estimate. Real byte size is a future enhancement.
-    return list.map(k => ({ ...k, size: k.size || 425 * 1024 * 1024 }));
 }
 
 async function install(version) {
@@ -152,10 +144,13 @@ function askUninstall(version) {
 async function uninstall(version) {
     busyVersion.value = version;
     try {
-        await window.electronAPI.uninstallKernelVersion(version);
+        const result = await window.electronAPI.uninstallKernelVersion(version);
+        if (result && result.ok === false) {
+            uiStore.showAlert(result.error || 'Uninstall failed');
+        }
         await refreshAll();
     } catch (e) {
-        console.warn('[KernelPanel] uninstall failed:', e);
+        uiStore.showAlert(e?.message || String(e));
     } finally {
         busyVersion.value = '';
     }

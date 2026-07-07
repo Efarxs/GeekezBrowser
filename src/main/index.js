@@ -3713,9 +3713,9 @@ ipcMain.handle('kernel:cancel', async () => {
     return { cancelled: true };
 });
 
-ipcMain.handle('kernel:list-installed', async () => {
+ipcMain.handle('kernel:list-installed', async (_e, opts = {}) => {
     try {
-        const installed = await kernelManager.listInstalled();
+        const installed = await kernelManager.listInstalled({ measureSize: !!opts.measureSize });
         return { ok: true, pinned: kernelManager.PINNED_VERSION, installed };
     } catch (e) {
         return { ok: false, error: e.message };
@@ -3774,6 +3774,26 @@ ipcMain.handle('kernel:uninstall-version', async (_e, version) => {
     if (!version || version === kernelManager.PINNED_VERSION) {
         return { ok: false, error: 'cannot uninstall pinned version' };
     }
+    // Refuse if a running profile currently uses this kernel.
+    try {
+        const runningIds = Object.keys(activeProcesses);
+        if (runningIds.length > 0) {
+            const conflicts = [];
+            for (const id of runningIds) {
+                const p = await profileDB.getById(id);
+                if (p && p.kernelVersion === version) {
+                    conflicts.push(p.name || id);
+                }
+            }
+            if (conflicts.length > 0) {
+                return {
+                    ok: false,
+                    error: `kernel is used by running profile(s): ${conflicts.join(', ')}`
+                };
+            }
+        }
+    } catch (_) { /* soft-check; if profileDB is unavailable, fall through */ }
+
     try {
         const result = await kernelManager.uninstallVersion(version);
         return { ok: true, ...result };

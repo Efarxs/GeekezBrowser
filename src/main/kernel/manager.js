@@ -328,8 +328,35 @@ async function ensureInstalled(version = PINNED_VERSION, options = {}) {
     return { ...result, installed: true, source: 'downloaded' };
 }
 
-// Scan install root for versions with a valid VERSION file.
-async function listInstalled() {
+// Walk a directory and sum on-disk byte size. Used for kernel size
+// display in the Settings panel. Silently skips entries we can't stat
+// (e.g. junction points) rather than aborting.
+async function measureDirSize(dir) {
+    let total = 0;
+    let stack = [dir];
+    while (stack.length) {
+        const current = stack.pop();
+        let entries;
+        try { entries = await fsp.readdir(current, { withFileTypes: true }); } catch { continue; }
+        for (const e of entries) {
+            const full = path.join(current, e.name);
+            if (e.isDirectory()) {
+                stack.push(full);
+            } else if (e.isFile() || e.isSymbolicLink()) {
+                try {
+                    const st = await fsp.stat(full);
+                    total += st.size || 0;
+                } catch { /* skip */ }
+            }
+        }
+    }
+    return total;
+}
+
+// Scan install root for versions with a valid VERSION file. `measureSize`
+// controls whether we walk each install dir to compute actual bytes on
+// disk — off by default (cheap) since profile-picker doesn't need it.
+async function listInstalled({ measureSize = false } = {}) {
     const root = installRoot();
     if (!(await pathExists(root))) return [];
     let entries = [];
@@ -339,16 +366,18 @@ async function listInstalled() {
         if (!e.isDirectory()) continue;
         const check = await checkInstalled(e.name);
         if (check.installed) {
-            const stat = await fsp.stat(path.join(root, e.name)).catch(() => null);
+            const versionDir = path.join(root, e.name);
+            const stat = await fsp.stat(versionDir).catch(() => null);
+            const size = measureSize ? await measureDirSize(versionDir).catch(() => 0) : 0;
             results.push({
                 version: e.name,
                 execPath: check.execPath,
                 dir: check.dir,
-                installedAt: stat?.mtimeMs || 0
+                installedAt: stat?.mtimeMs || 0,
+                size
             });
         }
     }
-    // Newest kernel version first (semver-ish sort).
     results.sort((a, b) => compareVersions(b.version, a.version));
     return results;
 }
@@ -432,5 +461,6 @@ module.exports = {
     listInstalled,
     listAvailable,
     uninstallVersion,
-    compareVersions
+    compareVersions,
+    measureDirSize
 };

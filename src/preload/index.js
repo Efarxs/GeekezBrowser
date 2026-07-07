@@ -30,7 +30,7 @@ contextBridge.exposeInMainWorld('electronAPI', {
     ensureKernel: () => ipcRenderer.invoke('kernel:ensure'),
     cancelKernelDownload: () => ipcRenderer.invoke('kernel:cancel'),
     onKernelProgress: (callback) => ipcRenderer.on('kernel:progress', (event, payload) => callback(payload)),
-    listInstalledKernels: () => ipcRenderer.invoke('kernel:list-installed'),
+    listInstalledKernels: (opts) => ipcRenderer.invoke('kernel:list-installed', opts || {}),
     listAvailableKernels: (opts) => ipcRenderer.invoke('kernel:list-available', opts || {}),
     installKernelVersion: (version) => ipcRenderer.invoke('kernel:install-version', version),
     uninstallKernelVersion: (version) => ipcRenderer.invoke('kernel:uninstall-version', version)
