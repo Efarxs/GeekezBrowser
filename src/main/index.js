@@ -2093,15 +2093,31 @@ async function handleApiRequest(method, pathname, body, params, context = {}) {
             'Top Sites', 'Top Sites-journal', 'Web Data', 'Web Data-journal'
         ];
         const chromePath = getChromiumPath();
+        // Per-profile status so the caller can distinguish "backed up
+        // cleanly" from "silently dropped cookies because the browser
+        // was still running with a locked user-data dir". Previously
+        // any failure was swallowed and success:true was returned
+        // regardless, so users learned about the loss only on restore.
+        const backupIssues = [];
         for (const profile of profiles) {
             const profileDataDir = path.join(DATA_PATH, profile.id, 'browser_data');
             const defaultDir = path.join(profileDataDir, 'Default');
-            if (!fs.existsSync(defaultDir)) continue;
+            const profileIssues = { profileId: profile.id, name: profile.name, filesSkipped: [], cookiesError: null, passwordsError: null };
+            if (!fs.existsSync(defaultDir)) {
+                profileIssues.filesSkipped.push('(no browser_data — profile never launched)');
+                backupIssues.push(profileIssues);
+                continue;
+            }
             const browserFiles = {};
             for (const f of filesToBackup) {
                 const fp = path.join(defaultDir, f);
                 if (fs.existsSync(fp)) {
-                    try { browserFiles[f] = (await fs.readFile(fp)).toString('base64'); } catch (e) { }
+                    try {
+                        browserFiles[f] = (await fs.readFile(fp)).toString('base64');
+                    } catch (e) {
+                        // Sqlite files locked by a running browser are the common cause.
+                        profileIssues.filesSkipped.push(`${f}: ${e.code || e.message}`);
+                    }
                 }
             }
             if (Object.keys(browserFiles).length > 0) backupData.browserData[profile.id] = browserFiles;
@@ -2114,24 +2130,46 @@ async function handleApiRequest(method, pathname, body, params, context = {}) {
                     return cookies;
                 });
                 backupData.browserData[profile.id]._cookies = cookies;
-            } catch (err) { }
+            } catch (err) {
+                profileIssues.cookiesError = err?.message || String(err);
+            }
             try {
                 const pwJsonFile = path.join(DATA_PATH, profile.id, 'passwords.json');
                 const passwords = await readEncryptedPasswords(pwJsonFile, profile.id);
                 if (passwords.length > 0) backupData.browserData[profile.id]._passwords = passwords;
-            } catch (err) { }
+            } catch (err) {
+                profileIssues.passwordsError = err?.message || String(err);
+            }
+
+            if (profileIssues.filesSkipped.length || profileIssues.cookiesError || profileIssues.passwordsError) {
+                backupIssues.push(profileIssues);
+                console.warn(`[export] partial backup for ${profile.name} (${profile.id.slice(0, 8)}):`,
+                    profileIssues.cookiesError ? 'cookies=FAIL' : '',
+                    profileIssues.passwordsError ? 'passwords=FAIL' : '',
+                    profileIssues.filesSkipped.length ? `filesSkipped=[${profileIssues.filesSkipped.join(', ')}]` : '');
+            }
         }
 
         const jsonStr = JSON.stringify(backupData);
         const compressed = await gzip(Buffer.from(jsonStr, 'utf8'));
         const encrypted = encryptData(compressed, password);
 
-        return {
+        // Warnings are only present when something partial happened —
+        // keeps the happy-path response shape unchanged for callers
+        // that didn't know to look for warnings.
+        const response = {
             success: true,
             data: encrypted.toString('base64'),
             filename: `GeekEZ_FullBackup_${Date.now()}.geekez`,
             profileCount: profiles.length
         };
+        if (backupIssues.length > 0) {
+            response.warnings = {
+                partialCount: backupIssues.length,
+                profiles: backupIssues
+            };
+        }
+        return response;
     }
 
     // GET /api/export/fingerprint - Export YAML fingerprints
