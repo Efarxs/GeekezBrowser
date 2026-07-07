@@ -10,7 +10,9 @@
     "postinstall": "node setup.js && npx @electron/rebuild -f -w better-sqlite3",
     "build:win": "npm run build && electron-builder --win",
     "build:mac": "npm run build && electron-builder --mac",
-    "build:linux": "npm run build && electron-builder --linux"
+    "build:linux": "npm run build && electron-builder --linux",
+    "test": "node --test scripts/*.test.mjs",
+    "test:api": "node scripts/api-smoke.mjs"
   },
   "build": {
     "appId": "com.geekez.browser",
