@@ -1,7 +1,7 @@
 # GeekEZ Browser · REST API 参考
 
-> 适用版本：**v1.7.11**
-> 更新日期：2026-07-05
+> 适用版本：**v1.7.12**
+> 更新日期：2026-07-07
 
 GeekEZ Browser 提供一套本地 HTTP REST API，可通过脚本对指纹环境进行增删改查、启动、停止、备份等操作。
 
@@ -161,8 +161,10 @@ curl "http://127.0.0.1:12138/api/profiles/a1b2c3d4-e5f6-7890-abcd-ef1234567890"
             "deviceMemory": 8,
             "timezone": "America/Los_Angeles",
             "city": null,
-            "geolocation": null
+            "geolocation": null,
+            "disabledSpoofing": []
         },
+        "kernelVersion": null,
         "running": true
     }
 }
@@ -192,6 +194,7 @@ curl "http://127.0.0.1:12138/api/profiles/a1b2c3d4-e5f6-7890-abcd-ef1234567890"
 | `ignoreCertErrors` | boolean | 否 | 是否忽略证书错误。默认 `false` |
 | `resetOnLaunch` | boolean | 否 | 每次启动是否重置指纹与 user-data。默认 `false` |
 | `debugPort` | number | 否 | 指定固定调试端口。默认按需自动分配（需先开启远程调试） |
+| `kernelVersion` | string \| null | 否 | 该 profile 使用的 fingerprint-chromium 版本（如 `"148.0.7778.215"`）。留空 / `null` = 跟随应用默认（内置 pinned 版本）。不同版本会**独立缓存到本地**，首次启动如未安装会触发下载。跨 major 切换会在启动时把 `browserFullVersion` / UA / Client-Hints 元数据对齐并**回写到 profile**（下次启动稳定复用） |
 | `fingerprint` | object | 否 | 指纹对象（下方"指纹字段"表） |
 
 **`fingerprint` 字段**（都是可选，未传的会自动填充）：
@@ -214,6 +217,7 @@ curl "http://127.0.0.1:12138/api/profiles/a1b2c3d4-e5f6-7890-abcd-ef1234567890"
 | `deviceMemory` | number | 内存 GB，取值 `2` / `4` / `8` / `16`。默认随机 |
 | `geolocation` | object \| null | 地理定位。格式 `{ "latitude": 40.7, "longitude": -74.0, "accuracy": 100 }`。通过内置扩展劫持 `navigator.geolocation` |
 | `city` | object \| null | **仅元数据**，用于 UI 展示（如 `{ "name": "New York", "lat": 40.7, "lng": -74.0 }`）。实际生效的是 `geolocation` |
+| `disabledSpoofing` | string[] | 关闭 fingerprint-chromium 对指定维度的内置伪装（转为 `--disable-spoofing=<csv>` flag），取值 `canvas` / `audio` / `clientrects` / `gpu` 的任意子集。默认 `[]`（全部保留伪装）。**需要 kernel 144+**；数组元素会自动去重、非法值过滤。`font` 由跨平台状态自动管理，不接受手动传入 |
 
 **已废弃/不再生效的字段**（旧文档 & 旧客户端可能还在传，但当前版本会忽略）：
 
@@ -261,6 +265,28 @@ curl -X POST http://127.0.0.1:12138/api/profiles \
     }
   }'
 ```
+
+**请求示例（v1.7.12 新字段 · 每类别 disable-spoofing + kernel 版本）**：
+```bash
+curl -X POST http://127.0.0.1:12138/api/profiles \
+  -H "Content-Type: application/json" \
+  -d '{
+    "name": "TikTok-Sensitive",
+    "proxyStr": "socks5://user:pass@1.2.3.4:1080",
+    "tags": ["tiktok"],
+    "kernelVersion": "148.0.7778.215",
+    "fingerprint": {
+        "uaMode": "spoof",
+        "platform": "Win32",
+        "browserMajorVersion": 148,
+        "timezone": "America/Los_Angeles",
+        "language": "en-US",
+        "disabledSpoofing": ["canvas", "audio"]
+    }
+  }'
+```
+
+> `disabledSpoofing` 用于反欺诈误判某个维度的场景 —— 关掉后该维度会呈现主机真实值。`canvas` / `audio` 关掉相当于让内核 seed 派生的噪声失效，Chromium 走原生渲染路径；`clientrects` / `gpu` 同理。仅在 kernel 144+ 生效，旧 kernel 会静默忽略。
 
 **响应示例**：
 ```json

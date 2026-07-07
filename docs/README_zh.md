@@ -42,6 +42,8 @@
     - 全面修改浏览器语言、HTTP 请求头和国际化 API。
 *   **WebRTC 物理阻断**: 强制使用 `disable_non_proxied_udp` 策略，物理切断本地 IP 泄露路径。
 *   **UA与WebGL修改**: 支持修改浏览器版本以及WebGL。*（注：暂无法绕过检测）*
+*   **每 profile 内核版本** *(v1.7.12)*：可以为每个环境单独指定 fingerprint-chromium 版本（148 / 144 / 142 等），额外内核按需下载（分片可断点续传，国内镜像自动切换）。跨 major 切换时会把 UA / Client-Hints 元数据对齐到实际内核并回写到 profile，之后启动稳定。
+*   **每类别指纹开关** *(v1.7.12)*：可以按环境关闭内核对 Canvas / Audio / ClientRects / GPU 的内置伪装 —— 当某个网站的反欺诈把某一维度识别为异常时，关掉后走主机真实值可以规避。
 
 ### 🔗 全能网络引擎 (Xray-core)
 *   **全协议支持**: 完美支持 VMess, VLESS, Trojan, Shadowsocks (含 **SS-2022**), Socks5, HTTP。

@@ -42,6 +42,8 @@ It is designed to solve multi-account association issues in cross-border e-comme
     - Fully modifies browser language, HTTP headers, and Internationalization API behavior.
 *   **WebRTC Physical Blocking**: Enforces `disable_non_proxied_udp` policy to physically block local IP leak paths.
 *   **UA & WebGL Modification**: Supports browser version and WebGL modification. *(Note: bypassing detection is not guaranteed yet.)*
+*   **Per-Profile Kernel Version** *(v1.7.12)*: Pin a specific fingerprint-chromium build per profile (e.g., 148 / 144 / 142). Additional kernels download on demand with resumable chunked downloads (CN mirror auto-detected). Cross-major switches auto-align `Sec-CH-UA-Full-Version-List` and persist it back to the profile so subsequent launches stay stable.
+*   **Granular Spoof Toggles** *(v1.7.12)*: Turn off the kernel's built-in Canvas / Audio / ClientRects / GPU spoofing per profile when a specific site's anti-fraud model flags one dimension.
 
 ### 🔗 Full-Power Network Engine (Xray-core)
 *   **Full Protocol Support**: VMess, VLESS, Trojan, Shadowsocks (including **SS-2022**), Socks5, HTTP.
