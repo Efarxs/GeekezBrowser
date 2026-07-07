@@ -28,6 +28,7 @@
     <SubEditModal :class="{ active: uiStore.subEditModalVisible }" />
     <ConfirmModal :class="{ active: uiStore.confirmModalVisible }" />
     <AlertModal :class="{ active: uiStore.alertModalVisible }" />
+    <LaunchErrorModal />
     <InputModal :class="{ active: uiStore.inputModalVisible }" />
     <ProgressModal :class="{ active: uiStore.progressModalVisible }" />
     <KernelDownloadModal />
@@ -50,6 +51,7 @@ import PasswordModal from './components/PasswordModal.vue';
 import SubEditModal from './components/SubEditModal.vue';
 import ConfirmModal from './components/ConfirmModal.vue';
 import AlertModal from './components/AlertModal.vue';
+import LaunchErrorModal from './components/LaunchErrorModal.vue';
 import SettingsModal from './components/SettingsModal.vue';
 import HelpModal from './components/HelpModal.vue';
 import InputModal from './components/InputModal.vue';

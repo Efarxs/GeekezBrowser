@@ -33,6 +33,15 @@ export const useUIStore = defineStore('ui', () => {
     const confirmCancelText = ref('');
     const inputModalTitle = ref('');
     const inputModalValue = ref('');
+
+    // Launch-error modal (dedicated because the generic alert is 350px
+    // centered — fine for short strings, unreadable for multi-line
+    // Chromium stderr).
+    const launchErrorModalVisible = ref(false);
+    const launchErrorMessage = ref('');
+    const launchErrorStderr = ref('');
+    const launchErrorProfileName = ref('');
+    let launchErrorOnClose = null;
     
     // Password Modal
     const passwordTitle = ref('');
@@ -139,6 +148,28 @@ export const useUIStore = defineStore('ui', () => {
         alertModalVisible.value = true;
     };
 
+    // Show the dedicated launch-error modal. Caller passes the message
+    // (short reason) and stderr tail (may be multi-KB of Chromium log).
+    // onClose fires after the user dismisses the modal — used by the
+    // ProfileCard to clear its inline banner so the error can't get
+    // re-triggered by another accidental click.
+    const showLaunchError = ({ message = '', stderr = '', profileName = '', onClose = null } = {}) => {
+        launchErrorMessage.value = message;
+        launchErrorStderr.value = stderr;
+        launchErrorProfileName.value = profileName;
+        launchErrorOnClose = typeof onClose === 'function' ? onClose : null;
+        launchErrorModalVisible.value = true;
+    };
+
+    const closeLaunchErrorModal = () => {
+        launchErrorModalVisible.value = false;
+        const cb = launchErrorOnClose;
+        launchErrorOnClose = null;
+        if (cb) {
+            try { cb(); } catch (e) { console.warn('[UIStore] launch-error onClose threw:', e); }
+        }
+    };
+
     const showConfirm = (msg, callback, notes = '', options = {}) => {
         confirmMsg.value = msg;
         confirmNotes.value = notes;
@@ -235,6 +266,12 @@ export const useUIStore = defineStore('ui', () => {
         setTheme,
         toggleLang,
         showAlert,
+        launchErrorModalVisible,
+        launchErrorMessage,
+        launchErrorStderr,
+        launchErrorProfileName,
+        showLaunchError,
+        closeLaunchErrorModal,
         showConfirm,
         handleConfirm,
         showInput,

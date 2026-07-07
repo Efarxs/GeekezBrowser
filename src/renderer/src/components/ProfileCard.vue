@@ -54,15 +54,10 @@
             </div>
             <div v-if="launchError"
                 class="inline-launch-error"
-                :title="t('inlineLaunchErrorDismissHint')"
+                :title="t('inlineLaunchErrorViewHint')"
                 @click="handleErrorClick">
                 <span class="inline-launch-error-icon">⚠</span>
                 <span class="inline-launch-error-msg">{{ launchError.message }}</span>
-                <button v-if="launchError.stderrTail"
-                    class="inline-launch-error-details no-drag"
-                    @click.stop="showErrorDetails">
-                    {{ t('inlineLaunchErrorDetails') }}
-                </button>
                 <span class="inline-launch-error-close no-drag" @click.stop="dismissError">✕</span>
             </div>
         </div>
@@ -164,23 +159,22 @@ const launchError = computed(() => profileStore.getLaunchError(props.profile.id)
 
 const dismissError = () => profileStore.clearLaunchError(props.profile.id);
 
-const showErrorDetails = () => {
+// Clicking the inline banner opens the dedicated launch-error modal
+// (fuller view of the message + stderr tail, monospace, scrollable).
+// When the user closes the modal we also clear the inline banner —
+// they've acknowledged the error, no need to leave it lingering. The
+// ✕ on the banner still fires dismissError directly for a quick
+// discard without opening the modal.
+const handleErrorClick = () => {
     const err = launchError.value;
     if (!err) return;
-    const lang = localStorage.getItem('geekez_lang') === 'en' ? 'en' : 'cn';
-    const parts = [err.message || ''];
-    let tail = (err.stderrTail || '').trim();
-    if (tail.length > 800) tail = '...' + tail.slice(-800);
-    if (tail) {
-        parts.push(lang === 'en' ? 'Last output:' : '最后输出：');
-        parts.push(tail);
-    }
-    uiStore.showAlert(parts.filter(Boolean).join('\n\n'));
+    uiStore.showLaunchError({
+        message: err.message || '',
+        stderr: err.stderrTail || '',
+        profileName: props.profile.name || props.profile.id,
+        onClose: () => profileStore.clearLaunchError(props.profile.id)
+    });
 };
-
-// The whole banner (excluding the details button) is a click-target for
-// dismiss. Details button stops propagation so it doesn't also dismiss.
-const handleErrorClick = () => dismissError();
 
 const showDebugPort = computed(() => !!(
     settingsStore.enableRemoteDebugging && props.profile.debugPort
@@ -528,19 +522,6 @@ const remove = () => {
     overflow: hidden;
     text-overflow: ellipsis;
     white-space: nowrap;
-}
-.inline-launch-error-details {
-    flex-shrink: 0;
-    padding: 2px 8px;
-    font-size: 10px;
-    background: transparent;
-    border: 1px solid rgba(245, 168, 159, 0.4);
-    color: #f5a89f;
-    border-radius: 4px;
-    cursor: pointer;
-}
-.inline-launch-error-details:hover {
-    background: rgba(231, 76, 60, 0.2);
 }
 .inline-launch-error-close {
     flex-shrink: 0;
