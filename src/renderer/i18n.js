@@ -310,6 +310,8 @@ const enTranslations = {
     disableSpoofingAudio: "Audio",
     disableSpoofingClientRects: "Client Rects",
     disableSpoofingGpu: "GPU",
+    headlessLabel: "Headless mode (no visible window)",
+    headlessHint: "Launches with --headless=new. Also masks navigator.webdriver and rewrites the UA so no HeadlessChrome/... suffix is exposed. Recommended only for automation / server-side scripts — anti-fraud detection stacks (Amazon, TikTok Shop, Cloudflare) still have ways to fingerprint headless.",
     kernelDowngradeWarnTitle: "Downgrade kernel from Chrome {from} to Chrome {to}?",
     kernelDowngradeWarnHint: "Anti-fraud engines (Amazon, TikTok Shop, etc.) treat browser version rollback as a bot-farm signal — real users rarely downgrade. Canvas/WebGL/audio fingerprints will also shift because the rendering pipeline changes between majors, even at the same seed. Prefer picking the same major as the profile was created under, or accept the detection risk.",
     tabBasic: "Basic",

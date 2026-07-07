@@ -1,7 +1,7 @@
 # GeekEZ Browser · REST API 参考
 
-> 适用版本：**v1.7.16**
-> 更新日期：2026-07-07
+> 适用版本：**v1.7.17**
+> 更新日期：2026-07-08
 
 GeekEZ Browser 提供一套本地 HTTP REST API，可通过脚本对指纹环境进行增删改查、启动、停止、备份等操作。
 
@@ -163,6 +163,7 @@ curl "http://127.0.0.1:12138/api/profiles/a1b2c3d4-e5f6-7890-abcd-ef1234567890"
         "customArgs": "",
         "ignoreCertErrors": false,
         "resetOnLaunch": false,
+        "headless": false,
         "isSetup": true,
         "createdAt": 1751000000000,
         "fingerprint": {
@@ -212,6 +213,7 @@ curl "http://127.0.0.1:12138/api/profiles/a1b2c3d4-e5f6-7890-abcd-ef1234567890"
 | `customArgs` | string | 否 | 附加 Chromium 命令行参数（多行或空格分隔的 `--xxx`） |
 | `ignoreCertErrors` | boolean | 否 | 是否忽略证书错误。默认 `false` |
 | `resetOnLaunch` | boolean | 否 | 每次启动是否重置指纹与 user-data。默认 `false` |
+| `headless` | boolean | 否 | **v1.7.17 新增**。无头模式（无可见窗口）。启用后启动时追加 `--headless=new`，并自动屏蔽 `navigator.webdriver` 信号（`--disable-blink-features=AutomationControlled`）；若 profile 没有自定义 UA，会用平台+内核大版本合成一段标准 Chrome UA，避免出现 `HeadlessChrome/…` 后缀。**仅适合自动化/服务端脚本**：反欺诈体系还有其他手段识别无头（`window.outerWidth==0`、权限 API 默认值等），主号请勿开启。默认 `false` |
 | `debugPort` | number | 否 | 指定固定调试端口。留空则按需自动分配（需先开启"设置 → 远程调试"）。**v1.7.12 起分配策略从"随机"改为"从 24000 顺序填空洞"**：新 profile 依次拿 24000、24001、24002...；删除后其端口立即变回可复用槽位。这样 `netstat` 里能一眼识别 GeekEZ 占用的段。范围 24000-65000，用满会明确报错而不是静默升到高端口 |
 | `kernelVersion` | string \| null | 否 | 该 profile 使用的 fingerprint-chromium 版本（如 `"148.0.7778.215"`）。留空 / `null` = 跟随应用默认（内置 pinned 版本）。不同版本会**独立缓存到本地**，首次启动如未安装会触发下载。跨 major 切换会在启动时把 `browserFullVersion` / UA / Client-Hints 元数据对齐并**回写到 profile**（下次启动稳定复用） |
 | `fingerprint` | object | 否 | 指纹对象（下方"指纹字段"表） |
@@ -306,6 +308,25 @@ curl -X POST http://127.0.0.1:12138/api/profiles \
 ```
 
 > `disabledSpoofing` 用于反欺诈误判某个维度的场景 —— 关掉后该维度会呈现主机真实值。`canvas` / `audio` 关掉相当于让内核 seed 派生的噪声失效，Chromium 走原生渲染路径；`clientrects` / `gpu` 同理。仅在 kernel 144+ 生效，旧 kernel 会静默忽略。
+
+**请求示例（v1.7.17 新字段 · 无头模式）**：
+```bash
+curl -X POST http://127.0.0.1:12138/api/profiles \
+  -H "Content-Type: application/json" \
+  -d '{
+    "name": "auto-worker-01",
+    "proxyStr": "socks5://user:pass@1.2.3.4:1080",
+    "tags": ["automation"],
+    "headless": true,
+    "fingerprint": {
+        "platform": "Win32",
+        "language": "en-US",
+        "timezone": "America/New_York"
+    }
+  }'
+```
+
+> `headless: true` 后启动的 Chrome 没有窗口，但 CDP / API 依然可用 —— 常规 `POST /api/profiles/:id/stop` 也照常工作。启动后可以通过 `/api/open` 响应里的 `"remote port"` 直接接 Playwright / DevTools。**注意反欺诈风险**：Chrome 132+ 只保留 `--headless=new`（等同真实渲染管线），`navigator.webdriver` 已通过 `--disable-blink-features=AutomationControlled` 屏蔽，UA 后缀也做了改写，但 `window.outerWidth == 0`、`Notification.permission === 'denied'` 等无头默认值仍会泄漏 —— 不要给主账号开。
 
 **响应示例**：
 ```json

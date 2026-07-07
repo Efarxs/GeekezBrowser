@@ -15,6 +15,7 @@ const profiles = pgTable('profiles', {
     createdAt: integer('created_at').notNull(),
     fingerprint: text('fingerprint').notNull(),
     kernelVersion: text('kernel_version'),
+    headless: integer('headless').default(0),
 }, (table) => [
     index('idx_profiles_name').on(table.name),
     index('idx_profiles_created').on(table.createdAt),
@@ -35,7 +36,8 @@ CREATE TABLE IF NOT EXISTS profiles (
     is_setup INTEGER DEFAULT 0,
     created_at INTEGER NOT NULL,
     fingerprint TEXT NOT NULL,
-    kernel_version TEXT
+    kernel_version TEXT,
+    headless INTEGER DEFAULT 0
 );
 CREATE INDEX IF NOT EXISTS idx_profiles_name ON profiles(name);
 CREATE INDEX IF NOT EXISTS idx_profiles_created ON profiles(created_at);

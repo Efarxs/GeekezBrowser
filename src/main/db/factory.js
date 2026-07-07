@@ -25,6 +25,7 @@ async function createDatabase(dbConfig, dataPath) {
             try { sqlite.exec('ALTER TABLE profiles ADD COLUMN ignore_cert_errors INTEGER DEFAULT 0'); } catch {}
             try { sqlite.exec('ALTER TABLE profiles ADD COLUMN reset_on_launch INTEGER DEFAULT 0'); } catch {}
             try { sqlite.exec('ALTER TABLE profiles ADD COLUMN kernel_version TEXT'); } catch {}
+            try { sqlite.exec('ALTER TABLE profiles ADD COLUMN headless INTEGER DEFAULT 0'); } catch {}
 
             const db = drizzle({ client: sqlite });
 
@@ -51,6 +52,7 @@ async function createDatabase(dbConfig, dataPath) {
             try { await pool.query('ALTER TABLE profiles ADD COLUMN IF NOT EXISTS ignore_cert_errors INTEGER DEFAULT 0'); } catch {}
             try { await pool.query('ALTER TABLE profiles ADD COLUMN IF NOT EXISTS reset_on_launch INTEGER DEFAULT 0'); } catch {}
             try { await pool.query('ALTER TABLE profiles ADD COLUMN IF NOT EXISTS kernel_version TEXT'); } catch {}
+            try { await pool.query('ALTER TABLE profiles ADD COLUMN IF NOT EXISTS headless INTEGER DEFAULT 0'); } catch {}
 
             return {
                 db,
@@ -75,6 +77,7 @@ async function createDatabase(dbConfig, dataPath) {
             try { await pool.query('ALTER TABLE profiles ADD COLUMN ignore_cert_errors INT DEFAULT 0'); } catch {}
             try { await pool.query('ALTER TABLE profiles ADD COLUMN reset_on_launch INT DEFAULT 0'); } catch {}
             try { await pool.query('ALTER TABLE profiles ADD COLUMN kernel_version VARCHAR(64) DEFAULT NULL'); } catch {}
+            try { await pool.query('ALTER TABLE profiles ADD COLUMN headless INT DEFAULT 0'); } catch {}
 
             return {
                 db,

@@ -182,6 +182,15 @@
             </div>
             <div class="hint-text">{{ $t('disableSpoofingHint') }}</div>
           </div>
+
+          <label class="reset-toggle field field-full">
+            <input type="checkbox" v-model="form.headless">
+            <span class="reset-toggle-checkmark"></span>
+            <div class="reset-toggle-body">
+              <div class="reset-toggle-title">{{ $t('headlessLabel') }}</div>
+              <div class="hint-text">{{ $t('headlessHint') }}</div>
+            </div>
+          </label>
         </div>
       </div>
       <div class="modal-footer">
@@ -233,6 +242,7 @@ const form = reactive({
   resetOnLaunch: false,
   kernelVersion: '',
   disabledSpoofing: [],
+  headless: false,
 });
 
 const disableSpoofCategories = [
@@ -366,7 +376,8 @@ watch(() => uiStore.addModalVisible, async (newVal) => {
       customUserAgent: '',
       resetOnLaunch: false,
       kernelVersion: '',
-      disabledSpoofing: []
+      disabledSpoofing: [],
+      headless: false
     });
     timezoneSearch.value = AUTO_TIMEZONE_LABEL;
     citySearch.value = 'Auto (IP Based)';
@@ -441,7 +452,8 @@ async function handleSave() {
         ignoreCertErrors: true,
         resetOnLaunch: !!form.resetOnLaunch,
         kernelVersion: form.kernelVersion || null,
-        disabledSpoofing: [...form.disabledSpoofing]
+        disabledSpoofing: [...form.disabledSpoofing],
+        headless: !!form.headless
       };
       // Strip Vue reactive proxies to avoid Electron IPC clone failures for geolocation and similar objects.
       const safePayload = JSON.parse(JSON.stringify(payload));

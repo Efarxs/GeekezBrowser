@@ -2204,6 +2204,7 @@ async function buildProfileFromInput(rawData, settings, existingProfile = null, 
             const s = String(raw).trim();
             return /^\d+\.\d+\.\d+\.\d+$/.test(s) ? s : null;
         })(),
+        headless: !!firstDefined(data.headless, existingProfile?.headless, false),
         isSetup: existingProfile?.isSetup || false,
         createdAt: existingProfile?.createdAt || Date.now()
     };
@@ -2529,7 +2530,7 @@ async function handleApiRequest(method, pathname, body, params, context = {}) {
     //   { "name": "new-name", "tags": [...], "proxyStr": "...", "notes": "..." }
     // What's carried over from the source: fingerprint (platform, timezone,
     //   language, browser identity, screen, hardware, disabledSpoofing),
-    //   customArgs, kernelVersion, preProxyOverride, resetOnLaunch.
+    //   customArgs, kernelVersion, preProxyOverride, resetOnLaunch, headless.
     // What's fresh in the copy:
     //   · new UUID → new fingerprint-chromium seed → different canvas/audio/
     //     WebGL hashes on the wire (visible-identity distinction between
@@ -5856,30 +5857,35 @@ const launchProfileHandler = async (event, profileId, preferredLang, launchOptio
             true,
             { step: 6, profileName: progressProfileName }
         );
-        // 0. Resolve language override
-        const configuredLang = profile.fingerprint?.language;
-        const hasLanguageOverride = typeof configuredLang === 'string' && configuredLang && configuredLang !== 'auto';
-        const localeFromSystem = (() => {
-            try {
-                const rawLocale = app.getLocale ? app.getLocale() : '';
-                const normalized = String(rawLocale || '')
-                    .replace(/[._].*$/, '')
-                    .replace('_', '-')
-                    .trim();
-                return normalized || 'en-US';
-            } catch (e) {
-                return 'en-US';
+        // 0. Language normalization (pre-Auto-IP-base).
+        // Priority chain that decides what navigator.language / Accept-Language
+        // report at launch time:
+        //   1. Explicit profile.fingerprint.language (e.g. 'en-US') — user pinned
+        //   2. IP-derived value from the Auto-IP-base pass below (proxy exit
+        //      country → language via COUNTRY_TO_LANG)
+        //   3. Chrome's own default (host system locale) when neither of the
+        //      above yields a concrete value
+        //
+        // Historical bug (fixed 2026-07): the --lang / --accept-lang push was
+        // gated on a `hasLanguageOverride` const computed HERE, before the
+        // Auto-IP-base pass. When language was 'auto', the gate stayed false
+        // forever even after Auto-IP-base wrote 'en-US' into fingerprint.language,
+        // so the IP-derived language never reached Chrome — Chrome fell back to
+        // host locale, exposing e.g. `zh-CN` on a US-proxy profile to detectors.
+        // Now the gate reads profile.fingerprint.language AFTER Auto-IP-base
+        // (see below, right before the flag push), which mirrors how timezone
+        // and geolocation have always worked.
+        {
+            const raw = profile.fingerprint?.language;
+            if (typeof raw === 'string' && raw && raw !== 'auto') {
+                profile.fingerprint.language = raw;
+                if (!Array.isArray(profile.fingerprint.languages) || profile.fingerprint.languages.length === 0) {
+                    profile.fingerprint.languages = [raw, raw.split('-')[0]];
+                }
+            } else {
+                profile.fingerprint.language = 'auto';
+                profile.fingerprint.languages = [];
             }
-        })();
-        const targetLang = hasLanguageOverride ? configuredLang : localeFromSystem;
-
-        // Update in-memory profile only for explicit language override.
-        if (hasLanguageOverride) {
-            profile.fingerprint.language = targetLang;
-            profile.fingerprint.languages = [targetLang, targetLang.split('-')[0]];
-        } else {
-            profile.fingerprint.language = 'auto';
-            profile.fingerprint.languages = [];
         }
 
         // Per-profile kernel version: if the profile pins a specific
@@ -6053,9 +6059,20 @@ const launchProfileHandler = async (event, profileId, preferredLang, launchOptio
             launchArgs.unshift('--no-proxy-server');
         }
 
-        if (hasLanguageOverride) {
-            launchArgs.push(`--lang=${targetLang}`);
-            launchArgs.push(`--accept-lang=${targetLang}`);
+        // Push --lang / --accept-lang based on the FINAL profile.fingerprint.language
+        // (which the Auto-IP-base pass may have upgraded from 'auto' to a real code
+        // like 'en-US' by looking up the proxy exit country). When it's still 'auto'
+        // — IP derivation was disabled, unreachable, or returned no country match —
+        // we leave the flags off and let Chrome fall back to the host system locale.
+        // Also populate the parallel `languages` array if the resolution filled in
+        // `language` but Auto-IP-base didn't touch `languages`.
+        const finalLang = profile.fingerprint?.language;
+        if (finalLang && finalLang !== 'auto') {
+            if (!Array.isArray(profile.fingerprint.languages) || profile.fingerprint.languages.length === 0) {
+                profile.fingerprint.languages = [finalLang, finalLang.split('-')[0]];
+            }
+            launchArgs.push(`--lang=${finalLang}`);
+            launchArgs.push(`--accept-lang=${finalLang}`);
         }
 
         // fingerprint-chromium 引擎级指纹伪装
@@ -6248,6 +6265,33 @@ const launchProfileHandler = async (event, profileId, preferredLang, launchOptio
 
             if (effectiveUa) {
                 launchArgs.push(`--user-agent=${effectiveUa}`);
+            }
+
+            // Headless mode. Chrome 132+ removed --headless=old, so `new`
+            // is the only supported form. Two extra anti-detect touches
+            // that are orthogonal to fingerprint-chromium's patches:
+            //   1. --disable-blink-features=AutomationControlled masks the
+            //      `navigator.webdriver = true` signal Chrome exposes when
+            //      running headless (kernel patch doesn't cover it).
+            //   2. If the user didn't set a custom UA, headless Chrome
+            //      auto-derives "HeadlessChrome/<major>..." which every
+            //      bot-detection stack checks for. Synthesize a plain
+            //      Chrome UA from the fingerprint platform + kernel major
+            //      so navigator.userAgent matches what a GUI Chrome of the
+            //      same version would report.
+            if (profile.headless) {
+                launchArgs.push('--headless=new');
+                launchArgs.push('--disable-blink-features=AutomationControlled');
+                if (!effectiveUa) {
+                    const uaMajor = kernelMajor > 0 ? kernelMajor : 148;
+                    const uaByPlatform = {
+                        windows: `Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/${uaMajor}.0.0.0 Safari/537.36`,
+                        macos: `Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/${uaMajor}.0.0.0 Safari/537.36`,
+                        linux: `Mozilla/5.0 (X11; Linux x86_64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/${uaMajor}.0.0.0 Safari/537.36`
+                    };
+                    launchArgs.push(`--user-agent=${uaByPlatform[fcPlatform] || uaByPlatform.windows}`);
+                }
+                console.log(`🕶️  headless=new (webdriver masked${!effectiveUa ? ', synthesized UA' : ''})`);
             }
 
             console.log('🔒 fingerprint-chromium engine mode active');

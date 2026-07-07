@@ -15,6 +15,7 @@ const profiles = mysqlTable('profiles', {
     createdAt: int('created_at').notNull(),
     fingerprint: text('fingerprint').notNull(),
     kernelVersion: varchar('kernel_version', { length: 64 }),
+    headless: int('headless').default(0),
 }, (table) => [
     index('idx_profiles_name').on(table.name),
     index('idx_profiles_created').on(table.createdAt),
@@ -36,6 +37,7 @@ CREATE TABLE IF NOT EXISTS profiles (
     created_at INT NOT NULL,
     fingerprint TEXT NOT NULL,
     kernel_version VARCHAR(64) DEFAULT NULL,
+    headless INT DEFAULT 0,
     INDEX idx_profiles_name (name),
     INDEX idx_profiles_created (created_at)
 );

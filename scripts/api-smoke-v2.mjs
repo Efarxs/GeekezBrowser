@@ -35,6 +35,44 @@ async function api(method, path, body) {
 
 const sleep = ms => new Promise(r => setTimeout(r, ms));
 
+// CDP Runtime.evaluate helper — small enough to inline instead of pulling
+// in puppeteer. Only used by the language-Auto regression check (below);
+// if additional tests need CDP later, promote this to a helper module.
+async function cdpEval(port, expression, timeoutMs = 8000) {
+    const { WebSocket } = await import('ws');
+    const tabs = await fetch(`http://127.0.0.1:${port}/json`).then(r => r.json());
+    const tab = tabs.find(t => t.type === 'page' && t.webSocketDebuggerUrl) || tabs.find(t => t.webSocketDebuggerUrl);
+    if (!tab?.webSocketDebuggerUrl) throw new Error('no CDP tab with debugger URL');
+    const ws = new WebSocket(tab.webSocketDebuggerUrl);
+    try {
+        await new Promise((res, rej) => {
+            const to = setTimeout(() => rej(new Error('ws open timeout')), timeoutMs);
+            ws.once('open', () => { clearTimeout(to); res(); });
+            ws.once('error', (e) => { clearTimeout(to); rej(e); });
+        });
+        const id = 1;
+        const result = await new Promise((res, rej) => {
+            const to = setTimeout(() => rej(new Error('Runtime.evaluate timeout')), timeoutMs);
+            ws.on('message', (raw) => {
+                let msg;
+                try { msg = JSON.parse(raw.toString()); } catch { return; }
+                if (msg.id !== id) return;
+                clearTimeout(to);
+                if (msg.error) return rej(new Error(msg.error.message || 'CDP error'));
+                res(msg.result?.result?.value);
+            });
+            ws.send(JSON.stringify({
+                id,
+                method: 'Runtime.evaluate',
+                params: { expression, returnByValue: true, awaitPromise: true }
+            }));
+        });
+        return result;
+    } finally {
+        try { ws.close(); } catch { /* already closed */ }
+    }
+}
+
 async function main() {
     console.log(`\n== v2 smoke ==`);
     console.log(`Target: ${API}\n`);
@@ -331,6 +369,114 @@ async function main() {
             ok(`GET /api/status detachedTunnels is well-formed (${s.body.detachedTunnels ? s.body.detachedTunnels.length : 'absent'})`);
         } else {
             bad('detachedTunnels field shape', s.body);
+        }
+    }
+
+    // ── v1.7.17: `headless` field round-trips through create + fetch, and
+    // launching a headless profile still spawns a browser process (Chrome
+    // exits fast on bad flag combos; we just verify /open returns success
+    // and /runtime confirms running:true).
+    {
+        await api('DELETE', '/api/profiles/smk2-hless').catch(() => { });
+        const c = await api('POST', '/api/profiles', {
+            name: 'smk2-hless',
+            proxyStr: PROXY_STR,
+            headless: true,
+            fingerprint: { platform: 'Win32', language: 'en-US', timezone: 'America/New_York' }
+        });
+        if (c.body?.profile?.headless === true) ok('POST /api/profiles headless:true round-trips');
+        else bad('headless field round-trip', c.body);
+
+        const fetched = await api('GET', '/api/profiles/smk2-hless');
+        if (fetched.body?.profile?.headless === true) ok('GET /api/profiles/:name headless field present');
+        else bad('headless not persisted', fetched.body);
+
+        const open = await api('GET', '/api/open/smk2-hless?clean=true');
+        if (open.status === 200 && open.body?.success === true) {
+            ok('GET /api/open on headless profile → success (no window expected)');
+            await sleep(6000);
+            const rt = await api('GET', '/api/profiles/smk2-hless/runtime');
+            if (rt.body?.running === true) ok('headless profile /runtime → running:true');
+            else bad('headless launched but not tracked as running', rt.body);
+            await api('POST', '/api/profiles/smk2-hless/stop').catch(() => { });
+        } else {
+            bad('headless launch failed', open);
+        }
+        await sleep(1500);
+        await api('DELETE', '/api/profiles/smk2-hless').catch(() => { });
+    }
+
+    // ── v1.7.17: language override reaches Chrome.
+    //
+    // Historical bug: --lang / --accept-lang were gated on a const captured
+    // BEFORE the Auto-IP-base pass ran, so IP-derived language never made it
+    // into launch args. That meant setting language='auto' with a US proxy
+    // silently exposed the host system locale (e.g. zh-CN) to fingerprinters.
+    //
+    // Regression proof: set language explicitly to a value that's almost
+    // certainly not the host locale ('fr-FR'), launch, and verify Chrome
+    // reports navigator.language === 'fr-FR' via CDP. If the --lang push
+    // ever gets regressed (gate check flipped, order reordered, etc.),
+    // Chrome would fall back to host locale and this assertion would fail.
+    //
+    // Note: uses CDP eval which needs the "Remote Debugging" setting on.
+    // If disabled, we skip and log — not a false-fail.
+    {
+        await api('DELETE', '/api/profiles/smk2-lang').catch(() => { });
+        const settingsSnap = await api('GET', '/api/settings');
+        if (settingsSnap.body?.settings?.enableRemoteDebugging === false) {
+            console.log('\x1b[33m·\x1b[0m language-Auto CDP check skipped (remote debugging disabled in settings)');
+        } else {
+            const c = await api('POST', '/api/profiles', {
+                name: 'smk2-lang',
+                proxyStr: PROXY_STR,
+                fingerprint: {
+                    platform: 'Win32',
+                    language: 'fr-FR',
+                    timezone: 'Europe/Paris'
+                }
+            });
+            if (c.status !== 200) {
+                bad('language regression: create failed', c.body);
+            } else {
+                // Deliberately NOT using ?clean=true here — clean launches
+                // suppress --remote-debugging-port emission (src/main/index.js
+                // line ~6302 checks !useCleanProfile), so CDP wouldn't be
+                // reachable and the whole assertion would silently no-op.
+                const open = await api('GET', '/api/open/smk2-lang');
+                if (open.status === 200 && open.body?.success === true) {
+                    await sleep(5000);
+                    const port = open.body['remote port'];
+                    if (!port) {
+                        bad('language regression: no remote port returned', open.body);
+                    } else {
+                        try {
+                            const lang = await cdpEval(port, 'navigator.language');
+                            if (lang === 'fr-FR') {
+                                ok('CDP navigator.language === "fr-FR" (--lang flag reached Chrome)');
+                            } else {
+                                bad(`--lang not applied: navigator.language=${JSON.stringify(lang)} (expected "fr-FR")`);
+                            }
+                            const acceptLang = await cdpEval(port, `(async () => { try { const r = await fetch('data:text/plain,x'); return r.headers.get('accept-language'); } catch { return null; } })()`).catch(() => null);
+                            // Accept-Language isn't sent on data: URLs; skip if null.
+                            // Real test: navigator.languages[0] should also be 'fr-FR'.
+                            const langs0 = await cdpEval(port, 'navigator.languages && navigator.languages[0]');
+                            if (langs0 === 'fr-FR') {
+                                ok('CDP navigator.languages[0] === "fr-FR"');
+                            } else {
+                                bad(`navigator.languages[0]=${JSON.stringify(langs0)} (expected "fr-FR")`);
+                            }
+                        } catch (e) {
+                            bad('language regression: CDP eval failed', e.message);
+                        }
+                    }
+                    await api('POST', '/api/profiles/smk2-lang/stop').catch(() => { });
+                    await sleep(1500);
+                } else {
+                    bad('language regression: launch failed', open.body);
+                }
+            }
+            await api('DELETE', '/api/profiles/smk2-lang').catch(() => { });
         }
     }
 

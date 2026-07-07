@@ -313,6 +313,8 @@ window.zhCN = {
     disableSpoofingAudio: "Audio",
     disableSpoofingClientRects: "ClientRects",
     disableSpoofingGpu: "GPU",
+    headlessLabel: "无头模式（无窗口）",
+    headlessHint: "启动时追加 --headless=new，同时屏蔽 navigator.webdriver 信号并改写 UA 去掉 HeadlessChrome/... 后缀。仅适合自动化脚本或服务端场景 —— 反欺诈体系（亚马逊、TikTok Shop、Cloudflare）仍有其他手段识别无头浏览器，不建议用于主账号。",
     kernelDowngradeWarnTitle: "确定将内核从 Chrome {from} 降级到 Chrome {to}？",
     kernelDowngradeWarnHint: "反欺诈系统（亚马逊、TikTok Shop 等）会把浏览器版本回退视为 bot farm 特征 —— 真人几乎不会主动降级浏览器。同时 canvas / WebGL / audio 指纹会随渲染管线在 major 之间的差异而漂移，即便 seed 相同也无法一致。建议选择与该环境创建时相同的 major，或明确接受检测风险后再继续。",
     tabBasic: "基础",

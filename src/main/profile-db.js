@@ -99,6 +99,7 @@ class ProfileDB {
             createdAt: row.createdAt,
             fingerprint,
             kernelVersion: row.kernelVersion || null,
+            headless: !!row.headless,
         };
     }
 
@@ -118,6 +119,7 @@ class ProfileDB {
             createdAt: profile.createdAt || Date.now(),
             fingerprint: typeof profile.fingerprint === 'string' ? profile.fingerprint : JSON.stringify(profile.fingerprint || {}),
             kernelVersion: profile.kernelVersion ? String(profile.kernelVersion) : null,
+            headless: profile.headless ? 1 : 0,
         };
     }
 

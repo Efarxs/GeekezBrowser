@@ -194,6 +194,15 @@
               </div>
               <div class="hint-text">{{ $t('disableSpoofingHint') }}</div>
             </div>
+
+            <label class="reset-toggle field field-full">
+              <input type="checkbox" v-model="form.headless" :disabled="viewOnly">
+              <span class="reset-toggle-checkmark"></span>
+              <div class="reset-toggle-body">
+                <div class="reset-toggle-title">{{ $t('headlessLabel') }}</div>
+                <div class="hint-text">{{ $t('headlessHint') }}</div>
+              </div>
+            </label>
           </div>
         </fieldset>
       </div>
@@ -251,6 +260,7 @@ const form = reactive({
   resetOnLaunch: false,
   kernelVersion: '',
   disabledSpoofing: [],
+  headless: false,
 });
 
 const disableSpoofCategories = [
@@ -368,6 +378,7 @@ watch(() => uiStore.editModalVisible, async (visible) => {
     form.disabledSpoofing = Array.isArray(fp.disabledSpoofing)
       ? fp.disabledSpoofing.filter(c => ['canvas','audio','clientrects','gpu'].includes(c))
       : [];
+    form.headless = !!p.headless;
 
     // Timezone
     form.timezone = fp.timezone || 'Auto';
@@ -493,7 +504,8 @@ async function handleSave() {
       customArgs: form.customArgs,
       ignoreCertErrors: true,
       resetOnLaunch: !!form.resetOnLaunch,
-      kernelVersion: form.kernelVersion || null
+      kernelVersion: form.kernelVersion || null,
+      headless: !!form.headless
     };
 
     // 这一步彻底洗掉 Vue 的 Proxy 深度监控包装，防止 Electron 的原生底层报错 "An object could not be cloned"
