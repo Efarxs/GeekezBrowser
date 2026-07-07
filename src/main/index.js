@@ -1741,20 +1741,54 @@ function resolveFingerprintChromiumBrandVersion(fingerprint = {}, fallbackVersio
 // here — at 100K profiles that's a 500MB detour every save. Now callers
 // pass a lambda that hits `profileDB.getUsedDebugPorts()` (a single
 // indexed column read).
+//
+// Allocation is *sequential from the bottom* — walks 24000 upward,
+// skipping ports already in the DB, ports currently reserved by an
+// in-flight allocation in this process, and (only for candidates that
+// pass those cheap set checks) ports the OS already has bound.
+//
+// Why NOT go through `get-port` here: it maintains an internal 15-
+// second lockedPorts cache to prevent race conditions across
+// concurrent callers, which is helpful for the launch-time dynamic
+// path but breaks the "hole refills immediately" expectation for
+// interactive create → delete → recreate. We use get-port for launch
+// fallback (where the race protection matters) and hand-rolled walk
+// here (where it doesn't).
 async function allocateDebugPortIfNeeded(settings, requestedPort, getUsedPorts) {
     const requested = normalizeDebugPort(requestedPort);
     if (requested) return requested;
     if (!settings?.enableRemoteDebugging) return null;
 
-    const usedPorts = getUsedPorts ? await getUsedPorts() : new Set();
+    const dbUsed = getUsedPorts ? await getUsedPorts() : new Set();
 
-    const { makeRange } = await resolveGetPortApi();
-    for (let i = 0; i < 10; i++) {
-        const candidate = await getAvailablePort({ port: makeRange(24000, 65000) });
-        if (!usedPorts.has(candidate)) return candidate;
+    // At 40K assigned ports the loop does 40K O(1) set-lookup skips
+    // then OS-checks the first candidate — fast (~50ms worst case).
+    // If the OS has some low ports taken by other apps we walk past
+    // them one syscall at a time; still bounded.
+    for (let port = 24000; port < 65000; port++) {
+        if (dbUsed.has(port)) continue;
+        if (reservedPorts.has(port)) continue;
+        if (await isPortFree(port)) return port;
     }
 
-    return await getAvailablePort();
+    throw new Error(
+        `Debug port pool exhausted in range 24000-65000 ` +
+        `(${dbUsed.size} already assigned in DB). ` +
+        `Disable remote debugging on unused profiles.`
+    );
+}
+
+// True if we can bind `port` on `host` right now — used at launch to
+// detect when a persisted debug port was grabbed by another app while
+// GeekEZ wasn't running (an IDE, another Chromium instance, etc.).
+async function isPortFree(port, host = '127.0.0.1') {
+    return new Promise((resolve) => {
+        const srv = net.createServer();
+        srv.once('error', () => resolve(false));
+        srv.listen({ port, host, exclusive: true }, () => {
+            srv.close(() => resolve(true));
+        });
+    });
 }
 
 // `profiles` used to be a pre-loaded full-table array — now the two
@@ -2535,6 +2569,14 @@ async function cleanupProfileRuntime(profileId, options = {}) {
 
     delete activeProcesses[profileId];
     launchingProfiles.delete(profileId);
+
+    // Release any dynamic-fallback debug port so a subsequent launch of
+    // this profile can pick it (or a concurrent one). Persisted debug
+    // ports don't go through reservedPorts, so this is a no-op for the
+    // common case.
+    if (proc.debugPortReserved && Number.isFinite(proc.debugPort)) {
+        reservedPorts.delete(proc.debugPort);
+    }
 
     if (proc.logFd !== undefined) {
         try { fs.closeSync(proc.logFd); } catch (e) { }
@@ -5372,13 +5414,51 @@ const launchProfileHandler = async (event, profileId, preferredLang, launchOptio
         // override args / custom args (`explicitDebugPort` was extracted
         // earlier and synced into profile.debugPort). Explicit port implies
         // "user wants debug on, regardless of the global toggle".
-        const remoteDebugPort = normalizeDebugPort(profile.debugPort);
+        //
+        // Fallback path: the persisted `profile.debugPort` might be OS-
+        // taken this session (another app grabbed it while GeekEZ wasn't
+        // running). If so we allocate a dynamic port for THIS launch
+        // only — we do NOT rewrite `profile.debugPort`, so the next
+        // launch re-tries the original (which is likely free again once
+        // whatever transient conflict passed). We also reserve the
+        // dynamic port for the process lifetime so a concurrent launch
+        // doesn't pick the same one. Explicit user ports (from customArgs
+        // / override args) are honored as-is even if OS-taken — that's a
+        // "user knows what they're doing" case.
+        let remoteDebugPort = normalizeDebugPort(profile.debugPort);
+        let usingDynamicDebugPort = false;
         const debugEnabled = !!explicitDebugPort || (settings.enableRemoteDebugging && !!remoteDebugPort);
+        if (!useCleanProfile && debugEnabled && remoteDebugPort && !explicitDebugPort) {
+            if (!(await isPortFree(remoteDebugPort))) {
+                try {
+                    // Exclude the whole DB-assigned set so we don't step
+                    // on another (currently-idle) profile's canonical
+                    // port. Uses get-port here (not the hand-rolled walk
+                    // from allocateDebugPortIfNeeded) because the 15-
+                    // second lockedPorts window is actually useful at
+                    // launch time — prevents two concurrent launches
+                    // that both fall back from picking the same port.
+                    const dbUsed = await profileDB.getUsedDebugPorts();
+                    const { makeRange } = await resolveGetPortApi();
+                    const dynamic = await getAvailablePort({
+                        port: makeRange(24000, 65000),
+                        exclude: [...dbUsed]
+                    });
+                    reservedPorts.add(dynamic);
+                    console.warn(`[debug-port] persisted ${remoteDebugPort} is OS-taken; using dynamic ${dynamic} for this launch`);
+                    remoteDebugPort = dynamic;
+                    usingDynamicDebugPort = true;
+                } catch (e) {
+                    console.warn(`[debug-port] persisted ${remoteDebugPort} is OS-taken AND dynamic pool exhausted (${e.message}); launching without CDP this session`);
+                    remoteDebugPort = null;
+                }
+            }
+        }
         if (!useCleanProfile && debugEnabled && remoteDebugPort) {
             launchArgs.push(`--remote-debugging-port=${remoteDebugPort}`);
             console.log('━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━');
             console.log('⚠️  REMOTE DEBUGGING ENABLED');
-            console.log(`📡 Port: ${remoteDebugPort}${explicitDebugPort ? ' (from launch args)' : ''}`);
+            console.log(`📡 Port: ${remoteDebugPort}${explicitDebugPort ? ' (from launch args)' : usingDynamicDebugPort ? ' (dynamic fallback — persisted port was OS-taken)' : ''}`);
             console.log(`🔗 Connect: chrome://inspect or ws://localhost:${remoteDebugPort}`);
             console.log('⚠️  WARNING: May increase automation detection risk!');
             console.log('━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━');
@@ -5573,10 +5653,15 @@ const launchProfileHandler = async (event, profileId, preferredLang, launchOptio
             logFd,
             cleanProfile: useCleanProfile,
             // Port Chrome actually bound this launch, whether from global
-            // settings or an explicit override arg. Consumed by
+            // settings, an explicit override arg, or the dynamic-fallback
+            // path when the persisted port was OS-taken. Consumed by
             // resolveRemoteDebugPortForProfile so the API/UI shows the
             // real port, not a stale DB value.
-            debugPort: debugEnabled ? remoteDebugPort : null
+            debugPort: debugEnabled ? remoteDebugPort : null,
+            // Set when the launch fell back to a dynamic port; cleanup
+            // uses it to release the reservation so a later launch can
+            // pick the same port again.
+            debugPortReserved: usingDynamicDebugPort
         };
         appendProxyTunnelLog(tunnelLogPath, 'runtime.launch.ready', {
             profileId,
