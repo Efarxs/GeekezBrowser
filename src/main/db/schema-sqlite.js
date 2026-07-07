@@ -14,6 +14,7 @@ const profiles = sqliteTable('profiles', {
     isSetup: int('is_setup').default(0),
     createdAt: int('created_at').notNull(),
     fingerprint: text('fingerprint').notNull(),
+    kernelVersion: text('kernel_version'),
 }, (table) => [
     index('idx_profiles_name').on(table.name),
     index('idx_profiles_created').on(table.createdAt),
@@ -33,7 +34,8 @@ CREATE TABLE IF NOT EXISTS profiles (
     reset_on_launch INTEGER DEFAULT 0,
     is_setup INTEGER DEFAULT 0,
     created_at INTEGER NOT NULL,
-    fingerprint TEXT NOT NULL
+    fingerprint TEXT NOT NULL,
+    kernel_version TEXT
 );
 CREATE INDEX IF NOT EXISTS idx_profiles_name ON profiles(name);
 CREATE INDEX IF NOT EXISTS idx_profiles_created ON profiles(created_at);

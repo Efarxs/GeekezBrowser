@@ -79,6 +79,7 @@ class ProfileDB {
             isSetup: !!row.isSetup,
             createdAt: row.createdAt,
             fingerprint: typeof row.fingerprint === 'string' ? JSON.parse(row.fingerprint || '{}') : (row.fingerprint || {}),
+            kernelVersion: row.kernelVersion || null,
         };
     }
 
@@ -97,6 +98,7 @@ class ProfileDB {
             isSetup: profile.isSetup ? 1 : 0,
             createdAt: profile.createdAt || Date.now(),
             fingerprint: typeof profile.fingerprint === 'string' ? profile.fingerprint : JSON.stringify(profile.fingerprint || {}),
+            kernelVersion: profile.kernelVersion ? String(profile.kernelVersion) : null,
         };
     }
 

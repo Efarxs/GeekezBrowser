@@ -284,5 +284,10 @@ window.zhCN = {
     kernelHelpDefault: "正在准备浏览器内核，请保持此窗口开启。",
     kernelBtnCancel: "取消",
     kernelBtnRetry: "重试",
-    kernelUnknownError: "未知错误"
+    kernelUnknownError: "未知错误",
+    kernelVersionLabel: "浏览器内核版本",
+    kernelVersionDefault: "默认（推荐）",
+    kernelVersionInstalledSuffix: " · 已安装",
+    kernelVersionDownloadSuffix: " · 首次启动时下载",
+    kernelVersionHint: "同一个内核版本下载一次，多个 profile 复用。旧版本可能不支持部分指纹选项。"
 };

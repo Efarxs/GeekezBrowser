@@ -328,6 +328,97 @@ async function ensureInstalled(version = PINNED_VERSION, options = {}) {
     return { ...result, installed: true, source: 'downloaded' };
 }
 
+// Scan install root for versions with a valid VERSION file.
+async function listInstalled() {
+    const root = installRoot();
+    if (!(await pathExists(root))) return [];
+    let entries = [];
+    try { entries = await fsp.readdir(root, { withFileTypes: true }); } catch { return []; }
+    const results = [];
+    for (const e of entries) {
+        if (!e.isDirectory()) continue;
+        const check = await checkInstalled(e.name);
+        if (check.installed) {
+            const stat = await fsp.stat(path.join(root, e.name)).catch(() => null);
+            results.push({
+                version: e.name,
+                execPath: check.execPath,
+                dir: check.dir,
+                installedAt: stat?.mtimeMs || 0
+            });
+        }
+    }
+    // Newest kernel version first (semver-ish sort).
+    results.sort((a, b) => compareVersions(b.version, a.version));
+    return results;
+}
+
+function compareVersions(a, b) {
+    const pa = String(a).split('.').map(n => parseInt(n, 10) || 0);
+    const pb = String(b).split('.').map(n => parseInt(n, 10) || 0);
+    for (let i = 0; i < Math.max(pa.length, pb.length); i++) {
+        const diff = (pa[i] || 0) - (pb[i] || 0);
+        if (diff) return diff;
+    }
+    return 0;
+}
+
+// 60 min TTL cache of the Releases API. `force: true` refreshes.
+let availableCache = null;
+async function listAvailable({ force = false } = {}) {
+    const now = Date.now();
+    if (!force && availableCache && (now - availableCache.at) < 60 * 60 * 1000) {
+        return availableCache.data;
+    }
+    const isGlobal = await detectGlobalNetwork();
+    const apiUrl = `https://api.github.com/repos/${REPO}/releases?per_page=20`;
+    const finalUrl = isGlobal ? apiUrl : (GH_PROXY + apiUrl);
+    let releases;
+    try {
+        releases = await fetchJson(finalUrl);
+    } catch (e) {
+        // Fall back to the mirror if the primary source failed.
+        try { releases = await fetchJson(isGlobal ? (GH_PROXY + apiUrl) : apiUrl); }
+        catch (_) { throw e; }
+    }
+    if (!Array.isArray(releases)) throw new Error('unexpected releases response');
+
+    const platform = process.platform;
+    const keyword = { win32: 'windows_x64', darwin: 'macos', linux: 'linux' }[platform];
+    const exts    = { win32: ['.zip'],       darwin: ['.zip', '.dmg'], linux: ['.tar.xz', '.tar.gz', '.zip'] }[platform];
+
+    const data = releases
+        .map(r => {
+            const version = String(r.tag_name || r.name || '').trim();
+            if (!/^\d+\.\d+\.\d+\.\d+$/.test(version)) return null;
+            const assets = (r.assets || []).filter(a => (a.name || '').includes(keyword));
+            let asset = null;
+            for (const ext of exts) {
+                asset = assets.find(a => a.name.toLowerCase().endsWith(ext));
+                if (asset) break;
+            }
+            if (!asset) return null;
+            return {
+                version,
+                assetName: asset.name,
+                assetSize: asset.size,
+                publishedAt: r.published_at
+            };
+        })
+        .filter(Boolean)
+        .sort((a, b) => compareVersions(b.version, a.version));
+
+    availableCache = { at: now, data };
+    return data;
+}
+
+async function uninstallVersion(version) {
+    const dir = installDirFor(version);
+    if (!(await pathExists(dir))) return { removed: false, reason: 'not-installed' };
+    await fsp.rm(dir, { recursive: true, force: true });
+    return { removed: true, path: dir };
+}
+
 module.exports = {
     PINNED_VERSION,
     KERNEL_FAMILY,
@@ -337,5 +428,9 @@ module.exports = {
     migrateFromBundle,
     installVersion,
     ensureInstalled,
-    detectGlobalNetwork
+    detectGlobalNetwork,
+    listInstalled,
+    listAvailable,
+    uninstallVersion,
+    compareVersions
 };

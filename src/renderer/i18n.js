@@ -281,7 +281,12 @@ const enTranslations = {
     kernelHelpDefault: "Preparing the browser kernel. Please keep this window open.",
     kernelBtnCancel: "Cancel",
     kernelBtnRetry: "Retry",
-    kernelUnknownError: "Unknown error"
+    kernelUnknownError: "Unknown error",
+    kernelVersionLabel: "Browser kernel version",
+    kernelVersionDefault: "Default (recommended)",
+    kernelVersionInstalledSuffix: " · installed",
+    kernelVersionDownloadSuffix: " · will download on first launch",
+    kernelVersionHint: "The kernel is downloaded once per version and reused across profiles. Older versions may not support all fingerprint options."
 };
 
 // Global i18n Manager

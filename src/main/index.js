@@ -1842,6 +1842,12 @@ async function buildProfileFromInput(rawData, profiles, settings, existingProfil
         customArgs: normalizedCustomArgs,
         ignoreCertErrors: firstDefined(data.ignoreCertErrors, existingProfile?.ignoreCertErrors, false),
         resetOnLaunch: !!firstDefined(data.resetOnLaunch, existingProfile?.resetOnLaunch, false),
+        kernelVersion: (() => {
+            const raw = firstDefined(data.kernelVersion, existingProfile?.kernelVersion, null);
+            if (!raw) return null;
+            const s = String(raw).trim();
+            return /^\d+\.\d+\.\d+\.\d+$/.test(s) ? s : null;
+        })(),
         isSetup: existingProfile?.isSetup || false,
         createdAt: existingProfile?.createdAt || Date.now()
     };
@@ -2275,23 +2281,28 @@ async function focusExistingBrowserWindow(profileId) {
     return false;
 }
 
-function getChromiumPath() {
+// `version` is the kernel version the caller wants (typically
+// `profile.kernelVersion`). Defaults to the pinned version when not
+// specified — same behavior as pre-Phase-2a callers.
+function getChromiumPath({ version } = {}) {
+    const targetVersion = version || kernelManager.PINNED_VERSION;
     return resolveChromiumPathForApp({
         isDev,
         appPath: app.getAppPath(),
         resourcesPath: process.resourcesPath,
-        userDataKernelDir: kernelManager.installDirFor(kernelManager.PINNED_VERSION),
+        userDataKernelDir: kernelManager.installDirFor(targetVersion),
         platform: process.platform,
         env: process.env
     });
 }
 
-function getChromiumVersion() {
+function getChromiumVersion({ version } = {}) {
+    const targetVersion = version || kernelManager.PINNED_VERSION;
     return resolveChromiumVersionForApp({
         isDev,
         appPath: app.getAppPath(),
         resourcesPath: process.resourcesPath,
-        userDataKernelDir: kernelManager.installDirFor(kernelManager.PINNED_VERSION),
+        userDataKernelDir: kernelManager.installDirFor(targetVersion),
         platform: process.platform
     });
 }
@@ -3702,6 +3713,75 @@ ipcMain.handle('kernel:cancel', async () => {
     return { cancelled: true };
 });
 
+ipcMain.handle('kernel:list-installed', async () => {
+    try {
+        const installed = await kernelManager.listInstalled();
+        return { ok: true, pinned: kernelManager.PINNED_VERSION, installed };
+    } catch (e) {
+        return { ok: false, error: e.message };
+    }
+});
+
+ipcMain.handle('kernel:list-available', async (_e, opts = {}) => {
+    try {
+        const available = await kernelManager.listAvailable({ force: !!opts.force });
+        return { ok: true, available };
+    } catch (e) {
+        return { ok: false, error: e.message };
+    }
+});
+
+ipcMain.handle('kernel:install-version', async (_e, version) => {
+    if (!version || !/^\d+\.\d+\.\d+\.\d+$/.test(String(version))) {
+        return { ok: false, error: 'invalid version' };
+    }
+    if (activeKernelInstall) {
+        try {
+            const result = await activeKernelInstall.promise;
+            return { ok: true, ...result };
+        } catch (e) {
+            return { ok: false, error: e.message };
+        }
+    }
+
+    const controller = new AbortController();
+    const installPromise = (async () => {
+        try {
+            const result = await kernelManager.installVersion(version, {
+                signal: controller.signal,
+                onProgress: (p) => emitKernelProgress({ version, ...p })
+            });
+            emitKernelProgress({ version, phase: 'done', execPath: result.execPath });
+            return { ...result, installed: true, source: 'downloaded' };
+        } catch (e) {
+            emitKernelProgress({ version, phase: 'error', message: e.message });
+            throw e;
+        } finally {
+            activeKernelInstall = null;
+        }
+    })();
+    activeKernelInstall = { controller, promise: installPromise, version };
+
+    try {
+        const result = await installPromise;
+        return { ok: true, ...result };
+    } catch (e) {
+        return { ok: false, error: e.message };
+    }
+});
+
+ipcMain.handle('kernel:uninstall-version', async (_e, version) => {
+    if (!version || version === kernelManager.PINNED_VERSION) {
+        return { ok: false, error: 'cannot uninstall pinned version' };
+    }
+    try {
+        const result = await kernelManager.uninstallVersion(version);
+        return { ok: true, ...result };
+    } catch (e) {
+        return { ok: false, error: e.message };
+    }
+});
+
 // -------------------------------------------------------------------------
 
 ipcMain.handle('get-settings', async () => {
@@ -4995,15 +5075,46 @@ const launchProfileHandler = async (event, profileId, preferredLang, launchOptio
             profile.fingerprint.languages = [];
         }
 
-        // fingerprint-chromium 是唯一内核
-        const chromePath = getChromiumPath();
-        const chromiumVersion = getChromiumVersion(); // e.g., "148.0.7778.215"
+        // Per-profile kernel version: if the profile pins a specific
+        // fingerprint-chromium version we honor it, else use the app-wide
+        // pinned default. If the version isn't installed yet, kick off an
+        // install and block until it's ready.
+        const profileKernelVersion = profile.kernelVersion || kernelManager.PINNED_VERSION;
+        {
+            const status = await kernelManager.checkInstalled(profileKernelVersion);
+            if (!status.installed) {
+                if (activeKernelInstall) {
+                    await activeKernelInstall.promise;
+                } else {
+                    updateLaunchProgress(
+                        68,
+                        preferredLang === 'en'
+                            ? `Downloading browser kernel ${profileKernelVersion}...`
+                            : `正在下载浏览器内核 ${profileKernelVersion}...`,
+                        true,
+                        { step: 6, profileName: progressProfileName }
+                    );
+                    try {
+                        await kernelManager.installVersion(profileKernelVersion, {
+                            onProgress: (p) => emitKernelProgress({ version: profileKernelVersion, ...p })
+                        });
+                    } catch (e) {
+                        if (singboxProcess && singboxProcess.pid) {
+                            await forceKill(singboxProcess.pid);
+                        }
+                        throw new Error(`Failed to install kernel ${profileKernelVersion}: ${e.message}`);
+                    }
+                }
+            }
+        }
+        const chromePath = getChromiumPath({ version: profileKernelVersion });
+        const chromiumVersion = getChromiumVersion({ version: profileKernelVersion }) || profileKernelVersion;
 
         if (!chromePath) {
             if (singboxProcess && singboxProcess.pid) {
                 await forceKill(singboxProcess.pid);
             }
-            throw new Error("Chrome binary not found.");
+            throw new Error(`Chrome binary not found for kernel ${profileKernelVersion}.`);
         }
 
         // Auto-IP-base: resolve geo/timezone from proxy exit BEFORE spawn so kernel args reflect it.
@@ -5129,6 +5240,11 @@ const launchProfileHandler = async (event, profileId, preferredLang, launchOptio
         const customUserAgent = typeof profile.fingerprint?.userAgent === 'string'
             ? profile.fingerprint.userAgent.trim()
             : '';
+        // Kernel-major gates the flag set. `--fingerprint-brand[-version]`
+        // only exist on Chrome 131+; below that we drop them and let the
+        // seed drive UA brand.
+        const kernelMajor = parseInt(String(chromiumVersion || profileKernelVersion).split('.')[0], 10) || 0;
+        const supportsBrandFlags = kernelMajor >= 131;
         {
             const fpSeed = resetOnLaunch
                 ? crypto.randomInt(1, 2147483647)
@@ -5137,7 +5253,9 @@ const launchProfileHandler = async (event, profileId, preferredLang, launchOptio
             launchArgs.push('--disable-non-proxied-udp');
 
             const fcBrand = resolveFingerprintChromiumBrand(profile.fingerprint);
-            launchArgs.push(`--fingerprint-brand=${fcBrand}`);
+            if (supportsBrandFlags) {
+                launchArgs.push(`--fingerprint-brand=${fcBrand}`);
+            }
             // Effective UA & brand-version pair:
             //  - Sec-CH-UA-Full-Version-List (== --fingerprint-brand-version) must be
             //    a real Chrome stable patch, otherwise browserscan flags us.
@@ -5170,7 +5288,7 @@ const launchProfileHandler = async (event, profileId, preferredLang, launchOptio
                         // do NOT overwrite fcBrandVersion with "148.0.0.0".
                     }
                 }
-                if (fcBrandVersion) {
+                if (fcBrandVersion && supportsBrandFlags) {
                     launchArgs.push(`--fingerprint-brand-version=${fcBrandVersion}`);
                 }
             }
@@ -5493,7 +5611,7 @@ async function readProfileCookiesViaCdp(profileId) {
     if (activeProcesses[profileId]) {
         throw new Error('Profile is running — stop it before exporting cookies');
     }
-    const chromePath = getChromiumPath();
+    const chromePath = getChromiumPath({ version: profile.kernelVersion });
     if (!chromePath) throw new Error('Chrome binary not found');
     const profileDataDir = path.join(DATA_PATH, profileId, 'browser_data');
     return await withHeadlessChromeCookies(chromePath, profileDataDir, async (session) => {
@@ -5508,7 +5626,7 @@ async function writeProfileCookiesViaCdp(profileId, cookies) {
     if (activeProcesses[profileId]) {
         throw new Error('Profile is running — stop it before importing cookies');
     }
-    const chromePath = getChromiumPath();
+    const chromePath = getChromiumPath({ version: profile.kernelVersion });
     if (!chromePath) throw new Error('Chrome binary not found');
     const profileDataDir = path.join(DATA_PATH, profileId, 'browser_data');
     const cdpCookies = toCdpSetCookies(cookies);

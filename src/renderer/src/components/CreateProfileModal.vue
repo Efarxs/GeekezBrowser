@@ -120,6 +120,8 @@
           <div class="hint-text">{{ $t('customArgsHint') }}</div>
         </div>
 
+        <KernelVersionSelect v-model="form.kernelVersion" />
+
         <div class="hint-text mt-10">{{ $t('autoFingerprint') }}</div>
       </div>
       <div class="modal-footer">
@@ -137,6 +139,7 @@ import { ref, reactive, computed, onMounted, onUnmounted, watch } from 'vue';
 import { useUIStore } from '../store/useUIStore';
 import { useProfileStore } from '../store/useProfileStore';
 import { getProxyRemark } from '../utils/helpers';
+import KernelVersionSelect from './KernelVersionSelect.vue';
 import {
   browserVersionPresetOptions,
   platformOptions,
@@ -168,6 +171,7 @@ const form = reactive({
   platform: 'Win32',
   customUserAgent: '',
   resetOnLaunch: false,
+  kernelVersion: '',
 });
 
 function randomizeCustomUa() {
@@ -284,7 +288,8 @@ watch(() => uiStore.addModalVisible, async (newVal) => {
       browserVersionPreset: 'none',
       platform: 'Win32',
       customUserAgent: '',
-      resetOnLaunch: false
+      resetOnLaunch: false,
+      kernelVersion: ''
     });
     timezoneSearch.value = AUTO_TIMEZONE_LABEL;
     citySearch.value = 'Auto (IP Based)';
@@ -357,7 +362,8 @@ async function handleSave() {
         platform: form.platform,
         userAgent: trimmedUa || undefined,
         ignoreCertErrors: true,
-        resetOnLaunch: !!form.resetOnLaunch
+        resetOnLaunch: !!form.resetOnLaunch,
+        kernelVersion: form.kernelVersion || null
       };
       // Strip Vue reactive proxies to avoid Electron IPC clone failures for geolocation and similar objects.
       const safePayload = JSON.parse(JSON.stringify(payload));

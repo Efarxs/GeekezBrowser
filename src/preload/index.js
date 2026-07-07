@@ -29,5 +29,9 @@ contextBridge.exposeInMainWorld('electronAPI', {
     getKernelStatus: () => ipcRenderer.invoke('kernel:get-status'),
     ensureKernel: () => ipcRenderer.invoke('kernel:ensure'),
     cancelKernelDownload: () => ipcRenderer.invoke('kernel:cancel'),
-    onKernelProgress: (callback) => ipcRenderer.on('kernel:progress', (event, payload) => callback(payload))
+    onKernelProgress: (callback) => ipcRenderer.on('kernel:progress', (event, payload) => callback(payload)),
+    listInstalledKernels: () => ipcRenderer.invoke('kernel:list-installed'),
+    listAvailableKernels: (opts) => ipcRenderer.invoke('kernel:list-available', opts || {}),
+    installKernelVersion: (version) => ipcRenderer.invoke('kernel:install-version', version),
+    uninstallKernelVersion: (version) => ipcRenderer.invoke('kernel:uninstall-version', version)
 });

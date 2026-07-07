@@ -134,6 +134,8 @@
           <textarea v-model="form.customArgs" rows="2" placeholder="--start-maximized" class="mono-text"></textarea>
           <div class="hint-text">{{ $t('customArgsHint') }}</div>
         </div>
+
+        <KernelVersionSelect v-model="form.kernelVersion" />
         </fieldset>
       </div>
       <div class="modal-footer">
@@ -151,6 +153,7 @@
 import { ref, reactive, computed, watch, onMounted, onUnmounted } from 'vue';
 import { useUIStore } from '../store/useUIStore';
 import { useProfileStore } from '../store/useProfileStore';
+import KernelVersionSelect from './KernelVersionSelect.vue';
 import {
   browserVersionPresetOptions,
   platformOptions,
@@ -187,6 +190,7 @@ const form = reactive({
   platform: 'Win32',
   customUserAgent: '',
   resetOnLaunch: false,
+  kernelVersion: '',
 });
 
 function randomizeCustomUa() {
@@ -281,6 +285,7 @@ watch(() => uiStore.editModalVisible, async (visible) => {
     form.platform = (!fp.platform || fp.platform === 'auto') ? 'Win32' : fp.platform;
     form.customUserAgent = fp.userAgent || '';
     form.resetOnLaunch = !!p.resetOnLaunch;
+    form.kernelVersion = p.kernelVersion || '';
 
     // Timezone
     form.timezone = fp.timezone || 'Auto';
@@ -380,7 +385,8 @@ async function handleSave() {
       debugPort: form.debugPort,
       customArgs: form.customArgs,
       ignoreCertErrors: true,
-      resetOnLaunch: !!form.resetOnLaunch
+      resetOnLaunch: !!form.resetOnLaunch,
+      kernelVersion: form.kernelVersion || null
     };
 
     // 这一步彻底洗掉 Vue 的 Proxy 深度监控包装，防止 Electron 的原生底层报错 "An object could not be cloned"
