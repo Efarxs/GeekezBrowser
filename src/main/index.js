@@ -13,6 +13,7 @@ const zlib = require('zlib');
 const { promisify } = require('util');
 const { getChromiumPath: resolveChromiumPathForApp, getChromiumVersion: resolveChromiumVersionForApp } = require('./chromium-path');
 const kernelManager = require('./kernel/manager');
+const { registerKernelIpc, getActiveInstall, emitKernelProgress } = require('./kernel/ipc-bridge');
 const { withHeadlessChromeCookies } = require('./cdp-cookie-client');
 const { CLOSE_BEHAVIOR, normalizeCloseBehavior, resolveCloseBehavior } = require('./close-behavior');
 const { fetchLatestGitHubReleaseInfo } = require('./release-check');
@@ -3689,165 +3690,12 @@ ipcMain.handle('delete-profile', async (event, id) => {
     return true;
 });
 // ---- Kernel (fingerprint-chromium) install management ------------------
-
-let activeKernelInstall = null; // { controller, promise, version }
-
-function emitKernelProgress(payload) {
-    const windows = BrowserWindow.getAllWindows();
-    for (const w of windows) {
-        try {
-            if (!w || w.isDestroyed() || !w.webContents || w.webContents.isDestroyed()) continue;
-            w.webContents.send('kernel:progress', payload);
-        } catch (_) { }
-    }
-}
-
-ipcMain.handle('kernel:get-status', async () => {
-    try {
-        const status = await kernelManager.checkInstalled(kernelManager.PINNED_VERSION);
-        return {
-            installed: !!status.installed,
-            execPath: status.execPath || null,
-            version: kernelManager.PINNED_VERSION,
-            downloading: !!activeKernelInstall
-        };
-    } catch (e) {
-        return { installed: false, error: e.message, version: kernelManager.PINNED_VERSION, downloading: !!activeKernelInstall };
-    }
-});
-
-ipcMain.handle('kernel:ensure', async () => {
-    if (activeKernelInstall) {
-        // In-flight install: piggy-back rather than starting a second one.
-        try {
-            const result = await activeKernelInstall.promise;
-            return { ok: true, ...result };
-        } catch (e) {
-            return { ok: false, error: e.message };
-        }
-    }
-
-    const controller = new AbortController();
-    const installPromise = (async () => {
-        try {
-            const result = await kernelManager.ensureInstalled(kernelManager.PINNED_VERSION, {
-                signal: controller.signal,
-                onProgress: (p) => emitKernelProgress({ version: kernelManager.PINNED_VERSION, ...p })
-            });
-            emitKernelProgress({ version: kernelManager.PINNED_VERSION, phase: 'done', execPath: result.execPath, source: result.source });
-            return result;
-        } catch (e) {
-            emitKernelProgress({ version: kernelManager.PINNED_VERSION, phase: 'error', message: e.message });
-            throw e;
-        } finally {
-            activeKernelInstall = null;
-        }
-    })();
-
-    activeKernelInstall = { controller, promise: installPromise, version: kernelManager.PINNED_VERSION };
-
-    try {
-        const result = await installPromise;
-        return { ok: true, ...result };
-    } catch (e) {
-        return { ok: false, error: e.message };
-    }
-});
-
-ipcMain.handle('kernel:cancel', async () => {
-    if (!activeKernelInstall) return { cancelled: false, reason: 'no active install' };
-    try { activeKernelInstall.controller.abort(); } catch (_) { }
-    return { cancelled: true };
-});
-
-ipcMain.handle('kernel:list-installed', async (_e, opts = {}) => {
-    try {
-        const installed = await kernelManager.listInstalled({ measureSize: !!opts.measureSize });
-        return { ok: true, pinned: kernelManager.PINNED_VERSION, installed };
-    } catch (e) {
-        return { ok: false, error: e.message };
-    }
-});
-
-ipcMain.handle('kernel:list-available', async (_e, opts = {}) => {
-    try {
-        const available = await kernelManager.listAvailable({ force: !!opts.force });
-        return { ok: true, available };
-    } catch (e) {
-        return { ok: false, error: e.message };
-    }
-});
-
-ipcMain.handle('kernel:install-version', async (_e, version) => {
-    if (!version || !/^\d+\.\d+\.\d+\.\d+$/.test(String(version))) {
-        return { ok: false, error: 'invalid version' };
-    }
-    if (activeKernelInstall) {
-        try {
-            const result = await activeKernelInstall.promise;
-            return { ok: true, ...result };
-        } catch (e) {
-            return { ok: false, error: e.message };
-        }
-    }
-
-    const controller = new AbortController();
-    const installPromise = (async () => {
-        try {
-            const result = await kernelManager.installVersion(version, {
-                signal: controller.signal,
-                onProgress: (p) => emitKernelProgress({ version, ...p })
-            });
-            emitKernelProgress({ version, phase: 'done', execPath: result.execPath });
-            return { ...result, installed: true, source: 'downloaded' };
-        } catch (e) {
-            emitKernelProgress({ version, phase: 'error', message: e.message });
-            throw e;
-        } finally {
-            activeKernelInstall = null;
-        }
-    })();
-    activeKernelInstall = { controller, promise: installPromise, version };
-
-    try {
-        const result = await installPromise;
-        return { ok: true, ...result };
-    } catch (e) {
-        return { ok: false, error: e.message };
-    }
-});
-
-ipcMain.handle('kernel:uninstall-version', async (_e, version) => {
-    if (!version || version === kernelManager.PINNED_VERSION) {
-        return { ok: false, error: 'cannot uninstall pinned version' };
-    }
-    // Refuse if a running profile currently uses this kernel.
-    try {
-        const runningIds = Object.keys(activeProcesses);
-        if (runningIds.length > 0) {
-            const conflicts = [];
-            for (const id of runningIds) {
-                const p = await profileDB.getById(id);
-                if (p && p.kernelVersion === version) {
-                    conflicts.push(p.name || id);
-                }
-            }
-            if (conflicts.length > 0) {
-                return {
-                    ok: false,
-                    error: `kernel is used by running profile(s): ${conflicts.join(', ')}`
-                };
-            }
-        }
-    } catch (_) { /* soft-check; if profileDB is unavailable, fall through */ }
-
-    try {
-        const result = await kernelManager.uninstallVersion(version);
-        return { ok: true, ...result };
-    } catch (e) {
-        return { ok: false, error: e.message };
-    }
-});
+// Handlers live in src/main/kernel/ipc-bridge.js — this call wires them
+// up with the two runtime deps they need (profileDB + activeProcesses
+// getter for the "kernel-in-use" uninstall guard). Bridge also owns the
+// activeInstall token; the launch flow reads it via getActiveInstall()
+// below.
+registerKernelIpc({ profileDB, getActiveProcesses: () => activeProcesses });
 
 // -------------------------------------------------------------------------
 
@@ -5150,8 +4998,9 @@ const launchProfileHandler = async (event, profileId, preferredLang, launchOptio
         {
             const status = await kernelManager.checkInstalled(profileKernelVersion);
             if (!status.installed) {
-                if (activeKernelInstall) {
-                    await activeKernelInstall.promise;
+                const inFlight = getActiveInstall();
+                if (inFlight) {
+                    await inFlight.promise;
                 } else {
                     updateLaunchProgress(
                         68,
