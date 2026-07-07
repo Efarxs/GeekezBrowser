@@ -375,6 +375,30 @@ async function handleSave() {
       uiStore.showAlert(window.t('runningNoEdit') || 'Cannot edit a running profile.');
       return;
     }
+    // Cross-major kernel downgrades are a distinct anti-fraud signal (bot
+    // farms notoriously ship old Chromium images), so we gate the save on
+    // an explicit confirm. Empty kernel means "app default" (pinned) —
+    // treat as no-warn since pinned generally tracks the latest major.
+    const storedMajor = parseInt(String(p.fingerprint?.browserMajorVersion || '').split('.')[0], 10) || 0;
+    const newKernelMajor = form.kernelVersion
+      ? parseInt(String(form.kernelVersion).split('.')[0], 10) || 0
+      : 0;
+    if (newKernelMajor > 0 && storedMajor > 0 && newKernelMajor < storedMajor) {
+      const title = (window.t('kernelDowngradeWarnTitle') || 'Downgrade kernel from Chrome {from} to Chrome {to}?')
+        .replace('{from}', storedMajor)
+        .replace('{to}', newKernelMajor);
+      const hint = window.t('kernelDowngradeWarnHint') || '';
+      const proceed = await new Promise(resolve => {
+        uiStore.showConfirm(
+          title,
+          () => resolve(true),
+          hint,
+          { onCancel: () => resolve(false) }
+        );
+      });
+      if (!proceed) return;
+    }
+
     const browserPreset = parseBrowserVersionPreset(form.browserVersionPreset);
     const trimmedUa = (form.customUserAgent || '').trim();
     const uaMode = trimmedUa ? 'spoof' : browserPreset.uaMode;

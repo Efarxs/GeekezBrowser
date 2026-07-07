@@ -307,7 +307,9 @@ const enTranslations = {
     disableSpoofingCanvas: "Canvas",
     disableSpoofingAudio: "Audio",
     disableSpoofingClientRects: "Client Rects",
-    disableSpoofingGpu: "GPU"
+    disableSpoofingGpu: "GPU",
+    kernelDowngradeWarnTitle: "Downgrade kernel from Chrome {from} to Chrome {to}?",
+    kernelDowngradeWarnHint: "Anti-fraud engines (Amazon, TikTok Shop, etc.) treat browser version rollback as a bot-farm signal — real users rarely downgrade. Canvas/WebGL/audio fingerprints will also shift because the rendering pipeline changes between majors, even at the same seed. Prefer picking the same major as the profile was created under, or accept the detection risk."
 };
 
 // Global i18n Manager

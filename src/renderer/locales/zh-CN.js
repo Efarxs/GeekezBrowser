@@ -310,5 +310,7 @@ window.zhCN = {
     disableSpoofingCanvas: "Canvas",
     disableSpoofingAudio: "Audio",
     disableSpoofingClientRects: "ClientRects",
-    disableSpoofingGpu: "GPU"
+    disableSpoofingGpu: "GPU",
+    kernelDowngradeWarnTitle: "确定将内核从 Chrome {from} 降级到 Chrome {to}？",
+    kernelDowngradeWarnHint: "反欺诈系统（亚马逊、TikTok Shop 等）会把浏览器版本回退视为 bot farm 特征 —— 真人几乎不会主动降级浏览器。同时 canvas / WebGL / audio 指纹会随渲染管线在 major 之间的差异而漂移，即便 seed 相同也无法一致。建议选择与该环境创建时相同的 major，或明确接受检测风险后再继续。"
 };

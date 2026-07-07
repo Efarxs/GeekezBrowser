@@ -5329,6 +5329,11 @@ const launchProfileHandler = async (event, profileId, preferredLang, launchOptio
                 // flag the profile as tampered. Re-pick a stable Chrome patch
                 // from the kernel major's pool (falls back to `${major}.0.0.0`
                 // when we don't have real patches on file for that major).
+                // We persist the realigned patch back onto the profile so
+                // subsequent launches don't reroll a different sub-patch each
+                // time (which would look like "Chrome auto-updated twice in
+                // one hour" to a detector).
+                let alignmentPersistNeeded = false;
                 if (kernelMajor > 0) {
                     const brandMajor = parseInt(String(fcBrandVersion).split('.')[0], 10) || 0;
                     if (brandMajor !== kernelMajor) {
@@ -5342,6 +5347,54 @@ const launchProfileHandler = async (event, profileId, preferredLang, launchOptio
                                 `$1${kernelMajor}.0.0.0`
                             );
                         }
+                        alignmentPersistNeeded = true;
+                    }
+                }
+
+                // Write the realigned identity back to the profile row. This
+                // is what makes cross-major kernel swaps stable session-to-
+                // session — before this, pickFullVersionForMajor's getRandom
+                // meant every launch shipped a different 148.x.y.z patch on
+                // the same account, and detectors that track Sec-CH-UA-Full-
+                // Version-List across sessions would flag the flapping.
+                if (alignmentPersistNeeded) {
+                    const fp = profile.fingerprint;
+                    fp.browserMajorVersion = kernelMajor;
+                    fp.browserFullVersion = fcBrandVersion;
+                    if (typeof fp.userAgent === 'string' && fp.userAgent) {
+                        fp.userAgent = fp.userAgent.replace(
+                            /((?:Chrome|Edg)\/)\d+\.\d+\.\d+\.\d+/g,
+                            `$1${kernelMajor}.0.0.0`
+                        );
+                    }
+                    if (fp.userAgentMetadata && typeof fp.userAgentMetadata === 'object') {
+                        const meta = fp.userAgentMetadata;
+                        meta.uaFullVersion = fcBrandVersion;
+                        if (Array.isArray(meta.brands)) {
+                            for (const b of meta.brands) {
+                                if (b && b.brand && b.brand !== 'Not.A/Brand') {
+                                    b.version = String(kernelMajor);
+                                }
+                            }
+                        }
+                        if (Array.isArray(meta.fullVersionList)) {
+                            for (const b of meta.fullVersionList) {
+                                if (b && b.brand && b.brand !== 'Not.A/Brand') {
+                                    b.version = fcBrandVersion;
+                                }
+                            }
+                        }
+                        if (Array.isArray(meta.brands)) {
+                            fp.secChUa = meta.brands
+                                .map(item => `"${item.brand}";v="${item.version}"`)
+                                .join(', ');
+                        }
+                    }
+                    try {
+                        await profileDB.update(profile.id, profile);
+                        console.log(`🔁 Kernel-major alignment persisted: browserFullVersion=${fcBrandVersion}`);
+                    } catch (e) {
+                        console.warn(`[kernel-align] persist failed for ${profile.id}: ${e?.message || e}`);
                     }
                 }
 
