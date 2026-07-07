@@ -183,7 +183,11 @@ async function main() {
         } else {
             bad('clean launch', r);
         }
-        await sleep(3500);
+        // Give the browser a generous window to settle — the sing-box
+        // 3-phase probe can eat 4-9s of slow-path retries even with a
+        // working local proxy, and Chrome then needs another second or
+        // two to expose its process listing. 3.5s was flaky.
+        await sleep(6000);
 
         // Runtime should now say running
         const rt = await api('GET', '/api/profiles/smk2-src/runtime');
@@ -222,6 +226,94 @@ async function main() {
         const r = await api('POST', '/api/proxy/latency', {});
         if (r.status === 400) ok('POST /api/proxy/latency empty body → 400');
         else bad('proxy latency empty body expected 400', r);
+    }
+
+    // ─────────────────────────────────────────────────────────────────
+    // Post-review-fix positive coverage (v1.7.15+)
+    // ─────────────────────────────────────────────────────────────────
+
+    // ── A1: path-traversal & format guards on DELETE /api/kernels/
+    //
+    // The path-traversal attack (../ and %2E%2E variants) can't actually
+    // reach our handler — Node's URL parser normalizes `..` and `%2E%2E`
+    // during pathname resolution, so `/api/kernels/%2E%2E` becomes
+    // `/api/`. That's defense-in-depth #1: 404 is the correct answer,
+    // not our own 400 rejection. We just need to prove no other layer
+    // ever sees a literal ".." on that route.
+    {
+        const r = await api('DELETE', '/api/kernels/%2E%2E');
+        if (r.status === 404) {
+            ok('DELETE /api/kernels/%2E%2E → 404 (URL-layer normalization blocks path traversal before handler)');
+        } else {
+            bad('DELETE %2E%2E expected 404 from URL normalization', r);
+        }
+        // Bogus-but-parseable version reaches our handler's regex guard.
+        const r2 = await api('DELETE', '/api/kernels/not-a-version');
+        if (r2.status === 400) ok('DELETE /api/kernels/<bad> → 400 (handler format guard)');
+        else bad('DELETE bad version expected 400', r2);
+    }
+
+    // ── A4: PATCH /api/settings type validation
+    {
+        const r = await api('PATCH', '/api/settings', { apiPort: 'abc' });
+        if (r.status === 400 && /failed validation/i.test(r.body?.error || '')) {
+            ok('PATCH /api/settings apiPort:"abc" → 400 (type validation)');
+        } else {
+            bad('apiPort type validation', r);
+        }
+        const r2 = await api('PATCH', '/api/settings', { apiPort: 22 });
+        if (r2.status === 400) ok('PATCH /api/settings apiPort:22 → 400 (range validation)');
+        else bad('apiPort range validation', r2);
+        const r3 = await api('PATCH', '/api/settings', { closeBehavior: 'bogus' });
+        if (r3.status === 400) ok('PATCH /api/settings closeBehavior:bogus → 400');
+        else bad('closeBehavior enum validation', r3);
+    }
+
+    // ── A4: PATCH /api/settings restartRequired signal
+    {
+        const cur = await api('GET', '/api/settings');
+        const original = cur.body.settings.enableApiServer;
+        const r = await api('PATCH', '/api/settings', { enableApiServer: original });
+        if (r.status === 200 && r.body?.restartRequired === true) {
+            ok('PATCH enableApiServer response has restartRequired:true');
+        } else {
+            bad('restartRequired signal missing', r);
+        }
+    }
+
+    // ── A5: /api/proxy/latency failure surfaces success:false (not 200 with success:false quietly)
+    {
+        const r = await api('POST', '/api/proxy/latency', { proxyStr: 'socks5://127.0.0.1:1' /* dead port */ });
+        // On failure, must have success:false — used to spread over success:true
+        if (r.body?.success === false) {
+            ok('POST /api/proxy/latency failure → success:false in body');
+        } else {
+            bad('proxy latency failure quietly showed success:true', r);
+        }
+    }
+
+    // ── A5: /api/proxy/latency success has both latency and latencyMs
+    {
+        const r = await api('POST', '/api/proxy/latency', { proxyStr: PROXY_STR });
+        if (r.body?.success === true && typeof r.body.latency === 'number' && typeof r.body.latencyMs === 'number' && r.body.latency === r.body.latencyMs) {
+            ok(`POST /api/proxy/latency success → latency & latencyMs both present (${r.body.latency}ms)`);
+        } else {
+            bad('latency/latencyMs field parity', r.body);
+        }
+    }
+
+    // ── A3: keepProxy stop reports profile in detachedTunnels (needs a launched profile).
+    // Verify contract shape rather than the full detach cycle — the plain
+    // stop test above already covered the keepProxy stop message.
+    {
+        const s = await api('GET', '/api/status');
+        // detachedTunnels is optional (present only when non-empty). Verify
+        // it's either absent or an array — never a scalar or null.
+        if (s.body?.detachedTunnels === undefined || Array.isArray(s.body.detachedTunnels)) {
+            ok(`GET /api/status detachedTunnels is well-formed (${s.body.detachedTunnels ? s.body.detachedTunnels.length : 'absent'})`);
+        } else {
+            bad('detachedTunnels field shape', s.body);
+        }
     }
 
     // Cleanup stray profiles created by this run (paranoid).

@@ -1,6 +1,6 @@
 # GeekEZ Browser · REST API 参考
 
-> 适用版本：**v1.7.14**
+> 适用版本：**v1.7.15**
 > 更新日期：2026-07-07
 
 GeekEZ Browser 提供一套本地 HTTP REST API，可通过脚本对指纹环境进行增删改查、启动、停止、备份等操作。
@@ -71,6 +71,17 @@ curl http://127.0.0.1:12138/api/status
         "b7d3f9e2-8c4a-4d1e-9f2b-3a5c7d9e1f8b"
     ],
     "count": 2
+}
+```
+
+**v1.7.15 新增字段** `detachedTunnels`（可选）：`POST /api/profiles/:id/stop?keepProxy=true` 停掉浏览器但保留 sing-box 隧道后，profile 会**从 `running` 里剔除**，并**加进** `detachedTunnels` 数组。默认停止（`killProxy=true`）后此条目才彻底移除。字段只在有内容时出现，happy path 响应形状不变。
+
+```json
+{
+    "success": true,
+    "running": [ "a1b2c3d4-..." ],
+    "count": 1,
+    "detachedTunnels": [ "b7d3f9e2-..." ]
 }
 ```
 
@@ -850,6 +861,9 @@ curl "http://127.0.0.1:12138/api/open/TikTok-US-01?stream=false&clean=true"
 |---|---|---|
 | `verify` | `off` | `browser` = 开启浏览器级验证 |
 | `verifyUrl` | `https://www.gstatic.com/generate_204` | 覆盖探测目标 |
+| `verifyStrict` | `true` | `false` = 允许 3xx 通过（用于会重定向的探测 URL，如 HTTP→HTTPS 升级）。默认拒绝 3xx —— 因为**热点门户** (hotel wifi 302 → login page) 是最常见的假阳性。响应会加 `verify.redirected: true` 标识 |
+
+**v1.7.15 新增**：3xx 响应现在默认被判为**失败**（redirect / possible captive portal）。如果你的探测目标合法地会重定向，加 `?verifyStrict=false`。
 
 **验证失败时**：**profile 会被自动 stop**（避免留着一个坏 profile），返回 HTTP 500：
 ```json
@@ -900,24 +914,24 @@ curl -N "http://127.0.0.1:12138/api/open/TikTok-US-01?stream=true&verify=browser
 
 **读取**：`GET /api/settings` 返回整个设置快照（包括 preProxies / subscriptions / userExtensions 等）。
 
-**部分更新**（PATCH）：只接受下面这些**标量**字段。数组类字段（preProxies / subscriptions / userExtensions）有专门的 UI 管理入口，PATCH 会拒绝（400）：
+**部分更新**（PATCH）：只接受下面这些**标量**字段，**每个都有类型/取值校验**（v1.7.15+）。数组类字段（preProxies / subscriptions / userExtensions）有专门的 UI 管理入口，PATCH 拒绝（400）。类型不对（如 `apiPort:"abc"`）或超出取值范围（如 `apiPort:22`）也返回 400 而不是持久化到磁盘。
 
-| 字段 | 类型 | 说明 |
-|---|---|---|
-| `enableRemoteDebugging` | boolean | 全局远程调试开关 |
-| `enableCustomArgs` | boolean | 允许 profile 使用 customArgs |
-| `enableUaModify` / `enableUaWebglModify` | boolean | UA/WebGL 修改 |
-| `enablePreProxy` | boolean | 全局前置代理开关 |
-| `enableApiServer` | boolean | 本 API 开关（**关掉会立刻中断本连接**） |
-| `enableWatermark` | boolean | 水印 |
-| `closeBehavior` | string | `tray` / `exit` |
-| `lang` | string | `en` / `cn` |
-| `notify` | boolean | 通知 |
-| `apiPort` | number | API 端口（改动**立即生效**，注意连接会断） |
-| `watermarkStyle` | string | 水印样式 |
-| `ipInfoProvider` | string | `ipinfo` / `ipwho` / `ipapi` |
-| `mode` | string | 代理模式 `single`/`failover` |
-| `selectedId` | string | UI 侧选中的 profile ID |
+| 字段 | 类型 | 取值 / 校验 | 生效时机 |
+|---|---|---|---|
+| `enableRemoteDebugging` | boolean | — | 下次 profile 启动 |
+| `enableCustomArgs` | boolean | — | 下次启动 |
+| `enableUaModify` / `enableUaWebglModify` | boolean | — | 下次启动 |
+| `enablePreProxy` | boolean | — | 下次启动 |
+| `enableApiServer` | boolean | — | **需应用重启** |
+| `enableWatermark` | boolean | — | 下次启动 |
+| `closeBehavior` | string | `tray` \| `exit` | 即刻 |
+| `lang` | string | `en` \| `cn` | 即刻（tray） |
+| `notify` | boolean | — | 即刻 |
+| `apiPort` | number | 1024-65535 整数 | **需应用重启** |
+| `watermarkStyle` | string | — | 下次启动 |
+| `ipInfoProvider` | string | `ipinfo` \| `ipwho` \| `ipapi` | 下次启动 |
+| `mode` | string | `single` \| `balance` \| `failover` | 即刻 |
+| `selectedId` | string \| null | 非空字符串或 null | 即刻 |
 
 ```bash
 # 打开远程调试
@@ -932,6 +946,16 @@ curl -X PATCH http://127.0.0.1:12138/api/settings \
     "success": true,
     "updated": { "enableRemoteDebugging": true },
     "settings": { ... }
+}
+```
+
+**新增字段 `restartRequired: true`**：改动 `enableApiServer` 或 `apiPort` 时响应会附加此字段，提示脚本用户"改动已持久化，但当前 API server 需要重启应用后才切换"（v1.7.15 修正之前"立即生效"的误导性文档）：
+```json
+{
+    "success": true,
+    "updated": { "apiPort": 12139 },
+    "settings": { ... },
+    "restartRequired": true
 }
 ```
 

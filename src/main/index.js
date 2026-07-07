@@ -531,17 +531,20 @@ async function verifyBrowserThroughProxy(debugPort, options = {}) {
                 if (options.strictStatus && status !== expectedStatus) {
                     return finish(new Error(`expected HTTP ${expectedStatus}, got ${status}`));
                 }
-                // E5 fix: 3xx redirects can be a captive-portal false
-                // positive (e.g. hotel wifi 302 → login page). We only
-                // report success for 2xx now. Redirects are surfaced as
-                // errors; the caller can override with strictStatus if
-                // they know their proxy chain does a legitimate redirect
-                // (e.g. custom probe URL that HTTP → HTTPS).
+                // 2xx = clean success.
+                // 3xx = captive-portal false-positive risk (hotel wifi
+                //   302 → login page). Rejected by default; callers
+                //   with legitimately redirecting probes can pass
+                //   allowRedirects:true (mapped from ?verifyStrict=false
+                //   on the API surface).
                 if (status >= 200 && status < 300) {
                     return finish(null, { ok: true, status, latencyMs, target: probeUrl });
                 }
                 if (status >= 300 && status < 400) {
-                    return finish(new Error(`proxy returned HTTP ${status} (redirect — possible captive portal or upstream config)`));
+                    if (options.allowRedirects) {
+                        return finish(null, { ok: true, status, latencyMs, target: probeUrl, redirected: true });
+                    }
+                    return finish(new Error(`proxy returned HTTP ${status} (redirect — possible captive portal; pass verifyStrict=false to accept)`));
                 }
                 return finish(new Error(`proxy returned HTTP ${status}`));
             }
@@ -628,7 +631,8 @@ async function streamApiOpenProfile({ req, res, params, settings, profile, resol
                 : '正在验证浏览器代理连通性...');
             try {
                 const probeUrl = params.get('verifyUrl') || 'https://www.gstatic.com/generate_204';
-                const verifyRes = await verifyBrowserThroughProxy(launchedPort, { probeUrl });
+                const relax3xx = ['false', '0', 'no'].includes(params.get('verifyStrict') || '');
+                const verifyRes = await verifyBrowserThroughProxy(launchedPort, { probeUrl, allowRedirects: relax3xx });
                 streamSender.writeLine(lang === 'en'
                     ? `Browser verify OK: ${probeUrl} (${verifyRes.latencyMs}ms)`
                     : `浏览器代理验证通过：${probeUrl}（${verifyRes.latencyMs}ms）`);
@@ -2010,6 +2014,24 @@ async function allocateDebugPortIfNeeded(settings, requestedPort, getUsedPorts) 
     }
 }
 
+// Wrap an "allocated port → persist to DB" flow so the reservation
+// (added inside allocateDebugPortIfNeeded to close the concurrency race)
+// gets released if the DB write throws. Without this the port is
+// leaked until process restart. Idempotent — safe to call even if
+// persistence succeeded (the reservation is superseded by the DB
+// entry via getUsedDebugPorts).
+async function persistProfileWithPortRollback(newProfile, persistFn) {
+    const port = normalizeDebugPort(newProfile?.debugPort);
+    try {
+        return await persistFn();
+    } catch (e) {
+        if (port && reservedPorts.has(port)) {
+            reservedPorts.delete(port);
+        }
+        throw e;
+    }
+}
+
 // True if we can bind `port` on `host` right now — used at launch to
 // detect when a persisted debug port was grabbed by another app while
 // GeekEZ wasn't running (an IDE, another Chromium instance, etc.).
@@ -2220,7 +2242,7 @@ async function handleApiRequest(method, pathname, body, params, context = {}) {
     if (method === 'POST' && pathname === '/api/profiles') {
         const data = parseApiBody(body);
         const newProfile = await buildProfileFromInput(data, settings);
-        await profileDB.insert(newProfile);
+        await persistProfileWithPortRollback(newProfile, () => profileDB.insert(newProfile));
         notifyUIRefresh();
         return {
             success: true,
@@ -2238,7 +2260,7 @@ async function handleApiRequest(method, pathname, body, params, context = {}) {
         }
         const data = parseApiBody(body);
         const rebuilt = await buildProfileFromInput(data, settings, profile);
-        await profileDB.update(profile.id, rebuilt);
+        await persistProfileWithPortRollback(rebuilt, () => profileDB.update(profile.id, rebuilt));
         notifyUIRefresh();
         return {
             success: true,
@@ -2394,7 +2416,14 @@ async function handleApiRequest(method, pathname, body, params, context = {}) {
             }
             try {
                 const probeUrl = params.get('verifyUrl') || 'https://www.gstatic.com/generate_204';
-                const verifyRes = await verifyBrowserThroughProxy(launchedPort, { probeUrl });
+                // verifyStrict=false relaxes the 3xx rejection back to
+                // "any 2xx/3xx counts as reachable" — for probe URLs
+                // that legitimately redirect (HTTP → HTTPS upgrade,
+                // shortened URLs, etc.). Default remains strict-2xx
+                // because captive portals are the more common false-
+                // positive.
+                const relax3xx = ['false', '0', 'no'].includes(params.get('verifyStrict') || '');
+                const verifyRes = await verifyBrowserThroughProxy(launchedPort, { probeUrl, allowRedirects: relax3xx });
                 launchedPayload.verify = verifyRes;
             } catch (e) {
                 // Verify failed: tear down so the caller isn't left with
@@ -2495,7 +2524,7 @@ async function handleApiRequest(method, pathname, body, params, context = {}) {
         delete payload.createdAt;
 
         const newProfile = await buildProfileFromInput(payload, settings);
-        await profileDB.insert(newProfile);
+        await persistProfileWithPortRollback(newProfile, () => profileDB.insert(newProfile));
         notifyUIRefresh();
         return {
             success: true,
@@ -4404,14 +4433,14 @@ ipcMain.handle('update-profile', async (event, updatedProfile) => {
 
     const settings = fs.existsSync(SETTINGS_FILE) ? await fs.readJson(SETTINGS_FILE) : {};
     const rebuilt = await buildProfileFromInput(updatedProfile, settings, existing);
-    await profileDB.update(updatedProfile.id, rebuilt);
+    await persistProfileWithPortRollback(rebuilt, () => profileDB.update(updatedProfile.id, rebuilt));
     notifyUIRefresh();
     return true;
 });
 ipcMain.handle('save-profile', async (event, data) => {
     const settings = fs.existsSync(SETTINGS_FILE) ? await fs.readJson(SETTINGS_FILE) : {};
     const newProfile = await buildProfileFromInput(data, settings);
-    await profileDB.insert(newProfile);
+    await persistProfileWithPortRollback(newProfile, () => profileDB.insert(newProfile));
     notifyUIRefresh();
     return newProfile;
 });
