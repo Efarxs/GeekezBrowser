@@ -192,9 +192,11 @@ function createApiServer(port) {
         const pathname = url.pathname;
         const method = req.method;
 
-        // Parse body for POST/PUT
+        // Parse body for methods that carry one. PATCH was silently
+        // omitted here — it fell through as '' and every PATCH handler
+        // then thought the body was empty.
         let body = '';
-        if (method === 'POST' || method === 'PUT') {
+        if (method === 'POST' || method === 'PUT' || method === 'PATCH') {
             body = await new Promise(resolve => {
                 let data = '';
                 req.on('data', chunk => data += chunk);
@@ -381,7 +383,7 @@ function getApiLaunchUiSender() {
     return null;
 }
 
-async function streamApiOpenProfile({ req, res, params, settings, profile, resolveRemoteDebugPortForProfile, launchOverrideArgs = [] }) {
+async function streamApiOpenProfile({ req, res, params, settings, profile, resolveRemoteDebugPortForProfile, launchOverrideArgs = [], useCleanProfile = false }) {
     const lang = resolveApiPreferredLang(params, settings);
     const profileName = profile.name || profile.id || (lang === 'en' ? 'Profile' : '环境');
     const streamSender = createApiOpenStreamSender(req, res, profileName, lang);
@@ -413,7 +415,7 @@ async function streamApiOpenProfile({ req, res, params, settings, profile, resol
             { sender },
             profile.id,
             lang,
-            { launchArgsOverride: launchOverrideArgs }
+            { launchArgsOverride: launchOverrideArgs, useCleanProfile }
         );
 
         streamSender.writeLine(lang === 'en'
@@ -2053,11 +2055,23 @@ async function handleApiRequest(method, pathname, body, params, context = {}) {
     }
 
     // GET /api/open/:idOrName - Launch profile
+    // Query params:
+    //   ?args=--flag=value  (repeatable) — extra Chromium args for this launch
+    //   ?stream=true|false  — text/plain progress stream vs JSON summary
+    //   ?lang=en|cn         — progress-message language
+    //   ?clean=true|false   — launch with a throwaway user-data dir
+    //                          (matches UI's "Launch with clean profile").
+    //                          Strips existing debug port / extensions /
+    //                          session-restore state for this run only.
     const openMatch = pathname.match(/^\/api\/open\/([^\/]+)$/);
     if (method === 'GET' && openMatch) {
         const profile = await findProfile(decodeURIComponent(openMatch[1]));
         if (!profile) return { status: 404, data: { success: false, error: 'Profile not found' } };
         const launchOverrideArgs = resolveApiLaunchOverrideArgs(params);
+        const useCleanProfile = (() => {
+            const v = params.get('clean');
+            return v === 'true' || v === '1' || v === 'yes';
+        })();
         if (shouldStreamApiOpenRequest(context.req, params) && context.req && context.res) {
             return await streamApiOpenProfile({
                 req: context.req,
@@ -2066,7 +2080,8 @@ async function handleApiRequest(method, pathname, body, params, context = {}) {
                 settings,
                 profile,
                 resolveRemoteDebugPortForProfile,
-                launchOverrideArgs
+                launchOverrideArgs,
+                useCleanProfile
             });
         }
         if (activeProcesses[profile.id]) {
@@ -2096,7 +2111,7 @@ async function handleApiRequest(method, pathname, body, params, context = {}) {
             launchEvent,
             profile.id,
             lang,
-            { launchArgsOverride: launchOverrideArgs }
+            { launchArgsOverride: launchOverrideArgs, useCleanProfile }
         );
         const launchedPort = await resolveRemoteDebugPortForProfile(profile.id, profile.debugPort);
         const launchedPayload = {
@@ -2113,16 +2128,290 @@ async function handleApiRequest(method, pathname, body, params, context = {}) {
     }
 
     // POST /api/profiles/:idOrName/stop - Stop profile
+    // Query params (all optional):
+    //   ?keepProxy=true       — close browser only, leave sing-box tunnel
+    //                            running (rare; useful when a script wants
+    //                            to reuse the socks port for another tool).
+    //   ?closeBrowser=false   — kill only the proxy, keep chrome alive
+    //                            (opposite of keepProxy — very unusual;
+    //                            mostly for debugging tunnel drops).
+    // Default (both unset) matches the UI: kill both.
     const stopMatch = pathname.match(/^\/api\/profiles\/([^\/]+)\/stop$/);
     if (method === 'POST' && stopMatch) {
         const profile = await findProfile(decodeURIComponent(stopMatch[1]));
         if (!profile) return { status: 404, data: { success: false, error: 'Profile not found' } };
-        const stopped = await stopRunningProfile(profile.id);
+        if (!activeProcesses[profile.id]) {
+            return { status: 404, data: { success: false, error: 'Profile not running' } };
+        }
+        const parseBoolParam = (key, def) => {
+            const v = params.get(key);
+            if (v === null || v === undefined) return def;
+            return v === 'true' || v === '1' || v === 'yes';
+        };
+        const keepProxy = parseBoolParam('keepProxy', false);
+        const closeBrowser = parseBoolParam('closeBrowser', true);
+        if (!closeBrowser && keepProxy) {
+            return { status: 400, data: { success: false, error: 'closeBrowser=false and keepProxy=true would be a no-op' } };
+        }
+        const stopped = await cleanupProfileRuntime(profile.id, {
+            closeBrowser,
+            killProxy: !keepProxy,
+            refreshMenu: true,
+            broadcast: true
+        });
         if (!stopped) return { status: 404, data: { success: false, error: 'Profile not running' } };
-        return { success: true, message: 'Profile stopped' };
+        return {
+            success: true,
+            message: keepProxy
+                ? 'Browser stopped, proxy tunnel kept alive'
+                : (!closeBrowser ? 'Proxy tunnel killed, browser kept alive' : 'Profile stopped')
+        };
     }
 
+    // POST /api/profiles/:idOrName/duplicate - Clone a profile
+    // Body (all optional):
+    //   { "name": "new-name", "tags": [...], "proxyStr": "...", "notes": "..." }
+    // What's carried over from the source: fingerprint (platform, timezone,
+    //   language, browser identity, screen, hardware, disabledSpoofing),
+    //   customArgs, kernelVersion, preProxyOverride, resetOnLaunch.
+    // What's fresh in the copy:
+    //   · new UUID → new fingerprint-chromium seed → different canvas/audio/
+    //     WebGL hashes on the wire (visible-identity distinction between
+    //     the two profiles at the kernel level).
+    //   · fresh debugPort (sequentially allocated, no reuse of the source's).
+    //   · unique name — default is "<source>-copy", auto-suffixed to
+    //     "<source>-copy-02" etc. if that name is taken.
+    const dupMatch = pathname.match(/^\/api\/profiles\/([^\/]+)\/duplicate$/);
+    if (method === 'POST' && dupMatch) {
+        const source = await findProfile(decodeURIComponent(dupMatch[1]));
+        if (!source) return { status: 404, data: { success: false, error: 'Profile not found' } };
+        const overrides = parseApiBody(body) || {};
 
+        // Build a fresh payload: source's config + user overrides. Strip
+        // id/createdAt/debugPort so buildProfileFromInput assigns fresh
+        // ones. Rip the source fingerprint's identity-shifting fields out
+        // (userAgentMetadata / secChUa are auto-regenerated from
+        // browserType+browserMajorVersion).
+        const sourceFp = source.fingerprint || {};
+        const clonedFp = { ...sourceFp };
+        delete clonedFp.userAgentMetadata;
+        delete clonedFp.secChUa;
+
+        const payload = {
+            ...source,
+            ...overrides,
+            name: overrides.name || `${source.name}-copy`,
+            debugPort: null,
+            fingerprint: {
+                ...clonedFp,
+                ...(overrides.fingerprint || {})
+            }
+        };
+        delete payload.id;
+        delete payload.createdAt;
+
+        const newProfile = await buildProfileFromInput(payload, settings);
+        await profileDB.insert(newProfile);
+        notifyUIRefresh();
+        return {
+            success: true,
+            source: { id: source.id, name: source.name },
+            profile: newProfile,
+            remoteDebugPort: settings.enableRemoteDebugging ? newProfile.debugPort : null
+        };
+    }
+
+    // GET /api/profiles/:idOrName/runtime - Live runtime state
+    // Cheaper than GET /api/status when a script only cares about one
+    // profile. Returns whether it's running / launching / crashed, its
+    // actually-bound debug port (may differ from persisted), and the
+    // last-crash message if any.
+    const runtimeMatch = pathname.match(/^\/api\/profiles\/([^\/]+)\/runtime$/);
+    if (method === 'GET' && runtimeMatch) {
+        const profile = await findProfile(decodeURIComponent(runtimeMatch[1]));
+        if (!profile) return { status: 404, data: { success: false, error: 'Profile not found' } };
+        const running = !!activeProcesses[profile.id];
+        const launching = launchingProfiles.has(profile.id);
+        const boundPort = await resolveRemoteDebugPortForProfile(profile.id, profile.debugPort);
+        return {
+            success: true,
+            profileId: profile.id,
+            name: profile.name,
+            running,
+            launching,
+            'remote port': boundPort || null,
+            persistedDebugPort: profile.debugPort || null,
+            kernelVersion: profile.kernelVersion || null
+        };
+    }
+
+    // Kernel management endpoints — expose the same operations the UI's
+    // Settings → 🧠 Kernels tab has. All ops go directly through
+    // kernel/manager.js; the IPC bridge's activeInstall token isn't
+    // shared (the HTTP install runs blocking to completion, no piggy-
+    // back).
+
+    // GET /api/kernels — list installed + optionally available upstream
+    // Params:
+    //   ?available=true      — also include upstream (GitHub) releases
+    //   ?measureSize=true    — walk each install dir and report byte size
+    if (method === 'GET' && pathname === '/api/kernels') {
+        const withAvailable = ['true', '1', 'yes'].includes(params.get('available') || '');
+        const measureSize = ['true', '1', 'yes'].includes(params.get('measureSize') || '');
+        try {
+            const installed = await kernelManager.listInstalled({ measureSize });
+            const response = {
+                success: true,
+                pinned: kernelManager.PINNED_VERSION,
+                installed
+            };
+            if (withAvailable) {
+                try {
+                    const available = await kernelManager.listAvailable({});
+                    response.available = available;
+                } catch (e) {
+                    response.availableError = e.message;
+                }
+            }
+            return response;
+        } catch (e) {
+            return { status: 500, data: { success: false, error: e.message } };
+        }
+    }
+
+    // POST /api/kernels/:version — install a specific kernel version
+    // Blocks until download+extract finishes (can be minutes for a
+    // cold CN mirror). Progress is NOT streamed here to keep the
+    // response shape simple — subscribe to the IPC 'kernel:progress'
+    // event or open the UI panel if you want real-time bytes.
+    const kernelInstallMatch = pathname.match(/^\/api\/kernels\/([^\/]+)$/);
+    if (method === 'POST' && kernelInstallMatch) {
+        const version = decodeURIComponent(kernelInstallMatch[1]);
+        if (!/^\d+\.\d+\.\d+\.\d+$/.test(version)) {
+            return { status: 400, data: { success: false, error: 'Invalid version format (expected X.Y.Z.W)' } };
+        }
+        try {
+            const status = await kernelManager.checkInstalled(version);
+            if (status.installed) {
+                return { success: true, alreadyInstalled: true, version, execPath: status.execPath };
+            }
+            const result = await kernelManager.installVersion(version, {});
+            return { success: true, alreadyInstalled: false, version, ...result };
+        } catch (e) {
+            return { status: 500, data: { success: false, error: e.message } };
+        }
+    }
+
+    // DELETE /api/kernels/:version — uninstall a specific kernel
+    // Refuses to remove the pinned version (that's the app-default the
+    // profile picker falls back to) or a version currently used by a
+    // running profile.
+    if (method === 'DELETE' && kernelInstallMatch) {
+        const version = decodeURIComponent(kernelInstallMatch[1]);
+        if (version === kernelManager.PINNED_VERSION) {
+            return { status: 409, data: { success: false, error: 'Cannot uninstall the pinned (default) kernel version' } };
+        }
+        // Reject if a running profile pins this version — otherwise its
+        // chrome.exe path suddenly disappears.
+        try {
+            const runningIds = Object.keys(activeProcesses);
+            for (const id of runningIds) {
+                const p = await profileDB.getById(id);
+                if (p && p.kernelVersion === version) {
+                    return { status: 409, data: { success: false, error: `Kernel is used by running profile "${p.name}"` } };
+                }
+            }
+        } catch (_) { /* soft check */ }
+        try {
+            const result = await kernelManager.uninstallVersion(version);
+            return { success: true, version, ...result };
+        } catch (e) {
+            return { status: 500, data: { success: false, error: e.message } };
+        }
+    }
+
+    // GET /api/settings — return the whole persisted settings snapshot.
+    // No secrets to redact (proxies with credentials are already
+    // reachable via GET /api/profiles for anyone who can hit the API).
+    if (method === 'GET' && pathname === '/api/settings') {
+        try {
+            const s = fs.existsSync(SETTINGS_FILE)
+                ? normalizeSettingsSnapshot(await fs.readJson(SETTINGS_FILE))
+                : normalizeSettingsSnapshot({});
+            return { success: true, settings: s };
+        } catch (e) {
+            return { status: 500, data: { success: false, error: e.message } };
+        }
+    }
+
+    // PATCH /api/settings — partial merge into the settings file.
+    // Only a whitelist of scalar toggles and simple values is writable
+    // from HTTP; complex arrays (preProxies, subscriptions,
+    // userExtensions) have their own management surface in the UI and
+    // are too easy to nuke with a bad PATCH body. Attempts to patch a
+    // non-writable field return 400 with the writable list.
+    if (method === 'PATCH' && pathname === '/api/settings') {
+        const patch = parseApiBody(body) || {};
+        const WRITABLE = [
+            'enableRemoteDebugging',
+            'enableCustomArgs',
+            'enableUaWebglModify',
+            'enableUaModify',
+            'enablePreProxy',
+            'enableApiServer',
+            'enableWatermark',
+            'closeBehavior',
+            'lang',
+            'notify',
+            'apiPort',
+            'watermarkStyle',
+            'ipInfoProvider',
+            'mode',
+            'selectedId'
+        ];
+        const rejected = Object.keys(patch).filter(k => !WRITABLE.includes(k));
+        if (rejected.length > 0) {
+            return { status: 400, data: {
+                success: false,
+                error: `non-writable field(s): ${rejected.join(', ')}. Writable via PATCH: ${WRITABLE.join(', ')}`
+            }};
+        }
+        if (Object.keys(patch).length === 0) {
+            return { status: 400, data: { success: false, error: 'empty body' } };
+        }
+        try {
+            const current = fs.existsSync(SETTINGS_FILE) ? await fs.readJson(SETTINGS_FILE) : {};
+            const merged = { ...current, ...patch };
+            await fs.writeJson(SETTINGS_FILE, merged);
+            refreshTrayMenu().catch(() => { });
+            return { success: true, updated: patch, settings: normalizeSettingsSnapshot(merged) };
+        } catch (e) {
+            return { status: 500, data: { success: false, error: e.message } };
+        }
+    }
+
+    // POST /api/proxy/latency — TCP + handshake latency probe against a
+    // proxy URL. Body: { "proxyStr": "socks5://..." } or
+    // { "profileId": "<uuid or name>" } (looks up the profile's proxy).
+    // Response: { success, latencyMs, error? }.
+    if (method === 'POST' && pathname === '/api/proxy/latency') {
+        const parsed = parseApiBody(body) || {};
+        let proxyStr = parsed.proxyStr;
+        if (!proxyStr && parsed.profileId) {
+            const p = await findProfile(String(parsed.profileId));
+            if (!p) return { status: 404, data: { success: false, error: 'Profile not found' } };
+            proxyStr = p.proxyStr;
+        }
+        if (!proxyStr) {
+            return { status: 400, data: { success: false, error: 'Body needs { proxyStr } or { profileId }' } };
+        }
+        try {
+            const result = await runProxyLatencyTest(proxyStr);
+            return { success: true, ...result };
+        } catch (e) {
+            return { status: 500, data: { success: false, error: e.message } };
+        }
+    }
 
     // GET /api/export/all?password=xxx - Export full backup (v2)
     if (method === 'GET' && pathname === '/api/export/all') {
