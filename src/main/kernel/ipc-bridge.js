@@ -87,7 +87,7 @@ function runEnsureInstall(version) {
     return installPromise;
 }
 
-function registerKernelIpc({ profileDB, getActiveProcesses }) {
+function registerKernelIpc({ profileDB, getActiveProcesses, getLaunchingProfiles }) {
     ipcMain.handle('kernel:get-status', async () => {
         try {
             const status = await kernelManager.checkInstalled(kernelManager.PINNED_VERSION);
@@ -187,14 +187,21 @@ function registerKernelIpc({ profileDB, getActiveProcesses }) {
         if (!version || version === kernelManager.PINNED_VERSION) {
             return { ok: false, error: 'cannot uninstall pinned version' };
         }
-        // Refuse if a running profile currently uses this kernel — otherwise
-        // the running chrome.exe suddenly points at a missing directory.
+        // Refuse if a running OR *launching* profile uses this kernel
+        // (T7 fix). Old code only checked activeProcesses — a launch that
+        // had already resolved kernelPath but hadn't yet spawned Chrome
+        // was invisible. Uninstall could rip the install dir out from
+        // under it. Now we also consult launchingProfiles.
         try {
             const activeProcesses = getActiveProcesses ? getActiveProcesses() : {};
-            const runningIds = Object.keys(activeProcesses);
-            if (runningIds.length > 0) {
+            const launchingProfiles = getLaunchingProfiles ? getLaunchingProfiles() : new Set();
+            const idsToCheck = new Set([
+                ...Object.keys(activeProcesses),
+                ...Array.from(launchingProfiles)
+            ]);
+            if (idsToCheck.size > 0) {
                 const conflicts = [];
-                for (const id of runningIds) {
+                for (const id of idsToCheck) {
                     const p = await profileDB.getById(id);
                     if (p && p.kernelVersion === version) {
                         conflicts.push(p.name || id);
@@ -203,7 +210,7 @@ function registerKernelIpc({ profileDB, getActiveProcesses }) {
                 if (conflicts.length > 0) {
                     return {
                         ok: false,
-                        error: `kernel is used by running profile(s): ${conflicts.join(', ')}`
+                        error: `kernel is used by running or launching profile(s): ${conflicts.join(', ')}`
                     };
                 }
             }

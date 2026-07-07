@@ -302,6 +302,24 @@ async function main() {
         }
     }
 
+    // ── T6: body-size cap (50 MB) returns 413
+    {
+        // Send ~51 MB — just over the 50 MB limit
+        const bigJson = JSON.stringify({ padding: 'x'.repeat(51 * 1024 * 1024) });
+        const res = await fetch(`${API}/api/settings`, {
+            method: 'PATCH',
+            headers: { 'Content-Type': 'application/json' },
+            body: bigJson
+        });
+        if (res.status === 413) {
+            ok('PATCH /api/settings 51 MB body → 413 (body-size cap)');
+        } else {
+            let body = null;
+            try { body = await res.json(); } catch { }
+            bad('body-size cap not enforced', { status: res.status, body });
+        }
+    }
+
     // ── A3: keepProxy stop reports profile in detachedTunnels (needs a launched profile).
     // Verify contract shape rather than the full detach cycle — the plain
     // stop test above already covered the keepProxy stop message.

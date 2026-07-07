@@ -164,6 +164,15 @@ const EXTENSION_STORE_CATALOG = [
 
 let activeProcesses = {};
 let launchingProfiles = new Set();
+// Explicit signal that a user-initiated stop is in flight. Historically
+// `wasUserInitiated = !activeProcesses[profileId]` did double duty as
+// "user asked to stop" AND "we never fully attached this launch" — the
+// second interpretation misclassifies real crashes that happen in the
+// ~15ms window between browserProcess spawn and activeProcesses[id]={...}
+// assignment as user-initiated, silently swallowing the crash toast. Now
+// stop paths add to this Set BEFORE clearing activeProcesses, and the
+// exit handler consults it directly.
+let userStopRequested = new Set();
 let apiServer = null;
 let apiServerRunning = false;
 let mainWindow = null; // Global reference for API-to-UI communication
@@ -195,13 +204,42 @@ function createApiServer(port) {
         // Parse body for methods that carry one. PATCH was silently
         // omitted here — it fell through as '' and every PATCH handler
         // then thought the body was empty.
+        //
+        // 50 MB cap (T6 fix). Handlers that don't need a body still had
+        // every byte buffered by the read loop; a client sending 500 MB
+        // would OOM the main process before the handler even ran.
+        //
+        // Why 50 MB not 5: encrypted full-backup imports (/api/import)
+        // are base64-encoded, so a user with 100+ profiles including
+        // cookies + passwords + browser data can reasonably approach
+        // 30-40 MB. 50 MB gives headroom without letting adversarial
+        // clients OOM us.
+        const MAX_BODY_BYTES = 50 * 1024 * 1024;
         let body = '';
+        let bodyTooLarge = false;
         if (method === 'POST' || method === 'PUT' || method === 'PATCH') {
             body = await new Promise(resolve => {
                 let data = '';
-                req.on('data', chunk => data += chunk);
+                let bytes = 0;
+                req.on('data', chunk => {
+                    if (bodyTooLarge) return; // already flagged, keep draining
+                    bytes += chunk.length;
+                    if (bytes > MAX_BODY_BYTES) {
+                        bodyTooLarge = true;
+                        return;
+                    }
+                    data += chunk;
+                });
                 req.on('end', () => resolve(data));
             });
+            if (bodyTooLarge) {
+                res.writeHead(413, { 'Content-Type': 'application/json' });
+                res.end(JSON.stringify({
+                    success: false,
+                    error: `Request body exceeds ${MAX_BODY_BYTES / 1024 / 1024} MB limit`
+                }));
+                return;
+            }
         }
 
         try {
@@ -2466,6 +2504,11 @@ async function handleApiRequest(method, pathname, body, params, context = {}) {
         if (!closeBrowser && keepProxy) {
             return { status: 400, data: { success: false, error: 'closeBrowser=false and keepProxy=true would be a no-op' } };
         }
+        // Mark user-initiated so the exit handler doesn't fire a crash
+        // toast for the browser we just asked Chrome to close (T8 fix).
+        // Only when we're actually killing the browser — keepProxy paths
+        // that don't touch browserPid don't need the flag.
+        if (closeBrowser) userStopRequested.add(profile.id);
         const stopped = await cleanupProfileRuntime(profile.id, {
             closeBrowser,
             killProxy: !keepProxy,
@@ -2631,14 +2674,19 @@ async function handleApiRequest(method, pathname, body, params, context = {}) {
         if (version === kernelManager.PINNED_VERSION) {
             return { status: 409, data: { success: false, error: 'Cannot uninstall the pinned (default) kernel version' } };
         }
-        // Reject if a running profile pins this version — otherwise its
-        // chrome.exe path suddenly disappears.
+        // Reject if any RUNNING OR LAUNCHING profile pins this version (T7
+        // fix). Old code only iterated activeProcesses; a launch that had
+        // resolved its kernelPath but hadn't spawned chrome.exe yet slipped
+        // through and got its install dir yanked out mid-launch.
         try {
-            const runningIds = Object.keys(activeProcesses);
-            for (const id of runningIds) {
+            const idsToCheck = new Set([
+                ...Object.keys(activeProcesses),
+                ...Array.from(launchingProfiles)
+            ]);
+            for (const id of idsToCheck) {
                 const p = await profileDB.getById(id);
                 if (p && p.kernelVersion === version) {
-                    return { status: 409, data: { success: false, error: `Kernel is used by running profile "${p.name}"` } };
+                    return { status: 409, data: { success: false, error: `Kernel is used by running or launching profile "${p.name || id}"` } };
                 }
             }
         } catch (_) { /* soft check */ }
@@ -3266,6 +3314,13 @@ async function cleanupProfileRuntime(profileId, options = {}) {
         // cleanupProfileRuntime again and takes the else-branch.
     } else {
         delete activeProcesses[profileId];
+        // Also clear the userStopRequested marker when the profile is
+        // fully torn down (T8 stale-entry defense). If cleanup ran
+        // because the browser was already dead by the time /stop
+        // arrived, the exit handler never fires and never consumes the
+        // marker — leaving it stale would suppress a genuine crash on
+        // the profile's next launch.
+        userStopRequested.delete(profileId);
     }
     launchingProfiles.delete(profileId);
 
@@ -3348,6 +3403,11 @@ function startProfileRuntimeWatchdog() {
 
 async function stopRunningProfile(profileId, options = {}) {
     const { refreshMenu = true } = options;
+    // Mark as user-initiated BEFORE we kill anything, so the browser
+    // exit handler (fires asynchronously ~200ms later on Chrome
+    // teardown) reads the marker correctly and suppresses the crash
+    // toast (T8 fix).
+    userStopRequested.add(profileId);
     return await cleanupProfileRuntime(profileId, {
         closeBrowser: true,
         killProxy: true,
@@ -4503,7 +4563,11 @@ ipcMain.handle('delete-profile', async (event, id) => {
 // getter for the "kernel-in-use" uninstall guard). Bridge also owns the
 // activeInstall token; the launch flow reads it via getActiveInstall()
 // below.
-registerKernelIpc({ profileDB, getActiveProcesses: () => activeProcesses });
+registerKernelIpc({
+    profileDB,
+    getActiveProcesses: () => activeProcesses,
+    getLaunchingProfiles: () => launchingProfiles
+});
 
 // -------------------------------------------------------------------------
 
@@ -6370,11 +6434,14 @@ const launchProfileHandler = async (event, profileId, preferredLang, launchOptio
                 signal,
                 stderrTail: stderrTail.slice(-500)
             });
-            // `activeProcesses[profileId]` being set at exit time means the
-            // shutdown wasn't user-initiated (Stop / Quit both delete it before
-            // killing). Everything else is either a real crash, an unexpected
-            // window-close-with-error, or the browser dying during launch.
-            const wasUserInitiated = !activeProcesses[profileId];
+            // T8 fix: `wasUserInitiated` now consults an explicit flag
+            // populated by stopRunningProfile / /stop endpoint, NOT the
+            // presence of activeProcesses[profileId]. The old heuristic
+            // misclassified real crashes in the ~15ms window between
+            // spawn() and the activeProcesses[id] = {...} assignment as
+            // user-initiated, silently swallowing the crash toast.
+            const wasUserInitiated = userStopRequested.has(profileId);
+            userStopRequested.delete(profileId);
             if (activeProcesses[profileId]) {
                 await cleanupProfileRuntime(profileId, {
                     closeBrowser: false,
