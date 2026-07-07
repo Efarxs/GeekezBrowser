@@ -6,7 +6,20 @@
         <span style="cursor:pointer" @click="uiStore.closeAddModal">✕</span>
       </div>
       <div class="modal-body">
-        <div class="form-grid">
+        <div class="tab-header" role="tablist">
+          <div
+            v-for="tab in tabs"
+            :key="tab.key"
+            class="tab-btn"
+            :class="{ active: activeTab === tab.key }"
+            role="tab"
+            :aria-selected="activeTab === tab.key"
+            @click="activeTab = tab.key"
+          >{{ $t(tab.i18n) }}</div>
+        </div>
+
+        <!-- Basic: identity + network + screen -->
+        <div v-show="activeTab === 'basic'" class="form-grid">
           <div class="field">
             <label class="label-tiny">{{ $t('profileName') }}</label>
             <input v-model="form.name" type="text" placeholder="Name" spellcheck="false" autocomplete="off">
@@ -50,7 +63,10 @@
               <input v-model.number="form.resH" type="number" placeholder="H">
             </div>
           </div>
+        </div>
 
+        <!-- Fingerprint: locale + browser identity + reset-on-launch -->
+        <div v-show="activeTab === 'fingerprint'" class="form-grid">
           <div class="field">
             <label class="label-tiny">{{ $t('timezoneLabel') }}</label>
             <div class="timezone-wrapper">
@@ -141,6 +157,15 @@
             </div>
           </label>
 
+          <div class="field field-full hint-text auto-fingerprint-hint">{{ $t('autoFingerprint') }}</div>
+        </div>
+
+        <!-- Advanced: kernel + custom args + disable spoofing -->
+        <div v-show="activeTab === 'advanced'" class="form-grid">
+          <div class="field field-full">
+            <KernelVersionSelect v-model="form.kernelVersion" />
+          </div>
+
           <div v-if="settings.enableCustomArgs" class="field field-full">
             <label class="label-tiny">{{ $t('customArgsLabel') }}</label>
             <textarea v-model="form.customArgs" rows="2" placeholder="--start-maximized" class="mono-text"></textarea>
@@ -157,12 +182,6 @@
             </div>
             <div class="hint-text">{{ $t('disableSpoofingHint') }}</div>
           </div>
-
-          <div class="field field-full">
-            <KernelVersionSelect v-model="form.kernelVersion" />
-          </div>
-
-          <div class="field field-full hint-text auto-fingerprint-hint">{{ $t('autoFingerprint') }}</div>
         </div>
       </div>
       <div class="modal-footer">
@@ -222,6 +241,13 @@ const disableSpoofCategories = [
   { value: 'clientrects', i18n: 'disableSpoofingClientRects' },
   { value: 'gpu', i18n: 'disableSpoofingGpu' }
 ];
+
+const tabs = [
+  { key: 'basic', i18n: 'tabBasic' },
+  { key: 'fingerprint', i18n: 'tabFingerprint' },
+  { key: 'advanced', i18n: 'tabAdvanced' }
+];
+const activeTab = ref('basic');
 
 function randomizeCustomUa() {
   const preset = parseBrowserVersionPreset(form.browserVersionPreset);
@@ -321,6 +347,7 @@ function handleGlobalClick(e) {
 // Watch for modal open to reset form
 watch(() => uiStore.addModalVisible, async (newVal) => {
   if (newVal) {
+    activeTab.value = 'basic';
     Object.assign(form, {
       name: '',
       tags: '',
@@ -441,11 +468,39 @@ async function handleSave() {
   width: min(720px, 92vw);
 }
 
+/* See EditProfileModal for the same block — kept in sync intentionally
+   because Vue scoped styles don't cross the two components. */
+.tab-header {
+  display: flex;
+  gap: 4px;
+  border-bottom: 1px solid var(--border);
+  margin-bottom: 14px;
+  flex-shrink: 0;
+}
+.tab-btn {
+  padding: 8px 18px;
+  font-size: 13px;
+  font-weight: 600;
+  color: var(--text-primary);
+  opacity: 0.55;
+  cursor: pointer;
+  border-bottom: 2px solid transparent;
+  margin-bottom: -1px;
+  transition: opacity 0.15s, border-color 0.15s;
+  user-select: none;
+  letter-spacing: 0.2px;
+}
+.tab-btn:hover { opacity: 0.85; }
+.tab-btn.active {
+  opacity: 1;
+  border-bottom-color: var(--accent);
+}
+
 .form-grid {
   display: grid;
   grid-template-columns: 1fr 1fr;
   column-gap: 14px;
-  row-gap: 12px;
+  row-gap: 14px;
 }
 .field {
   min-width: 0;
@@ -455,18 +510,18 @@ async function handleSave() {
 }
 
 .label-tiny {
-  font-size: 11px;
+  font-size: 13px;
   font-weight: 600;
-  opacity: 0.85;
+  opacity: 0.9;
   display: block;
-  margin-bottom: 4px;
+  margin-bottom: 5px;
   letter-spacing: 0.2px;
 }
 
 .hint-text {
-  font-size: 11px;
-  opacity: 0.55;
-  line-height: 1.45;
+  font-size: 12px;
+  opacity: 0.6;
+  line-height: 1.5;
   margin-top: 6px;
 }
 
@@ -475,13 +530,14 @@ async function handleSave() {
 
 .mono-text {
   font-family: monospace;
-  font-size: 11px;
+  font-size: 12px;
 }
 
 .field input,
 .field select,
 .field textarea {
   margin-bottom: 0;
+  font-size: 13px;
 }
 .field .timezone-wrapper {
   margin-bottom: 0;
@@ -506,7 +562,7 @@ async function handleSave() {
 .ua-random-btn {
   white-space: nowrap;
   padding: 4px 12px;
-  font-size: 12px;
+  font-size: 13px;
 }
 .ua-hint {
   margin-top: 0;
@@ -539,7 +595,7 @@ async function handleSave() {
 .reset-toggle-checkmark { display: none; }
 .reset-toggle-body { flex: 1; min-width: 0; }
 .reset-toggle-title {
-  font-size: 12px;
+  font-size: 14px;
   font-weight: 600;
   color: var(--text-primary);
   margin-bottom: 3px;
@@ -550,14 +606,14 @@ async function handleSave() {
 .disable-spoof-grid {
   display: grid;
   grid-template-columns: repeat(4, 1fr);
-  gap: 6px 12px;
+  gap: 8px 14px;
   margin-top: 4px;
 }
 .disable-spoof-item {
   display: flex;
   align-items: center;
   gap: 6px;
-  font-size: 12px;
+  font-size: 13px;
   cursor: pointer;
 }
 .disable-spoof-item input[type="checkbox"] {

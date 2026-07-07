@@ -81,17 +81,20 @@ onMounted(async () => {
    this component (Vue scoped styles don't cross the boundary from the parent),
    so define them locally. */
 .kernel-version-select .label-tiny {
-    font-size: 11px;
+    font-size: 13px;
     font-weight: 600;
-    opacity: 0.85;
+    opacity: 0.9;
     display: block;
-    margin-bottom: 4px;
+    margin-bottom: 5px;
     letter-spacing: 0.2px;
 }
 .kernel-version-select .hint-text {
-    font-size: 11px;
-    opacity: 0.55;
-    line-height: 1.45;
+    font-size: 12px;
+    opacity: 0.6;
+    line-height: 1.5;
     margin-top: 6px;
+}
+.kernel-version-select select {
+    font-size: 13px;
 }
 </style>
