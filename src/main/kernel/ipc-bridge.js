@@ -33,24 +33,57 @@ function emitProgress(payload) {
 // Wrap an install run with the shared activeInstall token, the progress
 // broadcast, and error → phase='error' translation. Returns the raw
 // install result on success or throws on failure.
-async function runInstall(version, extraFields = {}) {
+//
+// Uses a deferred promise so we can register activeInstall BEFORE the
+// IIFE starts — otherwise a synchronous throw from kernelManager.
+// installVersion runs the finally { activeInstall = null } before the
+// outer assignment, and we permanently write a stale rejected-promise
+// token to activeInstall, blocking every future install (SEV-1 fix).
+function runInstall(version, extraFields = {}) {
     const controller = new AbortController();
-    const installPromise = (async () => {
+    let installResolve, installReject;
+    const installPromise = new Promise((res, rej) => { installResolve = res; installReject = rej; });
+    activeInstall = { controller, promise: installPromise, version };
+    (async () => {
         try {
             const result = await kernelManager.installVersion(version, {
                 signal: controller.signal,
                 onProgress: (p) => emitProgress({ version, ...p })
             });
             emitProgress({ version, phase: 'done', execPath: result.execPath, ...extraFields });
-            return { ...result, ...extraFields };
+            installResolve({ ...result, ...extraFields });
         } catch (e) {
             emitProgress({ version, phase: 'error', message: e.message });
-            throw e;
+            installReject(e);
         } finally {
             activeInstall = null;
         }
     })();
+    return installPromise;
+}
+
+// Same pattern for the ensure path (checkInstalled + installVersion) —
+// gets bundled-copy short-circuit for free.
+function runEnsureInstall(version) {
+    const controller = new AbortController();
+    let installResolve, installReject;
+    const installPromise = new Promise((res, rej) => { installResolve = res; installReject = rej; });
     activeInstall = { controller, promise: installPromise, version };
+    (async () => {
+        try {
+            const result = await kernelManager.ensureInstalled(version, {
+                signal: controller.signal,
+                onProgress: (p) => emitProgress({ version, ...p })
+            });
+            emitProgress({ version, phase: 'done', execPath: result.execPath, source: result.source });
+            installResolve(result);
+        } catch (e) {
+            emitProgress({ version, phase: 'error', message: e.message });
+            installReject(e);
+        } finally {
+            activeInstall = null;
+        }
+    })();
     return installPromise;
 }
 
@@ -72,8 +105,15 @@ function registerKernelIpc({ profileDB, getActiveProcesses }) {
     // Ensure the pinned version is installed. Uses ensureInstalled (which
     // is checkInstalled + installVersion) so a bundled copy is picked up
     // for free without a download.
+    //
+    // Piggy-back is version-scoped (SEV-1 fix): if activeInstall exists
+    // for a DIFFERENT version, we wait for that install to finish (to
+    // serialize disk writes into the kernels dir) then start our own.
+    // The old code returned the wrong-version install's result and the
+    // caller believed our version was installed when it wasn't.
     ipcMain.handle('kernel:ensure', async () => {
-        if (activeInstall) {
+        const wantedVersion = kernelManager.PINNED_VERSION;
+        if (activeInstall && activeInstall.version === wantedVersion) {
             try {
                 const result = await activeInstall.promise;
                 return { ok: true, ...result };
@@ -81,26 +121,13 @@ function registerKernelIpc({ profileDB, getActiveProcesses }) {
                 return { ok: false, error: e.message };
             }
         }
-        const controller = new AbortController();
-        const version = kernelManager.PINNED_VERSION;
-        const installPromise = (async () => {
-            try {
-                const result = await kernelManager.ensureInstalled(version, {
-                    signal: controller.signal,
-                    onProgress: (p) => emitProgress({ version, ...p })
-                });
-                emitProgress({ version, phase: 'done', execPath: result.execPath, source: result.source });
-                return result;
-            } catch (e) {
-                emitProgress({ version, phase: 'error', message: e.message });
-                throw e;
-            } finally {
-                activeInstall = null;
-            }
-        })();
-        activeInstall = { controller, promise: installPromise, version };
+        if (activeInstall) {
+            // Different-version install in flight. Wait for it (ignore
+            // its result — we care about our own) then run ours.
+            try { await activeInstall.promise; } catch { /* other install's failure isn't our concern */ }
+        }
         try {
-            const result = await installPromise;
+            const result = await runEnsureInstall(wantedVersion);
             return { ok: true, ...result };
         } catch (e) {
             return { ok: false, error: e.message };
@@ -135,13 +162,18 @@ function registerKernelIpc({ profileDB, getActiveProcesses }) {
         if (!version || !/^\d+\.\d+\.\d+\.\d+$/.test(String(version))) {
             return { ok: false, error: 'invalid version' };
         }
-        if (activeInstall) {
+        // Piggy-back only on same-version installs (SEV-1 fix); wait for
+        // different-version installs to finish before starting our own.
+        if (activeInstall && activeInstall.version === version) {
             try {
                 const result = await activeInstall.promise;
                 return { ok: true, ...result };
             } catch (e) {
                 return { ok: false, error: e.message };
             }
+        }
+        if (activeInstall) {
+            try { await activeInstall.promise; } catch { /* other version's failure isn't our concern */ }
         }
         try {
             const result = await runInstall(version, { installed: true, source: 'downloaded' });

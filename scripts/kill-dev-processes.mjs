@@ -20,24 +20,45 @@ import { existsSync } from 'node:fs';
 
 function log(...s) { console.log('[prebuild-cleanup]', ...s); }
 
-function killByName(name) {
+// Kill electron.exe processes whose ExecutablePath sits inside THIS
+// repo's node_modules. Naive `taskkill /IM electron.exe /T` would kill
+// every Electron-based dev tool the developer has open (VS Code, Slack,
+// Discord, another local Electron project) — the postmortem for that
+// mistake is nobody's idea of a good time.
+function killByRepoOwnedName(name) {
     if (process.platform !== 'win32') return;
+    // Use CIM/WMI to filter by ExecutablePath — Get-Process doesn't
+    // expose Path from a Filter query cleanly. Escape single quotes and
+    // backslashes for the inline PowerShell.
+    const repoRoot = process.cwd().replace(/'/g, "''");
+    // Match anything with our repo path AND \node_modules\electron\ in it.
+    const cmd = [
+        'powershell', '-NoProfile', '-Command',
+        `Get-CimInstance Win32_Process -Filter "Name='${name}'" ` +
+        `| Where-Object { $_.ExecutablePath -and $_.ExecutablePath.StartsWith('${repoRoot}\\') } ` +
+        `| ForEach-Object { try { Stop-Process -Id $_.ProcessId -Force -ErrorAction Stop; Write-Output ("killed pid " + $_.ProcessId) } catch {} }`
+    ].join(' ');
     try {
-        execSync(`taskkill /F /IM "${name}" /T`, { stdio: 'pipe' });
-        log(`killed ${name}`);
+        const out = execSync(cmd, { stdio: 'pipe' }).toString().trim();
+        if (out) log(`${name}: ${out}`);
     } catch {
-        // Non-zero exit = no such process — that's fine.
+        // Non-zero exit = filter matched nothing, or the PS invocation
+        // itself failed. Either way we can't proceed with a broader kill.
     }
 }
 
 function killPortHolder(port) {
     if (process.platform !== 'win32') return;
     try {
-        // Get PID owning the port from netstat output.
-        const out = execSync(`netstat -ano -p tcp | findstr :${port}`, { stdio: 'pipe' }).toString();
+        // netstat -ano prints one line per socket. We anchor on
+        // LISTENING <pid> at the end of the line so we don't match
+        // sub-string ports (":121380" is not port 12138). Extract the
+        // pid safely with a boundary regex.
+        const out = execSync(`netstat -ano -p tcp`, { stdio: 'pipe' }).toString();
         const pids = new Set();
+        const lineRx = new RegExp(`^\\s*TCP\\s+\\S+:${port}\\s+\\S+\\s+LISTENING\\s+(\\d+)\\s*$`);
         for (const line of out.split('\n')) {
-            const m = line.match(/LISTENING\s+(\d+)/);
+            const m = line.match(lineRx);
             if (m) pids.add(m[1]);
         }
         for (const pid of pids) {
@@ -51,9 +72,9 @@ function killPortHolder(port) {
     }
 }
 
-log('killing electron / dev-server processes before rebuild...');
-killByName('electron.exe');
-killByName('GeekEZ Browser.exe');
+log('killing THIS repo\'s electron / dev-server processes before rebuild...');
+killByRepoOwnedName('electron.exe');
+killByRepoOwnedName('GeekEZ Browser.exe');
 killPortHolder(12138);
 killPortHolder(15173);
 

@@ -214,12 +214,24 @@ function createApiServer(port) {
             //   Success body:  {...body} (may itself contain a `data` field like YAML export) — use as-is.
             const hasStatusWrapper = Object.prototype.hasOwnProperty.call(result, 'status');
             const responseBody = hasStatusWrapper ? result.data : result;
+            // Serialize FIRST so a stringify throw (circular ref etc.)
+            // is caught before we write headers — otherwise the outer
+            // catch tries to writeHead(500) on a response with headers
+            // already sent → ERR_HTTP_HEADERS_SENT unhandled rejection
+            // (D4 fix).
+            const serialized = JSON.stringify(responseBody);
             res.writeHead(result.status || 200);
-            res.end(JSON.stringify(responseBody));
+            res.end(serialized);
         } catch (err) {
             console.error('API Error:', err);
-            res.writeHead(err.status || err.statusCode || 500);
-            res.end(JSON.stringify({ success: false, error: err.message }));
+            if (!res.headersSent) {
+                res.writeHead(err.status || err.statusCode || 500);
+                res.end(JSON.stringify({ success: false, error: err.message }));
+            } else {
+                // Headers already flushed; the response body may be
+                // partial or empty. All we can do is close the socket.
+                try { res.end(); } catch { /* already closed */ }
+            }
         }
     });
 
@@ -519,15 +531,31 @@ async function verifyBrowserThroughProxy(debugPort, options = {}) {
                 if (options.strictStatus && status !== expectedStatus) {
                     return finish(new Error(`expected HTTP ${expectedStatus}, got ${status}`));
                 }
-                if (status >= 200 && status < 400) {
+                // E5 fix: 3xx redirects can be a captive-portal false
+                // positive (e.g. hotel wifi 302 → login page). We only
+                // report success for 2xx now. Redirects are surfaced as
+                // errors; the caller can override with strictStatus if
+                // they know their proxy chain does a legitimate redirect
+                // (e.g. custom probe URL that HTTP → HTTPS).
+                if (status >= 200 && status < 300) {
                     return finish(null, { ok: true, status, latencyMs, target: probeUrl });
+                }
+                if (status >= 300 && status < 400) {
+                    return finish(new Error(`proxy returned HTTP ${status} (redirect — possible captive portal or upstream config)`));
                 }
                 return finish(new Error(`proxy returned HTTP ${status}`));
             }
             if (msg.method === 'Network.loadingFailed') {
                 const p = msg.params || {};
+                // A6 fix: DNS failures (net::ERR_NAME_NOT_RESOLVED) and
+                // proxy tunnel errors fire loadingFailed BEFORE the
+                // Page.navigate response has arrived — so mainFrameId and
+                // mainRequestId may both still be null. If we see a
+                // Document-type failure and we've dispatched Page.navigate
+                // (mainFrameId still null), it's almost certainly ours.
                 const isMain = (mainRequestId && p.requestId === mainRequestId)
-                    || (p.type === 'Document' && p.frameId === mainFrameId);
+                    || (p.type === 'Document' && p.frameId === mainFrameId)
+                    || (p.type === 'Document' && !mainFrameId && !mainRequestId);
                 if (!isMain) return;
                 clearTimeout(timer);
                 return finish(new Error(`navigation failed: ${p.errorText || 'unknown'}`));
@@ -1934,28 +1962,52 @@ function resolveFingerprintChromiumBrandVersion(fingerprint = {}, fallbackVersio
 // interactive create → delete → recreate. We use get-port for launch
 // fallback (where the race protection matters) and hand-rolled walk
 // here (where it doesn't).
+//
+// Concurrent-allocation race: `await isPortFree(port)` yields the
+// event loop, so two parallel creates could both find the same free
+// port. We serialize the whole allocation through a chained-promise
+// mutex — every allocation waits for the previous one to complete.
+// Each allocation is bounded (~50ms typical), so contention is
+// harmless.
+let allocationLock = Promise.resolve();
 async function allocateDebugPortIfNeeded(settings, requestedPort, getUsedPorts) {
     const requested = normalizeDebugPort(requestedPort);
     if (requested) return requested;
     if (!settings?.enableRemoteDebugging) return null;
 
-    const dbUsed = getUsedPorts ? await getUsedPorts() : new Set();
+    const prev = allocationLock;
+    let release;
+    allocationLock = new Promise(r => { release = r; });
+    try {
+        await prev;
+        const dbUsed = getUsedPorts ? await getUsedPorts() : new Set();
 
-    // At 40K assigned ports the loop does 40K O(1) set-lookup skips
-    // then OS-checks the first candidate — fast (~50ms worst case).
-    // If the OS has some low ports taken by other apps we walk past
-    // them one syscall at a time; still bounded.
-    for (let port = 24000; port < 65000; port++) {
-        if (dbUsed.has(port)) continue;
-        if (reservedPorts.has(port)) continue;
-        if (await isPortFree(port)) return port;
+        // At 40K assigned ports the loop does 40K O(1) set-lookup skips
+        // then OS-checks the first candidate — fast (~50ms worst case).
+        // If the OS has some low ports taken by other apps we walk past
+        // them one syscall at a time; still bounded.
+        for (let port = 24000; port < 65000; port++) {
+            if (dbUsed.has(port)) continue;
+            if (reservedPorts.has(port)) continue;
+            if (await isPortFree(port)) {
+                // Reserve to close the window between allocation and the
+                // caller's DB write. The reservation is process-lifetime;
+                // subsequent allocations see it via reservedPorts.has() and
+                // subsequent DB reads see it via getUsedDebugPorts() once
+                // the profile is persisted.
+                reservedPorts.add(port);
+                return port;
+            }
+        }
+
+        throw new Error(
+            `Debug port pool exhausted in range 24000-65000 ` +
+            `(${dbUsed.size} already assigned in DB). ` +
+            `Disable remote debugging on unused profiles.`
+        );
+    } finally {
+        release();
     }
-
-    throw new Error(
-        `Debug port pool exhausted in range 24000-65000 ` +
-        `(${dbUsed.size} already assigned in DB). ` +
-        `Disable remote debugging on unused profiles.`
-    );
 }
 
 // True if we can bind `port` on `host` right now — used at launch to
@@ -2130,8 +2182,20 @@ async function handleApiRequest(method, pathname, body, params, context = {}) {
     };
 
     // GET /api/status
+    // "running" here means the browser is up. Detached-tunnel profiles
+    // (stopped via ?keepProxy=true with browser dead but sing-box alive)
+    // stay in activeProcesses so we can still find and kill their tunnel,
+    // but they're NOT reported as running to callers.
     if (method === 'GET' && pathname === '/api/status') {
-        return { success: true, running: Object.keys(activeProcesses), count: Object.keys(activeProcesses).length };
+        const running = Object.entries(activeProcesses)
+            .filter(([, p]) => p && p.browserPid)
+            .map(([id]) => id);
+        const detachedTunnels = Object.entries(activeProcesses)
+            .filter(([, p]) => p && !p.browserPid && p.singboxPid)
+            .map(([id]) => id);
+        const response = { success: true, running, count: running.length };
+        if (detachedTunnels.length > 0) response.detachedTunnels = detachedTunnels;
+        return response;
     }
 
     // GET /api/profiles
@@ -2528,6 +2592,13 @@ async function handleApiRequest(method, pathname, body, params, context = {}) {
     // running profile.
     if (method === 'DELETE' && kernelInstallMatch) {
         const version = decodeURIComponent(kernelInstallMatch[1]);
+        // Guard against path traversal. `installDirFor(version)` does
+        // path.join(root, version), so a version of ".." would resolve
+        // to the kernels root's parent and blow it away. POST already
+        // validated with this regex; DELETE didn't (SEV-1 fix).
+        if (!/^\d+\.\d+\.\d+\.\d+$/.test(version)) {
+            return { status: 400, data: { success: false, error: 'Invalid version format (expected X.Y.Z.W)' } };
+        }
         if (version === kernelManager.PINNED_VERSION) {
             return { status: 409, data: { success: false, error: 'Cannot uninstall the pinned (default) kernel version' } };
         }
@@ -2565,46 +2636,67 @@ async function handleApiRequest(method, pathname, body, params, context = {}) {
     }
 
     // PATCH /api/settings — partial merge into the settings file.
-    // Only a whitelist of scalar toggles and simple values is writable
-    // from HTTP; complex arrays (preProxies, subscriptions,
-    // userExtensions) have their own management surface in the UI and
-    // are too easy to nuke with a bad PATCH body. Attempts to patch a
-    // non-writable field return 400 with the writable list.
+    // Only a typed whitelist is writable; complex arrays (preProxies,
+    // subscriptions, userExtensions) have their own management surface.
+    // Values are type-checked (A4 fix) — a stray {apiPort:"abc"} used
+    // to persist and break next startup.
+    //
+    // Behavior notes:
+    //   · enableRemoteDebugging / enableCustomArgs / enableUaModify etc.
+    //     write-through and take effect on the NEXT profile launch.
+    //   · enableApiServer / apiPort persist but require an app restart
+    //     to take effect (we can't hot-restart the server we're inside).
     if (method === 'PATCH' && pathname === '/api/settings') {
         const patch = parseApiBody(body) || {};
-        const WRITABLE = [
-            'enableRemoteDebugging',
-            'enableCustomArgs',
-            'enableUaWebglModify',
-            'enableUaModify',
-            'enablePreProxy',
-            'enableApiServer',
-            'enableWatermark',
-            'closeBehavior',
-            'lang',
-            'notify',
-            'apiPort',
-            'watermarkStyle',
-            'ipInfoProvider',
-            'mode',
-            'selectedId'
-        ];
-        const rejected = Object.keys(patch).filter(k => !WRITABLE.includes(k));
+        const isValidPort = v => Number.isInteger(v) && v >= 1024 && v <= 65535;
+        // schema map: field → validator function returning boolean
+        const WRITABLE = {
+            enableRemoteDebugging: v => typeof v === 'boolean',
+            enableCustomArgs:      v => typeof v === 'boolean',
+            enableUaWebglModify:   v => typeof v === 'boolean',
+            enableUaModify:        v => typeof v === 'boolean',
+            enablePreProxy:        v => typeof v === 'boolean',
+            enableApiServer:       v => typeof v === 'boolean',
+            enableWatermark:       v => typeof v === 'boolean',
+            notify:                v => typeof v === 'boolean',
+            closeBehavior:         v => v === 'tray' || v === 'exit',
+            lang:                  v => v === 'en' || v === 'cn',
+            apiPort:               isValidPort,
+            watermarkStyle:        v => typeof v === 'string',
+            ipInfoProvider:        v => v === 'ipinfo' || v === 'ipwho' || v === 'ipapi',
+            mode:                  v => v === 'single' || v === 'balance' || v === 'failover',
+            selectedId:            v => v === null || (typeof v === 'string' && v.length > 0)
+        };
+        const rejected = Object.keys(patch).filter(k => !(k in WRITABLE));
         if (rejected.length > 0) {
             return { status: 400, data: {
                 success: false,
-                error: `non-writable field(s): ${rejected.join(', ')}. Writable via PATCH: ${WRITABLE.join(', ')}`
+                error: `non-writable field(s): ${rejected.join(', ')}. Writable via PATCH: ${Object.keys(WRITABLE).join(', ')}`
             }};
         }
         if (Object.keys(patch).length === 0) {
             return { status: 400, data: { success: false, error: 'empty body' } };
+        }
+        // Type-check every field before touching disk.
+        for (const [k, v] of Object.entries(patch)) {
+            if (!WRITABLE[k](v)) {
+                return { status: 400, data: {
+                    success: false,
+                    error: `field "${k}" failed validation (got ${typeof v}: ${JSON.stringify(v)})`
+                }};
+            }
         }
         try {
             const current = fs.existsSync(SETTINGS_FILE) ? await fs.readJson(SETTINGS_FILE) : {};
             const merged = { ...current, ...patch };
             await fs.writeJson(SETTINGS_FILE, merged);
             refreshTrayMenu().catch(() => { });
-            return { success: true, updated: patch, settings: normalizeSettingsSnapshot(merged) };
+            const response = { success: true, updated: patch, settings: normalizeSettingsSnapshot(merged) };
+            // Notify the caller when the change requires an app restart to
+            // take effect (server-lifecycle fields).
+            const restartRequired = ('enableApiServer' in patch) || ('apiPort' in patch);
+            if (restartRequired) response.restartRequired = true;
+            return response;
         } catch (e) {
             return { status: 500, data: { success: false, error: e.message } };
         }
@@ -2665,10 +2757,22 @@ async function handleApiRequest(method, pathname, body, params, context = {}) {
         }
         try {
             const result = await runProxyLatencyTest(proxyStr, { preProxyConfig });
+            // Don't blindly spread `result` — its own `success:false` on
+            // probe failure would overwrite our success:true and callers
+            // saw HTTP 200 with success:false. Build the response
+            // explicitly (A5 fix) and expose both `latency` (legacy name)
+            // and `latencyMs` (documented name) so scripts written against
+            // either work.
+            const chain = preProxyConfig ? { preProxy: chainRemark } : null;
+            if (!result.success) {
+                return { success: false, msg: result.msg, details: result.details, chain };
+            }
             return {
                 success: true,
-                ...result,
-                chain: preProxyConfig ? { preProxy: chainRemark } : null
+                latency: result.latency,
+                latencyMs: result.latency,
+                target: result.target,
+                chain
             };
         } catch (e) {
             return { status: 500, data: { success: false, error: e.message } };
@@ -3118,18 +3222,34 @@ async function cleanupProfileRuntime(profileId, options = {}) {
         hasSingbox: !!proc.singboxPid
     });
 
-    delete activeProcesses[profileId];
+    // Detached-tunnel case (A3/E3 fix): user asked to kill the browser
+    // but keep the sing-box tunnel alive. Keep the activeProcesses entry
+    // (nulled out on the browser side) so a subsequent /stop can find and
+    // kill sing-box. Also so app-quit's Object.values iteration reaches it.
+    // The alternative (delete + orphan) meant sing-box was unreachable
+    // until reboot.
+    const detachTunnel = closeBrowser && !killProxy;
+    if (detachTunnel) {
+        proc.browserPid = null;
+        proc.browserProcess = null;
+        proc.debugPort = null;
+        // Runtime state now says "just a tunnel" — future /stop hits
+        // cleanupProfileRuntime again and takes the else-branch.
+    } else {
+        delete activeProcesses[profileId];
+    }
     launchingProfiles.delete(profileId);
 
     // Release any dynamic-fallback debug port so a subsequent launch of
     // this profile can pick it (or a concurrent one). Persisted debug
     // ports don't go through reservedPorts, so this is a no-op for the
-    // common case.
-    if (proc.debugPortReserved && Number.isFinite(proc.debugPort)) {
+    // common case. Skip on detach — proc is still live and the browser
+    // could conceivably relaunch onto the same port later.
+    if (!detachTunnel && proc.debugPortReserved && Number.isFinite(proc.debugPort)) {
         reservedPorts.delete(proc.debugPort);
     }
 
-    if (proc.logFd !== undefined) {
+    if (!detachTunnel && proc.logFd !== undefined) {
         try { fs.closeSync(proc.logFd); } catch (e) { }
     }
     if (closeBrowser && proc.browserPid) {
@@ -3885,14 +4005,17 @@ function createProbeHttpStatusMessage(target, statusCode) {
 function isWarmupLikeProbeMessage(msg = '') {
     const text = String(msg || '').trim();
     if (!text) return false;
-    if (HARD_PROXY_PROBE_PATTERNS.some((pattern) => pattern.test(text))) {
-        return false;
-    }
-    return /\bTIMEOUT\b/i.test(text)
-        || /timed out/i.test(text)
-        || /Proxy not ready/i.test(text)
-        || /No socket/i.test(text)
-        || /Request timeout/i.test(text);
+    // Old logic required a TIMEOUT-flavored string match AFTER the hard-
+    // pattern check — which meant bare error-code messages like
+    // "ECONNRESET" (produced verbatim by measureSocksConnectLatency's
+    // `msg: err.code`) never qualified as warmup-like. As a result the
+    // 9e2f6bc commit's whole slow-phase/extended-phase retry never
+    // fired on the exact ECONNRESET/ECONNREFUSED/EPIPE race the commit
+    // was written to survive. Now: anything NOT in the HARD list is
+    // considered retryable. HARD is the whitelist of "clearly
+    // permanent" signals; everything else (bare codes, unfamiliar
+    // errors, whatever sing-box invents next) gets a retry.
+    return !HARD_PROXY_PROBE_PATTERNS.some((pattern) => pattern.test(text));
 }
 
 function shouldRetryProxyProbe(details = [], msg = '') {
@@ -5336,8 +5459,15 @@ const launchProfileHandler = async (event, profileId, preferredLang, launchOptio
     } else if (settings.enableRemoteDebugging && !normalizeDebugPort(profile.debugPort)) {
         // Auto-assign a stable port when feature is enabled and no explicit
         // port exists (either in profile row or in override args).
-        profile.debugPort = await allocateDebugPortIfNeeded(settings, null, () => profileDB.getUsedDebugPorts());
-        await profileDB.update(profile.id, profile);
+        // Pool exhaustion (41K profiles all with debug on) shouldn't
+        // abort the launch — degrade gracefully to no-CDP, matching the
+        // OS-collision fallback path further down.
+        try {
+            profile.debugPort = await allocateDebugPortIfNeeded(settings, null, () => profileDB.getUsedDebugPorts());
+            if (profile.debugPort) await profileDB.update(profile.id, profile);
+        } catch (e) {
+            console.warn(`[debug-port] auto-assign failed (${e.message}); launching without CDP this session`);
+        }
     }
 
     const useDirectNetwork = isDirectProxy(profile.proxyStr);
@@ -5667,10 +5797,25 @@ const launchProfileHandler = async (event, profileId, preferredLang, launchOptio
         {
             const status = await kernelManager.checkInstalled(profileKernelVersion);
             if (!status.installed) {
+                // Version-scoped piggy-back (SEV-1 fix). Only wait for
+                // an in-flight install if it's the SAME version we need.
+                // If a different version is downloading, wait for it to
+                // finish first (to serialize kernel-dir writes) then do
+                // our own install below.
                 const inFlight = getActiveInstall();
-                if (inFlight) {
-                    await inFlight.promise;
+                if (inFlight && inFlight.version === profileKernelVersion) {
+                    try {
+                        await inFlight.promise;
+                    } catch (e) {
+                        throw new Error(`Failed to install kernel ${profileKernelVersion}: ${e.message}`);
+                    }
                 } else {
+                    if (inFlight) {
+                        // Different version in flight — wait for it to
+                        // finish (don't care about its result) then
+                        // fall through to our own install.
+                        try { await inFlight.promise; } catch { /* not our concern */ }
+                    }
                     updateLaunchProgress(
                         68,
                         preferredLang === 'en'
@@ -6319,6 +6464,22 @@ const launchProfileHandler = async (event, profileId, preferredLang, launchOptio
         // Release the port even if spawn threw before the 'exit' listener could
         // fire (e.g., BIN_PATH missing). No-op if 'exit' already released it.
         if (typeof localPort === 'number') reservedPorts.delete(localPort);
+        // Release the dynamic-fallback debug port too if we reserved one and
+        // never got as far as populating activeProcesses (E2 fix). Guarded
+        // with typeof because both vars are declared inside the try block —
+        // if the throw was before their declarations they're undefined here.
+        // If the launch succeeded past activeProcesses assignment, cleanup-
+        // ProfileRuntime handles it via proc.debugPortReserved; the delete-
+        // set-member is idempotent.
+        try {
+            // eslint-disable-next-line no-undef
+            if (typeof usingDynamicDebugPort !== 'undefined' && usingDynamicDebugPort
+                // eslint-disable-next-line no-undef
+                && typeof remoteDebugPort !== 'undefined' && Number.isFinite(remoteDebugPort)) {
+                // eslint-disable-next-line no-undef
+                reservedPorts.delete(remoteDebugPort);
+            }
+        } catch { /* ReferenceError if the try's let bindings didn't execute — nothing to release */ }
 
         if (logFd !== undefined) {
             try { fs.closeSync(logFd); } catch (e) { }

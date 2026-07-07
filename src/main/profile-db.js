@@ -65,11 +65,30 @@ class ProfileDB {
     }
 
     _rowToProfile(row) {
+        // Guard JSON.parse (D6 fix). Historically a single corrupt tags
+        // or fingerprint blob (truncated write, external DB edit, disk
+        // corruption) would throw synchronously through .map() in
+        // getAll/getPaged, taking down every profile-listing endpoint.
+        // Now we log and fall back to sane empty defaults for the bad row.
+        let tags = [];
+        if (typeof row.tags === 'string') {
+            try { tags = JSON.parse(row.tags || '[]'); }
+            catch (e) { console.warn(`[profile-db] corrupt tags for ${row.id}: ${e.message}`); tags = []; }
+        } else if (Array.isArray(row.tags)) {
+            tags = row.tags;
+        }
+        let fingerprint = {};
+        if (typeof row.fingerprint === 'string') {
+            try { fingerprint = JSON.parse(row.fingerprint || '{}'); }
+            catch (e) { console.warn(`[profile-db] corrupt fingerprint for ${row.id}: ${e.message}`); fingerprint = {}; }
+        } else if (row.fingerprint && typeof row.fingerprint === 'object') {
+            fingerprint = row.fingerprint;
+        }
         return {
             id: row.id,
             name: row.name,
             proxyStr: row.proxyStr || '',
-            tags: typeof row.tags === 'string' ? JSON.parse(row.tags || '[]') : (row.tags || []),
+            tags,
             notes: row.notes || '',
             preProxyOverride: row.preProxyOverride || 'default',
             debugPort: row.debugPort || null,
@@ -78,7 +97,7 @@ class ProfileDB {
             resetOnLaunch: !!row.resetOnLaunch,
             isSetup: !!row.isSetup,
             createdAt: row.createdAt,
-            fingerprint: typeof row.fingerprint === 'string' ? JSON.parse(row.fingerprint || '{}') : (row.fingerprint || {}),
+            fingerprint,
             kernelVersion: row.kernelVersion || null,
         };
     }
