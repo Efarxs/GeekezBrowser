@@ -286,7 +286,22 @@ const enTranslations = {
     kernelVersionDefault: "Default (recommended)",
     kernelVersionInstalledSuffix: " · installed",
     kernelVersionDownloadSuffix: " · will download on first launch",
-    kernelVersionHint: "The kernel is downloaded once per version and reused across profiles. Older versions may not support all fingerprint options."
+    kernelVersionHint: "The kernel is downloaded once per version and reused across profiles. Older versions may not support all fingerprint options.",
+    settingsTabKernels: "🧠 Kernels",
+    kernelPanelTitle: "Browser Kernel Management",
+    kernelPanelDesc: "Manage installed fingerprint-chromium kernels. Each profile can pin its own version.",
+    kernelPanelInstalledHeader: "Installed",
+    kernelPanelAvailableHeader: "Available to install",
+    kernelPanelPinnedBadge: "default",
+    kernelPanelSize: "Size",
+    kernelPanelInstalledAt: "Installed",
+    kernelPanelActionUninstall: "Uninstall",
+    kernelPanelActionInstall: "Install",
+    kernelPanelUninstallConfirm: "Delete this kernel version? Profiles that pin it will fall back to the default until reinstalled.",
+    kernelPanelNoneInstalled: "No kernels installed yet.",
+    kernelPanelRefresh: "Refresh list",
+    kernelPanelUpstream: "Upstream",
+    kernelPanelPublished: "Released"
 };
 
 // Global i18n Manager

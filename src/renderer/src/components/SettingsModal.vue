@@ -12,9 +12,13 @@
                     @click="settingsStore.setTab('extensions')" data-i18n="settingsTabExtensions">
                     {{ $t('settingsTabExtensions') }}
                 </div>
-                <div class="tab-btn" :class="{ active: settingsStore.activeTab === 'advanced' }" 
+                <div class="tab-btn" :class="{ active: settingsStore.activeTab === 'advanced' }"
                     @click="settingsStore.setTab('advanced')" data-i18n="settingsTabAdvanced">
                     {{ $t('settingsTabAdvanced') }}
+                </div>
+                <div class="tab-btn" :class="{ active: settingsStore.activeTab === 'kernels' }"
+                    @click="settingsStore.setTab('kernels')">
+                    {{ $t('settingsTabKernels') }}
                 </div>
             </div>
 
@@ -373,6 +377,11 @@
                         </div>
                     </div>
                 </div>
+
+                <!-- Kernels Tab -->
+                <div v-if="settingsStore.activeTab === 'kernels'" class="settings-section">
+                    <KernelManagementPanel />
+                </div>
             </div>
 
             <div class="modal-footer">
@@ -388,6 +397,7 @@ import { useUIStore } from '../store/useUIStore';
 import { useSettingsStore } from '../store/useSettingsStore';
 import { settingService } from '../services/setting.service';
 import { ipcService } from '../services/ipc.service';
+import KernelManagementPanel from './KernelManagementPanel.vue';
 
 const uiStore = useUIStore();
 const settingsStore = useSettingsStore();

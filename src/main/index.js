@@ -77,7 +77,7 @@ async function createSocksProxyAgent(proxyUrl) {
 // Only disable if GPU compatibility issues occur
 
 import { generateSingBoxConfig, parseProxyLink, getProxyRemark } from './utils';
-import { generateFingerprint, getGeolocationScript, getWatermarkScript, getClientHintsPatchScript } from './fingerprint';
+import { generateFingerprint, getGeolocationScript, getWatermarkScript, getClientHintsPatchScript, pickFullVersionForMajor } from './fingerprint';
 
 const isDev = !app.isPackaged;
 const RESOURCES_BIN = isDev ? path.join(app.getAppPath(), 'resources', 'bin') : path.join(process.resourcesPath, 'bin');
@@ -5288,6 +5288,30 @@ const launchProfileHandler = async (event, profileId, preferredLang, launchOptio
                         // do NOT overwrite fcBrandVersion with "148.0.0.0".
                     }
                 }
+
+                // Enforce kernel-major alignment. If the fingerprint's stored
+                // brand version disagrees with the actual kernel we're
+                // launching, detectors that compare navigator.userAgent to
+                // /version headers or the ChromeDriver capability blob will
+                // flag the profile as tampered. Re-pick a stable Chrome patch
+                // from the kernel major's pool (falls back to `${major}.0.0.0`
+                // when we don't have real patches on file for that major).
+                if (kernelMajor > 0) {
+                    const brandMajor = parseInt(String(fcBrandVersion).split('.')[0], 10) || 0;
+                    if (brandMajor !== kernelMajor) {
+                        const realigned = pickFullVersionForMajor(kernelMajor);
+                        fcBrandVersion = realigned || `${kernelMajor}.0.0.0`;
+                        // Also rewrite the Chrome/... segment in the effective UA
+                        // so navigator.userAgent's major agrees with the kernel.
+                        if (effectiveUa) {
+                            effectiveUa = effectiveUa.replace(
+                                /((?:Chrome|Edg)\/)\d+\.\d+\.\d+\.\d+/g,
+                                `$1${kernelMajor}.0.0.0`
+                            );
+                        }
+                    }
+                }
+
                 if (fcBrandVersion && supportsBrandFlags) {
                     launchArgs.push(`--fingerprint-brand-version=${fcBrandVersion}`);
                 }
@@ -5312,7 +5336,11 @@ const launchProfileHandler = async (event, profileId, preferredLang, launchOptio
             const hostPlatform = process.platform === 'darwin'
                 ? 'macos'
                 : (process.platform === 'linux' ? 'linux' : 'windows');
-            if (fcPlatform !== hostPlatform) {
+            // `--disable-spoofing=<category>` was introduced in Chrome 144.
+            // Older kernels don't parse the flag and would either ignore it
+            // (best case) or trip early argument parsing errors, so gate on
+            // major.
+            if (fcPlatform !== hostPlatform && kernelMajor >= 144) {
                 launchArgs.push('--disable-spoofing=font');
             }
 

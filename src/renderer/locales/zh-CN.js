@@ -289,5 +289,20 @@ window.zhCN = {
     kernelVersionDefault: "默认（推荐）",
     kernelVersionInstalledSuffix: " · 已安装",
     kernelVersionDownloadSuffix: " · 首次启动时下载",
-    kernelVersionHint: "同一个内核版本下载一次，多个 profile 复用。旧版本可能不支持部分指纹选项。"
+    kernelVersionHint: "同一个内核版本下载一次，多个 profile 复用。旧版本可能不支持部分指纹选项。",
+    settingsTabKernels: "🧠 浏览器内核",
+    kernelPanelTitle: "浏览器内核管理",
+    kernelPanelDesc: "管理已安装的 fingerprint-chromium 内核。每个 profile 可以指定自己使用的版本。",
+    kernelPanelInstalledHeader: "已安装",
+    kernelPanelAvailableHeader: "可下载安装",
+    kernelPanelPinnedBadge: "默认",
+    kernelPanelSize: "占用",
+    kernelPanelInstalledAt: "安装时间",
+    kernelPanelActionUninstall: "卸载",
+    kernelPanelActionInstall: "安装",
+    kernelPanelUninstallConfirm: "确定删除该内核版本？绑定它的 profile 会回退到默认内核，直到重新安装。",
+    kernelPanelNoneInstalled: "尚未安装任何内核版本。",
+    kernelPanelRefresh: "刷新列表",
+    kernelPanelUpstream: "上游",
+    kernelPanelPublished: "发布于"
 };
