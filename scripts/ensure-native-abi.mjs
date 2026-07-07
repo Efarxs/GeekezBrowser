@@ -67,11 +67,13 @@ async function needsRebuild() {
 async function runRebuild() {
     log(`rebuilding ${MODULE} for local Electron ABI...`);
     return new Promise((resolve, reject) => {
+        // Node on Windows can't spawn `.cmd` shims without `shell: true`
+        // (returns EINVAL). No injection concern here — args are fixed
+        // constants defined at the top of the file.
         const isWin = process.platform === 'win32';
-        const cmd = isWin ? 'npx.cmd' : 'npx';
-        const child = spawn(cmd, ['@electron/rebuild', '-f', '-w', MODULE], {
+        const child = spawn('npx', ['@electron/rebuild', '-f', '-w', MODULE], {
             stdio: 'inherit',
-            shell: false
+            shell: isWin
         });
         child.on('exit', code => code === 0 ? resolve() : reject(new Error(`rebuild exit ${code}`)));
         child.on('error', reject);
