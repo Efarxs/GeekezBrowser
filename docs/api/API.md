@@ -193,7 +193,7 @@ curl "http://127.0.0.1:12138/api/profiles/a1b2c3d4-e5f6-7890-abcd-ef1234567890"
 | `customArgs` | string | 否 | 附加 Chromium 命令行参数（多行或空格分隔的 `--xxx`） |
 | `ignoreCertErrors` | boolean | 否 | 是否忽略证书错误。默认 `false` |
 | `resetOnLaunch` | boolean | 否 | 每次启动是否重置指纹与 user-data。默认 `false` |
-| `debugPort` | number | 否 | 指定固定调试端口。默认按需自动分配（需先开启远程调试） |
+| `debugPort` | number | 否 | 指定固定调试端口。留空则按需自动分配（需先开启"设置 → 远程调试"）。**v1.7.12 起分配策略从"随机"改为"从 24000 顺序填空洞"**：新 profile 依次拿 24000、24001、24002...；删除后其端口立即变回可复用槽位。这样 `netstat` 里能一眼识别 GeekEZ 占用的段。范围 24000-65000，用满会明确报错而不是静默升到高端口 |
 | `kernelVersion` | string \| null | 否 | 该 profile 使用的 fingerprint-chromium 版本（如 `"148.0.7778.215"`）。留空 / `null` = 跟随应用默认（内置 pinned 版本）。不同版本会**独立缓存到本地**，首次启动如未安装会触发下载。跨 major 切换会在启动时把 `browserFullVersion` / UA / Client-Hints 元数据对齐并**回写到 profile**（下次启动稳定复用） |
 | `fingerprint` | object | 否 | 指纹对象（下方"指纹字段"表） |
 
@@ -305,7 +305,7 @@ curl -X POST http://127.0.0.1:12138/api/profiles \
 }
 ```
 
-> **关于 `remoteDebugPort`**：只有当"设置 → 远程调试"打开时才会分配并返回。关闭时字段为 `null`。同一 profile 每次启动都用同一个 debugPort（稳定 1:1）。
+> **关于 `remoteDebugPort`**：只有当"设置 → 远程调试"打开时才会分配并返回。关闭时字段为 `null`。同一 profile 每次启动**通常**都用同一个 debugPort（稳定 1:1），但如果启动时发现该端口已被系统上其他程序占用（IDE、另一个 Chrome 实例、别的应用），GeekEZ 会为本次启动动态换一个空闲端口 —— **持久化的 `debugPort` 不变**（下次启动继续尝试原端口，冲突消失后自然回到 1:1），本次实际绑定的端口通过 `/api/open` 响应的 `"remote port"` 字段返回，脚本按响应值连接即可。
 
 ---
 
@@ -403,6 +403,8 @@ curl "http://127.0.0.1:12138/api/open/TikTok-US-01?stream=false"
 ```
 
 > ⚠️ **注意字段名 `"remote port"` 中间有空格**（历史兼容）。JS 读取需要用中括号：`res["remote port"]`。
+>
+> **关键**：这个值是 Chrome 本次**实际绑定**的端口，不一定等于 `profile.debugPort`。当持久化的端口被系统上其他程序占着时，GeekEZ 会为本次启动动态换一个端口（详见"创建 profile"接口里 `debugPort` 字段的说明）。**任何 CDP 连接都应该按 `"remote port"` 的返回值来连**，不要硬编码 `profile.debugPort`。
 
 **已在运行时的响应**：
 ```json
@@ -484,6 +486,38 @@ curl "http://127.0.0.1:12138/api/export/all?password=my-secret-pw" \
     "profileCount": 15
 }
 ```
+
+**部分失败时的响应**（v1.7.12 起）：如果某些 profile 的 cookies、密码或浏览器文件因为浏览器正在运行等原因读取失败，响应会**额外**带一个 `warnings` 字段列出受影响的 profile，`success: true` 不变（数据仍已导出到 `data`，但部分 profile 的这部分内容缺失）：
+
+```json
+{
+    "success": true,
+    "data": "AES+Gzip+Base64 后的整包字符串...",
+    "filename": "GeekEZ_FullBackup_1751000000000.geekez",
+    "profileCount": 15,
+    "warnings": {
+        "partialCount": 2,
+        "profiles": [
+            {
+                "profileId": "a1b2c3d4-e5f6-7890-abcd-ef1234567890",
+                "name": "TikTok-US-01",
+                "filesSkipped": ["History: EBUSY"],
+                "cookiesError": "target closed",
+                "passwordsError": null
+            },
+            {
+                "profileId": "b7d3f9e2-8c4a-4d1e-9f2b-3a5c7d9e1f8b",
+                "name": "Amazon-DE-Seller",
+                "filesSkipped": ["(no browser_data — profile never launched)"],
+                "cookiesError": null,
+                "passwordsError": null
+            }
+        ]
+    }
+}
+```
+
+> `warnings` 只在有真实失败时才出现，happy-path 响应形状不变。老客户端可以无视这个字段；新客户端建议在导出后检查 `warnings.partialCount > 0` 并提醒用户"这些 profile 的 cookies/密码没进备份"。之前的行为是静默吞掉这些错误、`success: true` 直接返回。
 
 **保存 `.geekez` 文件的用法**（把 `data` 字段的 Base64 解出并落盘）：
 
