@@ -24,5 +24,10 @@ contextBridge.exposeInMainWorld('electronAPI', {
     onProfileLaunchProgress: (callback) => ipcRenderer.on('profile-launch-progress', (event, payload) => callback(payload)),
     onProfileCrash: (callback) => ipcRenderer.on('profile-crash', (event, payload) => callback(payload)),
     exportCookies: (profileId, format) => ipcRenderer.invoke('cookies-export', profileId, format),
-    importCookies: (profileId, format) => ipcRenderer.invoke('cookies-import', profileId, format)
+    importCookies: (profileId, format) => ipcRenderer.invoke('cookies-import', profileId, format),
+    // Kernel (fingerprint-chromium) install management
+    getKernelStatus: () => ipcRenderer.invoke('kernel:get-status'),
+    ensureKernel: () => ipcRenderer.invoke('kernel:ensure'),
+    cancelKernelDownload: () => ipcRenderer.invoke('kernel:cancel'),
+    onKernelProgress: (callback) => ipcRenderer.on('kernel:progress', (event, payload) => callback(payload))
 });

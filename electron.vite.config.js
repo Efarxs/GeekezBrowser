@@ -20,7 +20,9 @@ export default defineConfig({
           'db/factory': resolve(__dirname, 'src/main/db/factory.js'),
           'db/schema-sqlite': resolve(__dirname, 'src/main/db/schema-sqlite.js'),
           'db/schema-pg': resolve(__dirname, 'src/main/db/schema-pg.js'),
-          'db/schema-mysql': resolve(__dirname, 'src/main/db/schema-mysql.js')
+          'db/schema-mysql': resolve(__dirname, 'src/main/db/schema-mysql.js'),
+          'kernel/manager': resolve(__dirname, 'src/main/kernel/manager.js'),
+          'kernel/downloader': resolve(__dirname, 'src/main/kernel/downloader.js')
         }
       }
     }

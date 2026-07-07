@@ -12,6 +12,7 @@ const crypto = require('crypto');
 const zlib = require('zlib');
 const { promisify } = require('util');
 const { getChromiumPath: resolveChromiumPathForApp, getChromiumVersion: resolveChromiumVersionForApp } = require('./chromium-path');
+const kernelManager = require('./kernel/manager');
 const { withHeadlessChromeCookies } = require('./cdp-cookie-client');
 const { CLOSE_BEHAVIOR, normalizeCloseBehavior, resolveCloseBehavior } = require('./close-behavior');
 const { fetchLatestGitHubReleaseInfo } = require('./release-check');
@@ -2279,6 +2280,7 @@ function getChromiumPath() {
         isDev,
         appPath: app.getAppPath(),
         resourcesPath: process.resourcesPath,
+        userDataKernelDir: kernelManager.installDirFor(kernelManager.PINNED_VERSION),
         platform: process.platform,
         env: process.env
     });
@@ -2289,6 +2291,7 @@ function getChromiumVersion() {
         isDev,
         appPath: app.getAppPath(),
         resourcesPath: process.resourcesPath,
+        userDataKernelDir: kernelManager.installDirFor(kernelManager.PINNED_VERSION),
         platform: process.platform
     });
 }
@@ -3627,6 +3630,80 @@ ipcMain.handle('delete-profile', async (event, id) => {
     notifyUIRefresh();
     return true;
 });
+// ---- Kernel (fingerprint-chromium) install management ------------------
+
+let activeKernelInstall = null; // { controller, promise, version }
+
+function emitKernelProgress(payload) {
+    const windows = BrowserWindow.getAllWindows();
+    for (const w of windows) {
+        try {
+            if (!w || w.isDestroyed() || !w.webContents || w.webContents.isDestroyed()) continue;
+            w.webContents.send('kernel:progress', payload);
+        } catch (_) { }
+    }
+}
+
+ipcMain.handle('kernel:get-status', async () => {
+    try {
+        const status = await kernelManager.checkInstalled(kernelManager.PINNED_VERSION);
+        return {
+            installed: !!status.installed,
+            execPath: status.execPath || null,
+            version: kernelManager.PINNED_VERSION,
+            downloading: !!activeKernelInstall
+        };
+    } catch (e) {
+        return { installed: false, error: e.message, version: kernelManager.PINNED_VERSION, downloading: !!activeKernelInstall };
+    }
+});
+
+ipcMain.handle('kernel:ensure', async () => {
+    if (activeKernelInstall) {
+        // In-flight install: piggy-back rather than starting a second one.
+        try {
+            const result = await activeKernelInstall.promise;
+            return { ok: true, ...result };
+        } catch (e) {
+            return { ok: false, error: e.message };
+        }
+    }
+
+    const controller = new AbortController();
+    const installPromise = (async () => {
+        try {
+            const result = await kernelManager.ensureInstalled(kernelManager.PINNED_VERSION, {
+                signal: controller.signal,
+                onProgress: (p) => emitKernelProgress({ version: kernelManager.PINNED_VERSION, ...p })
+            });
+            emitKernelProgress({ version: kernelManager.PINNED_VERSION, phase: 'done', execPath: result.execPath, source: result.source });
+            return result;
+        } catch (e) {
+            emitKernelProgress({ version: kernelManager.PINNED_VERSION, phase: 'error', message: e.message });
+            throw e;
+        } finally {
+            activeKernelInstall = null;
+        }
+    })();
+
+    activeKernelInstall = { controller, promise: installPromise, version: kernelManager.PINNED_VERSION };
+
+    try {
+        const result = await installPromise;
+        return { ok: true, ...result };
+    } catch (e) {
+        return { ok: false, error: e.message };
+    }
+});
+
+ipcMain.handle('kernel:cancel', async () => {
+    if (!activeKernelInstall) return { cancelled: false, reason: 'no active install' };
+    try { activeKernelInstall.controller.abort(); } catch (_) { }
+    return { cancelled: true };
+});
+
+// -------------------------------------------------------------------------
+
 ipcMain.handle('get-settings', async () => {
     if (!fs.existsSync(SETTINGS_FILE)) {
         return {

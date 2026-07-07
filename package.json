@@ -20,25 +20,22 @@
       "output": "dist"
     },
     "files": [
-      "**/*",
-      "!**/*.ts",
-      "!*.map",
-      "!package-lock.json",
-      "!dist",
-      "!_Trash_Bin",
-      "!release"
+      "out/**",
+      "package.json",
+      "LICENSE",
+      "!**/*.map",
+      "!**/*.d.ts",
+      "!**/*.md",
+      "!**/test/**",
+      "!**/tests/**",
+      "!**/__tests__/**",
+      "!**/*.test.js",
+      "!**/*.spec.js"
     ],
     "extraResources": [
       {
         "from": "resources/bin",
         "to": "bin",
-        "filter": [
-          "**/*"
-        ]
-      },
-      {
-        "from": "resources/fingerprint-chromium",
-        "to": "fingerprint-chromium",
         "filter": [
           "**/*"
         ]

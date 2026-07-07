@@ -148,10 +148,19 @@ function listStandardChromiumCandidates(platform = process.platform, env = proce
     ].filter(Boolean);
 }
 
-function resolveChromiumPath({ basePath, platform = process.platform, env = process.env } = {}) {
-    // Priority 1: fingerprint-chromium (engine-level fingerprint spoofing)
-    const fcPath = findBundledChromiumPath(path.join(basePath, 'chrome', 'fingerprint-chromium'), platform);
-    if (fcPath) return fcPath;
+function resolveChromiumPath({ basePath, userDataKernelDir, platform = process.platform, env = process.env } = {}) {
+    // Priority 0: on-demand-installed kernel under userData (Phase 1 default).
+    if (userDataKernelDir) {
+        const udPath = findBundledChromiumPath(path.join(userDataKernelDir, 'chrome', 'fingerprint-chromium'), platform);
+        if (udPath) return udPath;
+    }
+
+    // Priority 1: bundled fingerprint-chromium (legacy, will be dropped once
+    // Phase 1 ships everywhere).
+    if (basePath) {
+        const fcPath = findBundledChromiumPath(path.join(basePath, 'chrome', 'fingerprint-chromium'), platform);
+        if (fcPath) return fcPath;
+    }
 
     // Priority 2: Environment variable override
     for (const candidate of listExplicitChromiumCandidates(env)) {
@@ -170,32 +179,28 @@ function resolveChromiumPath({ basePath, platform = process.platform, env = proc
     return null;
 }
 
-function getChromiumPath({ isDev, appPath, resourcesPath, platform = process.platform, env = process.env } = {}) {
+function getChromiumPath({ isDev, appPath, resourcesPath, userDataKernelDir, platform = process.platform, env = process.env } = {}) {
     const basePath = isDev ? path.join(appPath, 'resources', 'fingerprint-chromium') : path.join(resourcesPath, 'fingerprint-chromium');
-    return resolveChromiumPath({ basePath, platform, env });
+    return resolveChromiumPath({ basePath, userDataKernelDir, platform, env });
 }
 
-function getChromiumVersion({ isDev, appPath, resourcesPath, platform = process.platform } = {}) {
-    const basePath = isDev ? path.join(appPath, 'resources', 'fingerprint-chromium') : path.join(resourcesPath, 'fingerprint-chromium');
-
-    // Priority 1: fingerprint-chromium VERSION file
+function readVersionFrom(basePath) {
+    if (!basePath) return null;
     const fcVersionFile = path.join(basePath, 'chrome', 'fingerprint-chromium', 'VERSION');
     try {
         if (fs.existsSync(fcVersionFile)) {
             const v = fs.readFileSync(fcVersionFile, 'utf8').trim();
             if (/^\d+\.\d+\.\d+\.\d+$/.test(v)) return v;
-            // fingerprint-chromium uses non-standard version (e.g., "148.0.7778.215")
             const m = v.match(/^(\d+\.\d+\.\d+\.\d+)/);
             if (m) return m[1];
         }
     } catch (_) {}
 
-    // Priority 2: Fallback directory name scan
+    // Fallback: scan chrome/ subdirectory names.
     try {
         const chromeDir = path.join(basePath, 'chrome');
         if (fs.existsSync(chromeDir)) {
-            const entries = fs.readdirSync(chromeDir);
-            for (const entry of entries) {
+            for (const entry of fs.readdirSync(chromeDir)) {
                 const m = entry.match(/(\d+\.\d+\.\d+\.\d+)$/);
                 if (m) return m[1];
             }
@@ -203,6 +208,15 @@ function getChromiumVersion({ isDev, appPath, resourcesPath, platform = process.
     } catch (_) {}
 
     return null;
+}
+
+function getChromiumVersion({ isDev, appPath, resourcesPath, userDataKernelDir, platform = process.platform } = {}) {
+    // Prefer userData install if present.
+    const udVersion = readVersionFrom(userDataKernelDir);
+    if (udVersion) return udVersion;
+
+    const basePath = isDev ? path.join(appPath, 'resources', 'fingerprint-chromium') : path.join(resourcesPath, 'fingerprint-chromium');
+    return readVersionFrom(basePath);
 }
 
 module.exports = {

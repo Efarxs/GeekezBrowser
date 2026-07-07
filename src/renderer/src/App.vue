@@ -30,7 +30,8 @@
     <AlertModal :class="{ active: uiStore.alertModalVisible }" />
     <InputModal :class="{ active: uiStore.inputModalVisible }" />
     <ProgressModal :class="{ active: uiStore.progressModalVisible }" />
-    
+    <KernelDownloadModal />
+
 
 
 </template>
@@ -53,6 +54,7 @@ import SettingsModal from './components/SettingsModal.vue';
 import HelpModal from './components/HelpModal.vue';
 import InputModal from './components/InputModal.vue';
 import ProgressModal from './components/ProgressModal.vue';
+import KernelDownloadModal from './components/KernelDownloadModal.vue';
 import { profileService } from './services/profile.service';
 import { useUIStore } from './store/useUIStore';
 import { useProxyStore } from './store/useProxyStore';
@@ -135,6 +137,56 @@ onMounted(async () => {
                 kind: payload.kind || 'runtime-crash'
             });
         });
+
+        // Kernel install progress → UI store bindings
+        if (window.electronAPI && typeof window.electronAPI.onKernelProgress === 'function') {
+            window.electronAPI.onKernelProgress((payload) => {
+                if (!payload) return;
+                if (payload.version) uiStore.kernelVersion = payload.version;
+                if (payload.assetName) uiStore.kernelAssetName = payload.assetName;
+                if (payload.phase) uiStore.kernelPhase = payload.phase;
+                if (typeof payload.message === 'string') uiStore.kernelMessage = payload.message;
+                if (Number.isFinite(payload.bytes)) uiStore.kernelBytes = payload.bytes;
+                if (Number.isFinite(payload.total)) uiStore.kernelTotal = payload.total;
+                if (Number.isFinite(payload.speedBytesPerSec)) uiStore.kernelSpeed = payload.speedBytesPerSec;
+                if (Number.isFinite(payload.etaSec)) uiStore.kernelEta = payload.etaSec;
+                if (Array.isArray(payload.chunks)) uiStore.kernelChunks = payload.chunks;
+                if (uiStore.kernelTotal > 0 && uiStore.kernelPhase === 'download') {
+                    uiStore.kernelPercent = Math.min(100, Math.round((uiStore.kernelBytes / uiStore.kernelTotal) * 100));
+                } else if (payload.phase === 'extract') {
+                    uiStore.kernelPercent = Math.max(uiStore.kernelPercent, 95);
+                } else if (payload.phase === 'verify') {
+                    uiStore.kernelPercent = 99;
+                } else if (payload.phase === 'done') {
+                    uiStore.kernelPercent = 100;
+                    setTimeout(() => { uiStore.kernelModalVisible = false; }, 800);
+                } else if (payload.phase === 'error') {
+                    uiStore.kernelError = payload.message || 'Unknown error';
+                }
+            });
+        }
+
+        // First-run kernel check + install trigger.
+        (async () => {
+            try {
+                if (!window.electronAPI?.getKernelStatus) return;
+                const status = await window.electronAPI.getKernelStatus();
+                if (status?.installed) return;
+                uiStore.kernelVersion = status?.version || '';
+                uiStore.kernelPhase = 'idle';
+                uiStore.kernelPercent = 0;
+                uiStore.kernelModalVisible = true;
+                const result = await window.electronAPI.ensureKernel();
+                if (!result?.ok) {
+                    uiStore.kernelPhase = 'error';
+                    uiStore.kernelError = result?.error || 'Kernel install failed';
+                }
+            } catch (e) {
+                uiStore.kernelPhase = 'error';
+                uiStore.kernelError = e?.message || String(e);
+                uiStore.kernelModalVisible = true;
+            }
+        })();
 
         profileService.onLaunchProgress((payload) => {
             if (!payload || !payload.profileId) return;

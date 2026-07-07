@@ -49,6 +49,21 @@ export const useUIStore = defineStore('ui', () => {
     const progressStep = ref(0);
     const progressTotalSteps = ref(0);
     const progressProfileName = ref('');
+
+    // Kernel (fingerprint-chromium) download modal
+    const kernelModalVisible = ref(false);
+    const kernelPhase = ref('idle'); // idle | network | resolve | download | extract | verify | done | error
+    const kernelVersion = ref('');
+    const kernelAssetName = ref('');
+    const kernelMessage = ref('');
+    const kernelBytes = ref(0);
+    const kernelTotal = ref(0);
+    const kernelPercent = ref(0);
+    const kernelSpeed = ref(0);
+    const kernelEta = ref(0);
+    const kernelChunks = ref([]);
+    const kernelError = ref('');
+    const kernelCanCancel = ref(true);
     
     // Callbacks for legacy/store logic
     let confirmCallback = null;
@@ -238,6 +253,19 @@ export const useUIStore = defineStore('ui', () => {
         progressProfileName,
         batchAddProxyModalVisible,
         openPasswordModal,
-        submitPassword
+        submitPassword,
+        kernelModalVisible,
+        kernelPhase,
+        kernelVersion,
+        kernelAssetName,
+        kernelMessage,
+        kernelBytes,
+        kernelTotal,
+        kernelPercent,
+        kernelSpeed,
+        kernelEta,
+        kernelChunks,
+        kernelError,
+        kernelCanCancel
     };
 });
