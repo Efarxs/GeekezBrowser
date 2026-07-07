@@ -135,6 +135,17 @@
           <div class="hint-text">{{ $t('customArgsHint') }}</div>
         </div>
 
+        <div v-if="settings.enableCustomArgs" class="mt-10">
+          <label class="label-tiny">{{ $t('disableSpoofingLabel') }}</label>
+          <div class="disable-spoof-grid">
+            <label v-for="cat in disableSpoofCategories" :key="cat.value" class="disable-spoof-item">
+              <input type="checkbox" :value="cat.value" v-model="form.disabledSpoofing">
+              <span>{{ $t(cat.i18n) }}</span>
+            </label>
+          </div>
+          <div class="hint-text">{{ $t('disableSpoofingHint') }}</div>
+        </div>
+
         <KernelVersionSelect v-model="form.kernelVersion" />
         </fieldset>
       </div>
@@ -191,7 +202,15 @@ const form = reactive({
   customUserAgent: '',
   resetOnLaunch: false,
   kernelVersion: '',
+  disabledSpoofing: [],
 });
+
+const disableSpoofCategories = [
+  { value: 'canvas', i18n: 'disableSpoofingCanvas' },
+  { value: 'audio', i18n: 'disableSpoofingAudio' },
+  { value: 'clientrects', i18n: 'disableSpoofingClientRects' },
+  { value: 'gpu', i18n: 'disableSpoofingGpu' }
+];
 
 function randomizeCustomUa() {
   const preset = parseBrowserVersionPreset(form.browserVersionPreset);
@@ -286,6 +305,9 @@ watch(() => uiStore.editModalVisible, async (visible) => {
     form.customUserAgent = fp.userAgent || '';
     form.resetOnLaunch = !!p.resetOnLaunch;
     form.kernelVersion = p.kernelVersion || '';
+    form.disabledSpoofing = Array.isArray(fp.disabledSpoofing)
+      ? fp.disabledSpoofing.filter(c => ['canvas','audio','clientrects','gpu'].includes(c))
+      : [];
 
     // Timezone
     form.timezone = fp.timezone || 'Auto';
@@ -380,7 +402,8 @@ async function handleSave() {
         browserType: browserPreset.browserType,
         browserMajorVersion: browserPreset.browserMajorVersion,
         platform: form.platform,
-        userAgent: trimmedUa || null
+        userAgent: trimmedUa || null,
+        disabledSpoofing: [...form.disabledSpoofing]
       },
       debugPort: form.debugPort,
       customArgs: form.customArgs,
@@ -556,5 +579,26 @@ async function handleSave() {
   font-weight: 600;
   color: var(--text-primary);
   margin-bottom: 3px;
+}
+.disable-spoof-grid {
+  display: grid;
+  grid-template-columns: repeat(4, 1fr);
+  gap: 6px 12px;
+  margin-top: 4px;
+  margin-bottom: 4px;
+}
+.disable-spoof-item {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  font-size: 12px;
+  cursor: pointer;
+}
+.disable-spoof-item input[type="checkbox"] {
+  margin: 0;
+  width: 14px;
+  height: 14px;
+  accent-color: var(--accent);
+  cursor: pointer;
 }
 </style>

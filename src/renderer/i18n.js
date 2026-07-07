@@ -301,7 +301,13 @@ const enTranslations = {
     kernelPanelNoneInstalled: "No kernels installed yet.",
     kernelPanelRefresh: "Refresh list",
     kernelPanelUpstream: "Upstream",
-    kernelPanelPublished: "Released"
+    kernelPanelPublished: "Released",
+    disableSpoofingLabel: "Disable spoofing for",
+    disableSpoofingHint: "Turns off fingerprint-chromium's built-in spoof for the checked categories (kernel 144+). Detectors see the raw host value — useful when a site's anti-fraud model flags one dimension. Font is auto-managed for cross-platform profiles.",
+    disableSpoofingCanvas: "Canvas",
+    disableSpoofingAudio: "Audio",
+    disableSpoofingClientRects: "Client Rects",
+    disableSpoofingGpu: "GPU"
 };
 
 // Global i18n Manager

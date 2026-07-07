@@ -1643,7 +1643,16 @@ function normalizeFingerprintOptions(data = {}) {
         userAgent: firstDefined(data.userAgent, inputFp.userAgent),
         userAgentMetadata: firstDefined(data.userAgentMetadata, inputFp.userAgentMetadata),
         webgl: explicitWebgl,
-        webglProfile: requestedWebglProfile
+        webglProfile: requestedWebglProfile,
+        // Which spoof categories the user has manually turned off (Chrome
+        // 144+ --disable-spoofing=<csv>). "font" is NOT accepted here — it's
+        // computed automatically at launch based on cross-platform state.
+        disabledSpoofing: (() => {
+            const raw = firstDefined(data.disabledSpoofing, inputFp.disabledSpoofing);
+            if (!Array.isArray(raw)) return undefined;
+            const allowed = new Set(['canvas', 'audio', 'clientrects', 'gpu']);
+            return [...new Set(raw.filter(c => allowed.has(c)))];
+        })()
     };
 
     if (screen) {
@@ -5265,6 +5274,10 @@ const launchProfileHandler = async (event, profileId, preferredLang, launchOptio
         // seed drive UA brand.
         const kernelMajor = parseInt(String(chromiumVersion || profileKernelVersion).split('.')[0], 10) || 0;
         const supportsBrandFlags = kernelMajor >= 131;
+        // Collected across the fingerprint block + customArgs merge; emitted
+        // as one --disable-spoofing=<csv> at the end. See long comment near
+        // the population site for why it's ONE flag not many.
+        const disableSpoofingSet = new Set();
         {
             const fpSeed = resetOnLaunch
                 ? crypto.randomInt(1, 2147483647)
@@ -5356,12 +5369,23 @@ const launchProfileHandler = async (event, profileId, preferredLang, launchOptio
             const hostPlatform = process.platform === 'darwin'
                 ? 'macos'
                 : (process.platform === 'linux' ? 'linux' : 'windows');
-            // `--disable-spoofing=<category>` was introduced in Chrome 144.
-            // Older kernels don't parse the flag and would either ignore it
-            // (best case) or trip early argument parsing errors, so gate on
-            // major.
-            if (fcPlatform !== hostPlatform && kernelMajor >= 144) {
-                launchArgs.push('--disable-spoofing=font');
+            // Compose the (possibly multi-category) --disable-spoofing csv
+            // across three sources: auto font-off for cross-platform profiles,
+            // per-profile checkbox selections, and any explicit flag in
+            // customArgs. We emit ONE consolidated flag later (after
+            // customArgs processing) because Chrome only honors the last
+            // --disable-spoofing= it sees on the command line — emitting
+            // multiple would mean earlier categories get silently dropped.
+            if (fcPlatform !== hostPlatform) {
+                disableSpoofingSet.add('font');
+            }
+            const perProfileDisabled = Array.isArray(profile.fingerprint?.disabledSpoofing)
+                ? profile.fingerprint.disabledSpoofing
+                : [];
+            for (const cat of perProfileDisabled) {
+                if (['canvas', 'audio', 'clientrects', 'gpu'].includes(cat)) {
+                    disableSpoofingSet.add(cat);
+                }
             }
 
             if (profile.fingerprint?.hardwareConcurrency) {
@@ -5380,7 +5404,7 @@ const launchProfileHandler = async (event, profileId, preferredLang, launchOptio
             }
 
             console.log('🔒 fingerprint-chromium engine mode active');
-            console.log(`   Seed: ${fpSeed}, Platform: ${fcPlatform}, Brand: ${fcBrand}${effectiveUa ? ', custom UA' : ''}${fcBrandVersion ? `, brand-version: ${fcBrandVersion}` : ''}${fcPlatform !== hostPlatform ? ', font-spoof=off (cross-platform)' : ''}`);
+            console.log(`   Seed: ${fpSeed}, Platform: ${fcPlatform}, Brand: ${fcBrand}${effectiveUa ? ', custom UA' : ''}${fcBrandVersion ? `, brand-version: ${fcBrandVersion}` : ''}${disableSpoofingSet.size > 0 ? `, disable-spoof=[${[...disableSpoofingSet].join(',')}] (final flag emitted after customArgs)` : ''}`);
         }
 
         // 4. Remote Debugging Port. Emit the flag when EITHER settings has
@@ -5403,18 +5427,41 @@ const launchProfileHandler = async (event, profileId, preferredLang, launchOptio
         // 5. Custom Launch Arguments (if enabled). Strip any
         // --remote-debugging-port= we already emitted above to avoid a
         // duplicate flag (Chrome takes the LAST duplicate — harmless when
-        // values match, confusing to debug when they don't).
+        // values match, confusing to debug when they don't). Same for
+        // --disable-spoofing=: merge its categories into disableSpoofingSet
+        // so the single consolidated flag we emit below wins.
         if (!useCleanProfile && settings.enableCustomArgs && profile.customArgs) {
-            const parsedCustomArgs = profile.customArgs
+            const parsedCustomArgs = [];
+            const rawTokens = profile.customArgs
                 .split(/[\n\s]+/)
                 .map(arg => arg.trim())
-                .filter(arg => arg && arg.startsWith('--'))
-                .filter(arg => !/^--remote-debugging-port=/.test(arg));
+                .filter(arg => arg && arg.startsWith('--'));
+            for (const arg of rawTokens) {
+                if (/^--remote-debugging-port=/.test(arg)) continue;
+                const dis = /^--disable-spoofing=(.*)$/.exec(arg);
+                if (dis) {
+                    for (const cat of dis[1].split(',').map(c => c.trim()).filter(Boolean)) {
+                        disableSpoofingSet.add(cat);
+                    }
+                    continue;
+                }
+                parsedCustomArgs.push(arg);
+            }
 
             if (parsedCustomArgs.length > 0) {
                 launchArgs.push(...parsedCustomArgs);
                 console.log('⚡ Custom Args:', parsedCustomArgs.join(' '));
             }
+        }
+
+        // Emit the consolidated --disable-spoofing flag AFTER customArgs so
+        // Chrome's "last-wins" behavior on duplicate flags can't drop
+        // categories we care about. Gated on kernel 144+ — older kernels
+        // don't parse this flag (best case: ignored; worst case: parse error).
+        if (kernelMajor >= 144 && disableSpoofingSet.size > 0) {
+            const csv = [...disableSpoofingSet].join(',');
+            launchArgs.push(`--disable-spoofing=${csv}`);
+            console.log(`🎭 --disable-spoofing=${csv}`);
         }
 
         // Same dedupe for the API's transient override args.

@@ -304,5 +304,11 @@ window.zhCN = {
     kernelPanelNoneInstalled: "尚未安装任何内核版本。",
     kernelPanelRefresh: "刷新列表",
     kernelPanelUpstream: "上游",
-    kernelPanelPublished: "发布于"
+    kernelPanelPublished: "发布于",
+    disableSpoofingLabel: "关闭以下伪装",
+    disableSpoofingHint: "关闭 fingerprint-chromium 对勾选项的内置伪装（需内核 144+）。检测方将看到主机真实值 —— 当某个维度被目标站点的反欺诈判定为异常时可用。字体伪装在跨平台环境下由程序自动管理。",
+    disableSpoofingCanvas: "Canvas",
+    disableSpoofingAudio: "Audio",
+    disableSpoofingClientRects: "ClientRects",
+    disableSpoofingGpu: "GPU"
 };
