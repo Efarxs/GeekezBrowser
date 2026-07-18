@@ -35,6 +35,8 @@ const enTranslations = {
     profileNotesHint: "Stored with this profile and hidden from profile cards.",
     proxyLink: "Proxy Link",
     preProxySetting: "Pre-Proxy",
+    preProxyStrLabel: "Dedicated Pre-Proxy (this profile only)",
+    preProxyStrHint: "Chain through this upstream before the main proxy, e.g. socks5://127.0.0.1:7890. Overrides the global pre-proxy pool/mode and takes effect without the top-left toggle. Leave empty to follow the global setting. Set Pre-Proxy to 'Force OFF' to disable chaining entirely.",
     optDefault: "Global",
     optOn: "Force ON",
     optOff: "Force OFF",

@@ -1,7 +1,7 @@
 # GeekEZ Browser · REST API 参考
 
-> 适用版本：**v1.7.17**
-> 更新日期：2026-07-08
+> 适用版本：**v1.7.18**
+> 更新日期：2026-07-18
 
 GeekEZ Browser 提供一套本地 HTTP REST API，可通过脚本对指纹环境进行增删改查、启动、停止、备份等操作。
 
@@ -159,6 +159,7 @@ curl "http://127.0.0.1:12138/api/profiles/a1b2c3d4-e5f6-7890-abcd-ef1234567890"
         "tags": ["tiktok", "us"],
         "notes": "备注：主号",
         "preProxyOverride": "default",
+        "preProxyStr": "",
         "debugPort": 54321,
         "customArgs": "",
         "ignoreCertErrors": false,
@@ -209,7 +210,8 @@ curl "http://127.0.0.1:12138/api/profiles/a1b2c3d4-e5f6-7890-abcd-ef1234567890"
 | `proxyStr` | string | 否 | 代理串，支持 `socks5://`、`http://`、`vmess://`、`vless://`、`trojan://`、`ss://`、`ssh://`、`hy2://`、`tuic://`。留空 = 直连 |
 | `tags` | string[] \| string | 否 | 标签，数组或英文/中文逗号分隔 |
 | `notes` | string | 否 | 备注 |
-| `preProxyOverride` | string | 否 | 前置代理开关，仅接受 `default` / `on` / `off`。`default`=跟随全局设置；`on`=强制启用；`off`=强制禁用。默认 `default` |
+| `preProxyOverride` | string | 否 | 前置代理开关，仅接受 `default` / `on` / `off`。`default`=跟随全局设置；`on`=强制启用；`off`=强制禁用（对本 profile 是绝对总关，会屏蔽下面的 `preProxyStr`）。默认 `default` |
+| `preProxyStr` | string | 否 | **本 profile 专属前置代理 URL**（如 `socks5://127.0.0.1:7890`）。填了就在主代理之前先经过它，**覆盖全局 preProxy 池与 `mode`**，且无需开启全局 `enablePreProxy` 即生效（非空即隐含 `on`）。留空则跟随全局设置。`preProxyOverride:'off'` 时本字段被忽略。默认 `""` |
 | `customArgs` | string | 否 | 附加 Chromium 命令行参数（多行或空格分隔的 `--xxx`） |
 | `ignoreCertErrors` | boolean | 否 | 是否忽略证书错误。默认 `false` |
 | `resetOnLaunch` | boolean | 否 | 每次启动是否重置指纹与 user-data。默认 `false` |
@@ -789,7 +791,7 @@ async function api(method, path, body) {
 
 ### 12) 复制 profile · `POST /api/profiles/:idOrName/duplicate`
 
-克隆一个 profile。原 profile 的 fingerprint / customArgs / kernelVersion / preProxyOverride / resetOnLaunch 都会带过来；新 profile 拿到新的 UUID（→ 新的 fingerprint-chromium seed → canvas/audio/WebGL 哈希跟原 profile 天然不同），以及自动分配的新 `debugPort`。
+克隆一个 profile。原 profile 的 fingerprint / customArgs / kernelVersion / preProxyOverride / preProxyStr / resetOnLaunch / headless 都会带过来；新 profile 拿到新的 UUID（→ 新的 fingerprint-chromium seed → canvas/audio/WebGL 哈希跟原 profile 天然不同），以及自动分配的新 `debugPort`。
 
 **Body 参数**（全部可选，用于覆盖复制默认值）：
 | 字段 | 类型 | 说明 |
@@ -1029,7 +1031,7 @@ curl -X POST http://127.0.0.1:12138/api/kernels/144.0.7559.132
 ```json
 { "profileId": "TikTok-US-01" }
 ```
-拿该 profile 的 proxyStr **走完整链路**测。如果 profile 的 `preProxyOverride: 'on'` 或全局 `enablePreProxy: true`，探测会**通过 App 内配置的 preProxy 节点**再到 profile 的代理。**这是推荐用法** —— 因为很多境外代理需要走 preProxy 才通（比如某些地区封锁直连或代理服务本身有地域限制）。
+拿该 profile 的 proxyStr **走完整链路**测。如果 profile 设了专属 `preProxyStr`，探测会**优先走这个专属前置**（覆盖全局池）；否则若 `preProxyOverride: 'on'` 或全局 `enablePreProxy: true`，探测会**通过 App 内配置的 preProxy 节点**再到 profile 的代理。**这是推荐用法** —— 因为很多境外代理需要走 preProxy 才通（比如某些地区封锁直连或代理服务本身有地域限制）。
 
 ```json
 { "profileId": "TikTok-US-01", "chain": false }

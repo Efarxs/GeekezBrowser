@@ -56,6 +56,12 @@
               <textarea v-model="form.proxyStr" rows="3"></textarea>
             </div>
 
+            <div class="field field-full">
+              <label class="label-tiny">{{ $t('preProxyStrLabel') }}</label>
+              <input v-model="form.preProxyStr" :disabled="viewOnly" placeholder="socks5://127.0.0.1:7890" class="mono-text" spellcheck="false" autocomplete="off">
+              <div class="hint-text">{{ $t('preProxyStrHint') }}</div>
+            </div>
+
             <div class="field">
               <label class="label-tiny">{{ $t('preProxySetting') }}</label>
               <select v-model="form.preProxyOverride">
@@ -249,6 +255,7 @@ const form = reactive({
   city: 'Auto (IP Based)',
   language: 'auto',
   preProxyOverride: 'default',
+  preProxyStr: '',
   resW: 1920,
   resH: 1080,
   geolocation: null,
@@ -365,6 +372,7 @@ watch(() => uiStore.editModalVisible, async (visible) => {
     form.tags = (p.tags || []).join(', ');
     form.notes = p.notes || p.note || p.profileNotes || '';
     form.preProxyOverride = p.preProxyOverride || 'default';
+    form.preProxyStr = p.preProxyStr || '';
     form.resW = fp.screen?.width || 1920;
     form.resH = fp.screen?.height || 1080;
     form.debugPort = p.debugPort || null;
@@ -482,6 +490,7 @@ async function handleSave() {
       tags: tagsRaw.split(/[,，]/).map(s => s.trim()).filter(s => s),
       notes: form.notes,
       preProxyOverride: form.preProxyOverride,
+      preProxyStr: (form.preProxyStr || '').trim(),
       uaMode,
       browserType: browserPreset.browserType,
       browserMajorVersion: browserPreset.browserMajorVersion,

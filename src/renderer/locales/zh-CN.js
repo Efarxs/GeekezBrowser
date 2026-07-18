@@ -35,6 +35,8 @@ window.zhCN = {
     profileNotesHint: "备注会随环境保存，不会显示在环境卡片上。",
     proxyLink: "代理链接",
     preProxySetting: "前置代理",
+    preProxyStrLabel: "独立前置代理（仅本环境）",
+    preProxyStrHint: "在主代理之前先经过这个上游，例如 socks5://127.0.0.1:7890。填了就覆盖全局前置代理池/模式，且无需打开左上角总开关即可生效；留空则跟随全局设置。若要彻底禁用链路，把「前置代理」设为「强制关闭」。",
     optDefault: "跟随全局",
     optOn: "强制开启",
     optOff: "强制关闭",

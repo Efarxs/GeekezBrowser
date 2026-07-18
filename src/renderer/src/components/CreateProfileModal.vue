@@ -48,6 +48,12 @@
             <div class="hint-text">{{ $t('batchHint') }}</div>
           </div>
 
+          <div class="field field-full">
+            <label class="label-tiny">{{ $t('preProxyStrLabel') }}</label>
+            <input v-model="form.preProxyStr" placeholder="socks5://127.0.0.1:7890" class="mono-text" spellcheck="false" autocomplete="off">
+            <div class="hint-text">{{ $t('preProxyStrHint') }}</div>
+          </div>
+
           <div class="field">
             <label class="label-tiny">{{ $t('preProxySetting') }}</label>
             <select v-model="form.preProxyOverride">
@@ -232,6 +238,7 @@ const form = reactive({
   city: 'Auto (IP Based)',
   language: 'auto',
   preProxyOverride: 'default',
+  preProxyStr: '',
   resW: null,
   resH: null,
   geolocation: null,
@@ -367,6 +374,7 @@ watch(() => uiStore.addModalVisible, async (newVal) => {
       city: 'Auto (IP Based)',
       language: 'auto',
       preProxyOverride: 'default',
+      preProxyStr: '',
       resW: null,
       resH: null,
       geolocation: null,
@@ -444,6 +452,7 @@ async function handleSave() {
         screen,
         uaMode: trimmedUa ? 'spoof' : browserPreset.uaMode,
         preProxyOverride: form.preProxyOverride,
+        preProxyStr: (form.preProxyStr || '').trim(),
         customArgs: form.customArgs,
         browserType: browserPreset.browserType,
         browserMajorVersion: browserPreset.browserMajorVersion,

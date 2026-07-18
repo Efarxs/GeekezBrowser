@@ -406,6 +406,41 @@ async function main() {
         await api('DELETE', '/api/profiles/smk2-hless').catch(() => { });
     }
 
+    // ── v1.7.18: per-profile inline pre-proxy (`preProxyStr`).
+    //
+    // Round-trips through create + fetch, is carried by duplicate, and drives
+    // the chain-aware latency probe (chain.preProxy === 'profile' when the
+    // profile has its own inline pre-proxy, regardless of global mode/pool).
+    {
+        await api('DELETE', '/api/profiles/smk2-preproxy').catch(() => { });
+        await api('DELETE', '/api/profiles/smk2-preproxy-copy').catch(() => { });
+        const c = await api('POST', '/api/profiles', {
+            name: 'smk2-preproxy',
+            proxyStr: PROXY_STR,
+            preProxyStr: 'socks5://127.0.0.1:7890',
+            fingerprint: { platform: 'Win32', language: 'en-US', timezone: 'America/New_York' }
+        });
+        if (c.body?.profile?.preProxyStr === 'socks5://127.0.0.1:7890') ok('POST /api/profiles preProxyStr round-trips');
+        else bad('preProxyStr field round-trip', c.body);
+
+        const fetched = await api('GET', '/api/profiles/smk2-preproxy');
+        if (fetched.body?.profile?.preProxyStr === 'socks5://127.0.0.1:7890') ok('GET /api/profiles/:name preProxyStr persisted');
+        else bad('preProxyStr not persisted', fetched.body);
+
+        const dup = await api('POST', '/api/profiles/smk2-preproxy/duplicate', { name: 'smk2-preproxy-copy' });
+        if (dup.body?.profile?.preProxyStr === 'socks5://127.0.0.1:7890') ok('duplicate carries preProxyStr');
+        else bad('duplicate dropped preProxyStr', dup.body);
+
+        // Chain-aware latency: the inline pre-proxy should be the one tested,
+        // surfaced as chain.preProxy === 'profile'.
+        const lat = await api('POST', '/api/proxy/latency', { profileId: 'smk2-preproxy' });
+        if (lat.body?.chain?.preProxy === 'profile') ok('/api/proxy/latency uses inline preProxy (chain.preProxy=profile)');
+        else bad('latency did not use inline preProxy', lat.body);
+
+        await api('DELETE', '/api/profiles/smk2-preproxy-copy').catch(() => { });
+        await api('DELETE', '/api/profiles/smk2-preproxy').catch(() => { });
+    }
+
     // ── v1.7.17: language override reaches Chrome.
     //
     // Historical bug: --lang / --accept-lang were gated on a const captured

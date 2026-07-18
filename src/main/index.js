@@ -2194,6 +2194,12 @@ async function buildProfileFromInput(rawData, settings, existingProfile = null, 
         notes: normalizeProfileNotes(firstDefined(data.notes, data.note, data.profileNotes, existingProfile?.notes, existingProfile?.note, existingProfile?.profileNotes, '')),
         fingerprint,
         preProxyOverride: firstDefined(data.preProxyOverride, existingProfile?.preProxyOverride, 'default'),
+        // Per-profile inline pre-proxy (v1.7.18). Stored raw like proxyStr;
+        // format is validated at launch (sing-box parse + health check), not
+        // here. When non-empty this profile chains through this upstream,
+        // bypassing the global preProxies pool + mode selection. See launch
+        // flow precedence below.
+        preProxyStr: String(firstDefined(data.preProxyStr, existingProfile?.preProxyStr, '') || '').trim(),
         debugPort,
         customArgs: normalizedCustomArgs,
         ignoreCertErrors: firstDefined(data.ignoreCertErrors, existingProfile?.ignoreCertErrors, false),
@@ -2530,7 +2536,8 @@ async function handleApiRequest(method, pathname, body, params, context = {}) {
     //   { "name": "new-name", "tags": [...], "proxyStr": "...", "notes": "..." }
     // What's carried over from the source: fingerprint (platform, timezone,
     //   language, browser identity, screen, hardware, disabledSpoofing),
-    //   customArgs, kernelVersion, preProxyOverride, resetOnLaunch, headless.
+    //   customArgs, kernelVersion, preProxyOverride, preProxyStr,
+    //   resetOnLaunch, headless.
     // What's fresh in the copy:
     //   · new UUID → new fingerprint-chromium seed → different canvas/audio/
     //     WebGL hashes on the wire (visible-identity distinction between
@@ -2807,25 +2814,32 @@ async function handleApiRequest(method, pathname, body, params, context = {}) {
             const p = await findProfile(String(parsed.profileId));
             if (!p) return { status: 404, data: { success: false, error: 'Profile not found' } };
             proxyStr = p.proxyStr;
-            // Mirror the exact chain-selection the launch flow does
-            // (index.js:5079-5099). Skip if the caller explicitly said
-            // chain=false.
+            // Mirror the exact chain-selection the launch flow does. Skip if
+            // the caller explicitly said chain=false.
             if (parsed.chain !== false) {
                 const override = p.preProxyOverride || 'default';
-                const shouldUsePreProxy = (override === 'on' || (override === 'default' && settings.enablePreProxy));
-                if (shouldUsePreProxy && Array.isArray(settings.preProxies) && settings.preProxies.length > 0) {
-                    const active = settings.preProxies.filter(x => x.enable !== false);
-                    if (active.length > 0) {
-                        let picked;
-                        if (settings.mode === 'single') {
-                            picked = active.find(x => x.id === settings.selectedId) || active[0];
-                        } else if (settings.mode === 'balance') {
-                            picked = active[Math.floor(Math.random() * active.length)];
-                        } else {
-                            picked = active[0]; // failover default
+                const inlinePreProxy = (p.preProxyStr || '').trim();
+                const hasInlinePreProxy = override !== 'off' && !!inlinePreProxy;
+                if (hasInlinePreProxy) {
+                    // Inline per-profile pre-proxy wins (same as launch flow).
+                    preProxyConfig = { preProxies: [{ url: inlinePreProxy, remark: 'profile' }] };
+                    chainRemark = 'profile';
+                } else {
+                    const shouldUsePreProxy = override !== 'off' && (override === 'on' || (override === 'default' && settings.enablePreProxy));
+                    if (shouldUsePreProxy && Array.isArray(settings.preProxies) && settings.preProxies.length > 0) {
+                        const active = settings.preProxies.filter(x => x.enable !== false);
+                        if (active.length > 0) {
+                            let picked;
+                            if (settings.mode === 'single') {
+                                picked = active.find(x => x.id === settings.selectedId) || active[0];
+                            } else if (settings.mode === 'balance') {
+                                picked = active[Math.floor(Math.random() * active.length)];
+                            } else {
+                                picked = active[0]; // failover default
+                            }
+                            preProxyConfig = { preProxies: [picked] };
+                            chainRemark = picked?.remark || null;
                         }
-                        preProxyConfig = { preProxies: [picked] };
-                        chainRemark = picked?.remark || null;
                     }
                 }
             }
@@ -5567,12 +5581,31 @@ const launchProfileHandler = async (event, profileId, preferredLang, launchOptio
     const useDirectNetwork = isDirectProxy(profile.proxyStr);
 
     // Pre-proxy settings (settings already loaded above)
+    //
+    // Precedence (v1.7.18):
+    //   1. preProxyOverride === 'off'  → absolute kill-switch, never chain
+    //   2. profile.preProxyStr set     → chain through it, bypassing the
+    //      global preProxies pool + mode. A non-empty inline value implies
+    //      intent to chain (treated like override='on') so users don't also
+    //      have to flip the global enablePreProxy toggle.
+    //   3. otherwise                   → legacy global pool (single/balance/
+    //      failover), gated by override==='on' or global enablePreProxy.
     const override = profile.preProxyOverride || 'default';
-    const shouldUsePreProxy = (override === 'on' || (override === 'default' && settings.enablePreProxy));
+    const inlinePreProxy = (profile.preProxyStr || '').trim();
+    const hasInlinePreProxy = override !== 'off' && !!inlinePreProxy;
+    const shouldUsePreProxy = override !== 'off' && (
+        override === 'on' ||
+        hasInlinePreProxy ||
+        (override === 'default' && settings.enablePreProxy)
+    );
     let finalPreProxyConfig = null;
     let activePreProxy = null;
     let switchMsg = null;
-    if (shouldUsePreProxy && settings.preProxies && settings.preProxies.length > 0) {
+    if (hasInlinePreProxy) {
+        // Inline per-profile pre-proxy wins and bypasses the global pool.
+        activePreProxy = { url: inlinePreProxy, remark: 'profile' };
+        finalPreProxyConfig = { preProxies: [activePreProxy] };
+    } else if (shouldUsePreProxy && settings.preProxies && settings.preProxies.length > 0) {
         const active = settings.preProxies.filter(p => p.enable !== false);
         if (active.length > 0) {
             if (settings.mode === 'single') {

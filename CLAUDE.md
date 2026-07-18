@@ -2,7 +2,7 @@
 
 > 这份文件是给未来 Claude session 用的快速上手 + 避坑清单。
 > 项目背景、用户画像已经在 memory 里（[[project-purpose]]、[[fingerprint-chromium-flags]]），不重复。
-> 当前版本：**1.7.17** · 主分支：`main` · 开发分支：`dev`（PR 汇合点）· feat 分支从 dev 拉
+> 当前版本：**1.7.18** · 主分支：`main` · 开发分支：`dev`（PR 汇合点）· feat 分支从 dev 拉
 
 ---
 
@@ -143,6 +143,20 @@ v1.7.17 加的字段，跟 `resetOnLaunch` / `ignoreCertErrors` 同层，不是 
 
 Duplicate flow 走 `...source` 自动带过来。DB schema 三套（sqlite/pg/mysql）都有 ALTER TABLE 迁移。UI 复选框在 Create/Edit 两个 modal 的 Advanced tab。**不要**当作 fingerprint 字段 —— 反欺诈可能靠"UA 是不是无头"来判定，但 UA 本身不是"想不想开无头"的元数据，两者分层。
 
+### 13. `profile.preProxyStr` —— per-profile 内联前置代理（v1.7.18）
+
+顶层 string（跟 `preProxyOverride` 并列，不在 fingerprint 内）。非空时，本 profile 在主代理之前先经过这个上游，**绕开全局 `settings.preProxies` 池 + `mode`**。
+
+启动 flow（`index.js:5575` 附近）的选择优先级，**必须三处保持一致**（launch flow / `/api/proxy/latency` / 任何新读代理链的地方）：
+
+1. `preProxyOverride === 'off'` → 绝对 kill-switch，永不走链（**赢过 `preProxyStr`**）
+2. `preProxyStr` 非空 → 用它，`activePreProxy = { url, remark:'profile' }`，**隐含 `on`**（不需要全局 `enablePreProxy` 开关）
+3. 否则 → 老的全局池逻辑（single/balance/failover）
+
+关键不变量：**非空 `preProxyStr` 隐含"要走链"**——别再写"提前算 `hasOverride` const"那种反模式（见坑 #11）。格式不校验（跟 `proxyStr` 一样存原样），非法/不可达由 `startPreProxyHealthCheck` + sing-box parse 在启动时兜错，不静默裸奔。Duplicate `...source` 自带；三套 DB schema 都有 ALTER TABLE 迁移；回归测试在 `api-smoke-v2.mjs`（round-trip + duplicate + `chain.preProxy==='profile'`）。
+
+**主代理直连 + 内联前置**：`useDirectNetwork` 路径（`index.js:5677` 附近）会把前置当唯一出口，仍 spawn sing-box —— 内联前置在这条路径也生效。
+
 ---
 
 ## 一眼速查表
@@ -183,7 +197,7 @@ Duplicate flow 走 `...source` 自动带过来。DB schema 三套（sqlite/pg/my
 - 详细章节 + `curl` 示例
 - 版本号在 `package.json` 也要 bump
 
-**已有先例**：v1.7.12 加 `disabledSpoofing` / `kernelVersion` 字段、v1.7.13 加 duplicate/runtime/kernels/settings 等 7 个新 endpoint、v1.7.14 加 `?verify=browser` + chain-aware latency、v1.7.15-16 是 audit 后连续两轮加固（race / leak 修复，无字段变化）、v1.7.17 加 `headless` 字段 + 修 language-Auto 泄漏宿主 locale 的 bug。每次都跟随 semver patch bump + 完整 doc 更新。
+**已有先例**：v1.7.12 加 `disabledSpoofing` / `kernelVersion` 字段、v1.7.13 加 duplicate/runtime/kernels/settings 等 7 个新 endpoint、v1.7.14 加 `?verify=browser` + chain-aware latency、v1.7.15-16 是 audit 后连续两轮加固（race / leak 修复，无字段变化）、v1.7.17 加 `headless` 字段 + 修 language-Auto 泄漏宿主 locale 的 bug、v1.7.18 加 `preProxyStr`（per-profile 内联前置代理，覆盖全局池）。每次都跟随 semver patch bump + 完整 doc 更新。
 
 **破坏性变更**：**避免**。用可选参数 + 默认关（如 `?verify=browser` / `?clean=true` / `?keepProxy=true`）扩展。
 
