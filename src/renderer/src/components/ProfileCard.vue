@@ -24,13 +24,7 @@
                 </span>
                 <span class="tag">{{ displayProto }}</span>
                 <span class="tag">{{ displayScreen }}</span>
-                <span class="tag" style="border:1px solid var(--accent);">
-                    <select class="quick-switch-select no-drag" :value="profile.preProxyOverride || 'default'" @change="quickUpdatePreProxy($event.target.value, $event)">
-                        <option value="default">{{ t('qsDefault') }}</option>
-                        <option value="on">{{ t('qsOn') }}</option>
-                        <option value="off">{{ t('qsOff') }}</option>
-                    </select>
-                </span>
+                <span v-if="preProxyTag" class="tag" style="border:1px solid var(--accent); color: var(--accent);">{{ preProxyTag }}</span>
                 <span
                     v-if="showDebugPort"
                     class="debug-port-chip no-drag"
@@ -66,6 +60,7 @@
                 <button v-if="isRunning" class="no-drag stop-btn" @click="stop" :disabled="stopping">{{ stopping ? t('stoppingStatus') : t('stop') }}</button>
                 <button v-else class="no-drag" @click="launch" :disabled="isLaunching">{{ isLaunching ? t('launchingStatus') : t('launch') }}</button>
                 <button
+                    v-if="!isRunning"
                     ref="launchMoreBtn"
                     class="no-drag launch-more"
                     :disabled="isLaunching"
@@ -144,7 +139,26 @@ const stringToColor = (str) => {
 };
 
 const displayProto = computed(() => {
-    return getProxyProtocol(props.profile.proxyStr);
+    const main = getProxyProtocol(props.profile.proxyStr);
+    if (main !== 'N/A') return main;
+    // No main proxy. A dedicated pre-proxy (unless force-off) becomes the
+    // actual exit, so the connection isn't "direct" — show its protocol.
+    // Only a truly empty setup is DIRECT.
+    const override = props.profile.preProxyOverride || 'default';
+    const pre = (props.profile.preProxyStr || '').trim();
+    if (override !== 'off' && pre) return getProxyProtocol(pre);
+    return 'DIRECT';
+});
+
+// Read-only pre-proxy status tag (editing moved to the profile editor). Shown
+// only when it's not the default "follow global" to keep cards uncluttered.
+const preProxyTag = computed(() => {
+    const override = props.profile.preProxyOverride || 'default';
+    const pre = (props.profile.preProxyStr || '').trim();
+    if (override === 'off') return t('preProxyTagOff');
+    if (pre) return t('preProxyTagDedicated');
+    if (override === 'on') return t('preProxyTagPool');
+    return null; // default → no tag
 });
 
 const displayScreen = computed(() => {
@@ -211,30 +225,6 @@ const copyDebugUrl = async () => {
     }
     debugCopiedFlash.value = true;
     setTimeout(() => { debugCopiedFlash.value = false; }, 1200);
-};
-
-const quickUpdatePreProxy = async (val, event) => {
-    if (props.isRunning || props.isLaunching) {
-        // The native <select> already shows the user's pick, but it's bound
-        // one-way via :value. Since we bail here without touching the model,
-        // Vue won't re-render it back — reset the DOM value explicitly so the
-        // UI doesn't falsely show a change that never persisted.
-        if (event && event.target) event.target.value = props.profile.preProxyOverride || 'default';
-        uiStore.showAlert(t('mustStopFirst'));
-        return;
-    }
-    const p = profileStore.profiles.find(x => x.id === props.profile.id);
-    if (p) {
-        const previous = p.preProxyOverride || 'default';
-        p.preProxyOverride = val;
-        const safeProfile = JSON.parse(JSON.stringify(p));
-        try {
-            await profileStore.updateProfile(safeProfile);
-        } catch (e) {
-            p.preProxyOverride = previous;
-            uiStore.showAlert('保存前置代理设置失败: ' + (e?.message || e));
-        }
-    }
 };
 
 const toggleSelected = () => {
