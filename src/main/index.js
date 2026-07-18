@@ -1,4 +1,4 @@
-const { app, BrowserWindow, ipcMain, dialog, screen, shell, Tray, Menu, nativeImage } = require('electron');
+const { app, BrowserWindow, ipcMain, dialog, screen, shell, Tray, Menu, nativeImage, powerMonitor } = require('electron');
 const path = require('path');
 const fs = require('fs-extra');
 const { spawn, exec, execSync } = require('child_process');
@@ -3762,6 +3762,47 @@ async function createTray() {
     return appTray;
 }
 
+// Windows drops every notification-area icon when the shell recreates the
+// tray (explorer restart, Windows Update, DPI/monitor change, and — most
+// common for long sessions — sleep/wake and lock/unlock). Electron still
+// holds the Tray object (isDestroyed() stays false), so it can't be detected;
+// the icon just silently vanishes until app restart. Fix: proactively rebuild
+// the Tray on the events that correlate with those shell rebuilds. Debounced
+// so a burst (e.g. multiple display-metrics-changed) rebuilds only once.
+let trayRecreateTimer = null;
+function scheduleTrayRecreate(reason) {
+    if (trayRecreateTimer) return;
+    trayRecreateTimer = setTimeout(async () => {
+        trayRecreateTimer = null;
+        if (isAppQuitting) return;
+        try {
+            if (appTray && (typeof appTray.isDestroyed !== 'function' || !appTray.isDestroyed())) {
+                try { appTray.destroy(); } catch (e) { }
+            }
+            appTray = null;
+            await createTray();
+            console.log(`[tray] recreated after ${reason}`);
+        } catch (err) {
+            console.warn(`[tray] recreate after ${reason} failed: ${err?.message || err}`);
+        }
+    }, 800);
+}
+
+function registerTrayResilience() {
+    // Sleep/wake + lock/unlock — the dominant "ran a long time then the icon
+    // was gone" triggers.
+    try {
+        powerMonitor.on('resume', () => scheduleTrayRecreate('resume'));
+        powerMonitor.on('unlock-screen', () => scheduleTrayRecreate('unlock-screen'));
+    } catch (e) { }
+    // DPI / monitor hotplug / resolution changes also rebuild the tray.
+    try {
+        screen.on('display-metrics-changed', () => scheduleTrayRecreate('display-metrics-changed'));
+        screen.on('display-added', () => scheduleTrayRecreate('display-added'));
+        screen.on('display-removed', () => scheduleTrayRecreate('display-removed'));
+    } catch (e) { }
+}
+
 function createWindow() {
     const { width, height } = screen.getPrimaryDisplay().workAreaSize;
     const win = new BrowserWindow({
@@ -3923,6 +3964,7 @@ app.whenReady().then(async () => {
     await createTray().catch((err) => {
         console.error('Failed to initialize tray:', err);
     });
+    registerTrayResilience();
 
     // Auto-start internal API server explicitly for GeekEZ Guard
     try {

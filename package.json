@@ -53,6 +53,15 @@
         "filter": [
           "**/*"
         ]
+      },
+      {
+        "from": "resources",
+        "to": ".",
+        "filter": [
+          "logo.ico",
+          "icon.ico",
+          "logo.svg"
+        ]
       }
     ],
     "win": {
