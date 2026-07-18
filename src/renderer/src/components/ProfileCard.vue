@@ -1,5 +1,5 @@
 <template>
-    <div class="profile-item no-drag">
+    <div class="profile-item no-drag" :class="{ 'has-frame-color': !!frameColor }" :style="frameColorStyle">
         <div class="profile-info">
             <div style="display:flex; align-items:center;">
                 <input
@@ -157,6 +157,13 @@ const displayScreen = computed(() => {
 
 const launchProgress = computed(() => profileStore.getLaunchProgress(props.profile.id));
 const launchError = computed(() => profileStore.getLaunchError(props.profile.id));
+
+// Per-launch window frame color (watermark-off). Tints the card border to
+// match the browser window frame so instances are easy to pair up.
+const frameColor = computed(() => (props.isRunning ? profileStore.getFrameColor(props.profile.id) : null));
+const frameColorStyle = computed(() => frameColor.value
+    ? { borderColor: frameColor.value, boxShadow: `0 0 0 1px ${frameColor.value}, 0 0 14px -4px ${frameColor.value}` }
+    : {});
 
 const dismissError = () => profileStore.clearLaunchError(props.profile.id);
 

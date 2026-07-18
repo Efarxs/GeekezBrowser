@@ -91,7 +91,7 @@ onMounted(async () => {
     // 2. 异步执行初始化
     try {
         console.log('[App] Initializing service listeners...');
-        profileService.onStatusChange(({ id, status }) => {
+        profileService.onStatusChange(({ id, status, color }) => {
             if (window.profileStore) {
                 const runningIdx = window.profileStore.runningIds.indexOf(id);
                 const launchingIdx = window.profileStore.launchingIds.indexOf(id);
@@ -105,12 +105,14 @@ onMounted(async () => {
                 if (status === 'running') {
                     if (runningIdx === -1) window.profileStore.runningIds.push(id);
                     if (launchingIdx !== -1) window.profileStore.launchingIds.splice(launchingIdx, 1);
+                    if (color) window.profileStore.frameColors[id] = color;
                     return;
                 }
 
                 if (status === 'stopped') {
                     if (runningIdx !== -1) window.profileStore.runningIds.splice(runningIdx, 1);
                     if (launchingIdx !== -1) window.profileStore.launchingIds.splice(launchingIdx, 1);
+                    delete window.profileStore.frameColors[id];
                 }
             }
         });
