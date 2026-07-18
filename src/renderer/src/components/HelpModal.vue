@@ -29,10 +29,10 @@
                         <div style="width:4px;height:18px;background:linear-gradient(180deg, #00BCD4, #3F51B5);border-radius:2px;"></div>
                         <h4 style="margin:0;color:var(--text-primary);font-size:14px;font-weight:600;">{{ curLang === 'en' ? 'DOCUMENTATION' : '使用文档' }}</h4>
                     </div>
-                    <button class="help-highlight-card help-doc-card" @click="openExternal('https://browser.geekez.net/doc#doc-usage')">
+                    <button class="help-highlight-card help-doc-card" @click="openDoc('doc-usage')">
                         <div class="help-card-icon">📘</div>
                         <div class="help-highlight-link">{{ curLang === 'en' ? 'Click to view Detailed User Guide' : '点击查看详细使用说明' }}</div>
-                        <div class="help-card-meta">https://browser.geekez.net/doc#doc-usage</div>
+                        <div class="help-card-meta">{{ curLang === 'en' ? 'Local documentation (offline)' : '本地文档（离线可用）' }}</div>
                     </button>
                 </div>
 
@@ -126,6 +126,10 @@ const appVersion = ref('v...');
 
 function openExternal(url) {
     ipcService.openUrl(url);
+}
+
+function openDoc(anchor) {
+    ipcService.openDoc(anchor);
 }
 
 async function loadAppVersion() {

@@ -624,7 +624,7 @@ const handleSaveApiPort = async () => {
 };
 
 const handleOpenApiDocs = () => {
-    ipcService.openUrl('https://browser.geekez.net/doc.html#doc-api');
+    ipcService.openDoc('doc-api');
 };
 
 const handleSelectDataDirectory = async () => {

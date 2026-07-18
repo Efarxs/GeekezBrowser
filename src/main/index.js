@@ -4809,6 +4809,27 @@ ipcMain.handle('get-user-extensions', async () => {
 });
 ipcMain.handle('open-url', async (e, url) => { await shell.openExternal(url); });
 
+// Open the bundled local documentation (resources/doc/doc.html) in the
+// system browser, jumping to an optional anchor (e.g. 'doc-api'). Falls back
+// to the hosted copy if the bundled file is somehow missing.
+ipcMain.handle('open-doc', async (e, anchor) => {
+    const { pathToFileURL } = require('url');
+    const frag = anchor ? '#' + String(anchor).replace(/^#/, '') : '';
+    const docPath = isDev
+        ? path.join(app.getAppPath(), 'resources', 'doc', 'doc.html')
+        : path.join(process.resourcesPath, 'doc', 'doc.html');
+    try {
+        if (fs.existsSync(docPath)) {
+            await shell.openExternal(pathToFileURL(docPath).href + frag);
+            return { success: true, local: true };
+        }
+    } catch (err) {
+        console.warn(`[open-doc] local open failed (${err.message}); falling back to hosted docs`);
+    }
+    await shell.openExternal('https://browser.geekez.net/doc.html' + frag);
+    return { success: true, local: false };
+});
+
 // --- 自定义数据目录 ---
 ipcMain.handle('get-data-path-info', async () => {
     return {

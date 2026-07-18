@@ -1,7 +1,9 @@
 # GeekEZ Browser · REST API 参考
 
-> 适用版本：**v1.7.18**
+> 适用版本：**v1.7.19**
 > 更新日期：2026-07-18
+>
+> 应用内「设置 → API 服务 → 查看文档」及帮助页打开的是本仓 `resources/doc/doc.html`（离线双语），其 API 章节与本文件保持同步。改 API 时请**同时**更新本文件与 `doc.html`（`npm test` 里的 `doc-version-sync` 会校验两者版本头一致）。v1.7.19 仅为文档本地化交付，API 契约与 v1.7.18 一致。
 
 GeekEZ Browser 提供一套本地 HTTP REST API，可通过脚本对指纹环境进行增删改查、启动、停止、备份等操作。
 
@@ -219,6 +221,21 @@ curl "http://127.0.0.1:12138/api/profiles/a1b2c3d4-e5f6-7890-abcd-ef1234567890"
 | `debugPort` | number | 否 | 指定固定调试端口。留空则按需自动分配（需先开启"设置 → 远程调试"）。**v1.7.12 起分配策略从"随机"改为"从 24000 顺序填空洞"**：新 profile 依次拿 24000、24001、24002...；删除后其端口立即变回可复用槽位。这样 `netstat` 里能一眼识别 GeekEZ 占用的段。范围 24000-65000，用满会明确报错而不是静默升到高端口 |
 | `kernelVersion` | string \| null | 否 | 该 profile 使用的 fingerprint-chromium 版本（如 `"148.0.7778.215"`）。留空 / `null` = 跟随应用默认（内置 pinned 版本）。不同版本会**独立缓存到本地**，首次启动如未安装会触发下载。跨 major 切换会在启动时把 `browserFullVersion` / UA / Client-Hints 元数据对齐并**回写到 profile**（下次启动稳定复用） |
 | `fingerprint` | object | 否 | 指纹对象（下方"指纹字段"表） |
+
+> **前置代理三者关系（`preProxyOverride` / `preProxyStr` / 全局 `enablePreProxy`）**
+> 一个 profile 走不走前置、走哪个，按**优先级瀑布**决定，命中即停：
+> 1. `preProxyOverride: 'off'` → 绝对不走前置（屏蔽其余一切）。
+> 2. `preProxyStr` 非空 → 走这个**专属前置**，覆盖全局池 / `mode` / 全局开关（非空即隐含 `on`）。
+> 3. 否则看要不要用全局池：`preProxyOverride: 'on'` = 用（即使全局 `enablePreProxy` 关着）；`'default'` = 跟随全局 `enablePreProxy`。用池时具体节点由全局 `mode`（single/balance/failover）决定。
+>
+> | `preProxyOverride` | `preProxyStr` | 全局 `enablePreProxy` | 结果 |
+> |---|---|---|---|
+> | `off` | 任意 | 任意 | ❌ 不走前置 |
+> | `default`/`on` | 有值 | 任意 | ✅ 走 `preProxyStr`（覆盖池/mode/开关） |
+> | `on` | 空 | 任意 | ✅ 走全局池（按 mode） |
+> | `default` | 空 | `true` | ✅ 走全局池（按 mode） |
+> | `default` | 空 | `false` | ❌ 不走前置 |
+
 
 **`fingerprint` 字段**（都是可选，未传的会自动填充）：
 

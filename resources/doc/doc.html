@@ -1,0 +1,1169 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>GeekEZ Browser - Documentation</title>
+    <style>
+        :root {
+            --bg-color: #050505;
+            --text-primary: #ffffff;
+            --text-secondary: #86868b;
+            --accent-blue: #00e0ff;
+            --accent-pink: #ff0055;
+            --card-bg: rgba(28, 28, 30, 0.4);
+            --nav-bg: rgba(5, 5, 5, 0.8);
+            --transition: 0.3s cubic-bezier(0.25, 0.1, 0.25, 1);
+        }
+
+        body {
+            font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, Helvetica, Arial, sans-serif;
+            background-color: var(--bg-color);
+            color: var(--text-primary);
+            margin: 0;
+            padding: 0;
+            overflow-x: hidden;
+            -webkit-font-smoothing: antialiased;
+        }
+
+        /* Matrix Rain Canvas (Same as Index) */
+        #matrixCanvas {
+            position: fixed;
+            top: 0;
+            left: 0;
+            width: 100vw;
+            height: 100vh;
+            z-index: -1;
+            opacity: 0.2;
+            /* Subtler for reading */
+        }
+
+        /* --- Scrollbar --- */
+        ::-webkit-scrollbar {
+            width: 8px;
+        }
+
+        ::-webkit-scrollbar-track {
+            background: var(--bg-color);
+        }
+
+        ::-webkit-scrollbar-thumb {
+            background: #333;
+            border-radius: 4px;
+            border: 1px solid #000;
+        }
+
+        ::-webkit-scrollbar-thumb:hover {
+            background: var(--accent-blue);
+        }
+
+        /* --- Navbar --- */
+        .navbar {
+            position: fixed;
+            top: 0;
+            width: 100%;
+            height: 60px;
+            background: var(--nav-bg);
+            backdrop-filter: blur(20px);
+            -webkit-backdrop-filter: blur(20px);
+            border-bottom: 1px solid rgba(0, 224, 255, 0.1);
+            z-index: 1000;
+            display: flex;
+            align-items: center;
+            justify-content: center;
+        }
+
+        .nav-container {
+            width: 100%;
+            max-width: 1400px;
+            padding: 0 40px;
+            display: flex;
+            justify-content: space-between;
+            align-items: center;
+        }
+
+        .logo {
+            display: flex;
+            align-items: center;
+            text-decoration: none;
+            gap: 0;
+        }
+
+        .logo-svg {
+            height: 32px;
+            width: 32px;
+            margin-right: 0px;
+        }
+
+        .logo-text {
+            font-family: 'Courier New', monospace;
+            font-size: 24px;
+            font-weight: bold;
+            color: #fff;
+            letter-spacing: -2px;
+            transform: skewX(-10deg);
+            line-height: 1;
+            margin-bottom: -4px;
+            margin-left: -2px;
+        }
+
+        .logo-text span {
+            color: var(--accent-blue);
+        }
+
+        .nav-links {
+            display: flex;
+            gap: 30px;
+            align-items: center;
+        }
+
+        .nav-link {
+            color: var(--text-secondary);
+            text-decoration: none;
+            font-size: 14px;
+            transition: color 0.2s;
+            position: relative;
+        }
+
+        .nav-link:hover {
+            color: var(--accent-blue);
+        }
+
+        .nav-link.active {
+            color: #fff;
+        }
+
+        .lang-btn {
+            background: rgba(255, 255, 255, 0.1);
+            border: 1px solid rgba(255, 255, 255, 0.2);
+            color: #fff;
+            padding: 4px 10px;
+            border-radius: 4px;
+            font-size: 12px;
+            cursor: pointer;
+            transition: 0.2s;
+        }
+
+        .lang-btn:hover {
+            background: rgba(255, 255, 255, 0.2);
+            border-color: #fff;
+        }
+
+        /* --- Documentation Layout --- */
+        .container {
+            max-width: 1400px;
+            margin: 0 auto;
+            padding: 100px 20px;
+        }
+
+        .docs-layout {
+            display: grid;
+            grid-template-columns: 280px 1fr;
+            gap: 60px;
+            align-items: start;
+        }
+
+        .docs-sidebar {
+            position: sticky;
+            top: 100px;
+            background: var(--card-bg);
+            padding: 20px;
+            border-radius: 12px;
+            border: 1px solid rgba(255, 255, 255, 0.05);
+            backdrop-filter: blur(10px);
+        }
+
+        .docs-nav-item {
+            display: block;
+            padding: 12px 15px;
+            color: var(--text-secondary);
+            text-decoration: none;
+            border-radius: 8px;
+            transition: 0.2s;
+            margin-bottom: 5px;
+            font-size: 14px;
+        }
+
+        .docs-nav-item:hover {
+            background: rgba(0, 224, 255, 0.1);
+            color: #fff;
+        }
+
+        .docs-nav-item.active {
+            background: rgba(0, 224, 255, 0.15);
+            color: var(--accent-blue);
+            font-weight: bold;
+        }
+
+        /* Removed Button Styles */
+
+        .docs-main {
+            min-height: 80vh;
+        }
+
+        .doc-block {
+            margin-bottom: 60px;
+            scroll-margin-top: 100px;
+        }
+
+        .doc-block h2 {
+            color: #fff;
+            font-size: 32px;
+            margin-bottom: 30px;
+            border-bottom: 1px solid rgba(255, 255, 255, 0.1);
+            padding-bottom: 15px;
+            text-shadow: 0 0 10px rgba(0, 224, 255, 0.3);
+            letter-spacing: 1px;
+        }
+
+        .doc-block h3 {
+            color: var(--accent-blue);
+            font-size: 20px;
+            margin-top: 30px;
+            margin-bottom: 15px;
+        }
+
+        .doc-block p,
+        .doc-block li {
+            color: #ccc;
+            line-height: 1.8;
+            margin-bottom: 15px;
+            font-size: 16px;
+        }
+
+        .doc-block ul {
+            padding-left: 20px;
+        }
+
+        .doc-block code {
+            background: rgba(0, 224, 255, 0.1);
+            padding: 2px 6px;
+            border-radius: 4px;
+            color: var(--accent-blue);
+            font-family: monospace;
+        }
+
+        .doc-block pre {
+            background: #111;
+            padding: 20px;
+            border-radius: 8px;
+            overflow-x: auto;
+            border: 1px solid #333;
+            margin: 20px 0;
+        }
+
+        .doc-alert {
+            margin: 22px 0 10px;
+            padding: 18px 20px;
+            border: 1px solid rgba(255, 149, 0, 0.45);
+            border-left: 4px solid #ff9500;
+            border-radius: 12px;
+            background:
+                radial-gradient(circle at top right, rgba(255, 149, 0, 0.16), transparent 38%),
+                linear-gradient(135deg, rgba(255, 149, 0, 0.1), rgba(255, 59, 48, 0.08)),
+                rgba(28, 28, 30, 0.68);
+            box-shadow: 0 16px 36px rgba(0, 0, 0, 0.18);
+            backdrop-filter: blur(12px);
+            -webkit-backdrop-filter: blur(12px);
+        }
+
+        .doc-alert-title {
+            display: flex;
+            align-items: center;
+            gap: 10px;
+            margin-bottom: 8px;
+            color: #ffb84d;
+            font-size: 14px;
+            font-weight: 700;
+            letter-spacing: 0.08em;
+            text-transform: uppercase;
+        }
+
+        .doc-alert-title::before {
+            content: "!";
+            display: inline-flex;
+            align-items: center;
+            justify-content: center;
+            width: 22px;
+            height: 22px;
+            border-radius: 999px;
+            background: linear-gradient(135deg, #ff9500, #ff5e3a);
+            color: #111;
+            font-size: 13px;
+            font-weight: 800;
+            box-shadow: 0 0 18px rgba(255, 149, 0, 0.35);
+        }
+
+        .doc-alert p {
+            margin: 0;
+            color: #ffe2bf;
+        }
+
+        .doc-inline-warning {
+            padding: 1px 8px;
+            border-radius: 8px;
+            border: 1px solid rgba(255, 149, 0, 0.3);
+            background: rgba(255, 149, 0, 0.12);
+            color: #ffe2bf;
+            font-weight: 600;
+            box-decoration-break: clone;
+            -webkit-box-decoration-break: clone;
+        }
+
+        .doc-inline-warning strong {
+            color: #ffb84d;
+            letter-spacing: 0.02em;
+        }
+
+        @media (max-width: 900px) {
+            .docs-layout {
+                grid-template-columns: 1fr;
+            }
+
+            .docs-sidebar {
+                display: none;
+            }
+        }
+
+        /* API docs: static bilingual, toggled by <html lang> (v1.7.18). */
+        .api-doc-en { display: none; }
+        html[lang="en"] .api-doc-en { display: block; }
+        html[lang="en"] .api-doc-zh { display: none; }
+    </style>
+</head>
+
+<body>
+
+    <canvas id="matrixCanvas"></canvas>
+
+    <nav class="navbar">
+        <div class="nav-container">
+            <a href="index.html" class="logo">
+                <svg class="logo-svg" viewBox="0 0 512 512" xmlns="http://www.w3.org/2000/svg">
+                    <defs>
+                        <linearGradient id="neon" x1="0%" y1="0%" x2="100%" y2="100%">
+                            <stop offset="0%" style="stop-color:#00e0ff;stop-opacity:1" />
+                            <stop offset="100%" style="stop-color:#2980b9;stop-opacity:1" />
+                        </linearGradient>
+                    </defs>
+                    <path
+                        d="M256 100 H 120 A 20 20 0 0 0 100 120 V 392 A 20 20 0 0 0 120 412 H 392 A 20 20 0 0 0 412 392 V 256 H 256 V 320 H 330 V 332 H 180 V 180 H 330 V 100"
+                        fill="url(#neon)" />
+                    <rect x="360" y="80" width="60" height="40" fill="#ff0055" opacity="0.8" />
+                    <rect x="80" y="280" width="40" height="20" fill="#00e0ff" opacity="0.6" />
+                    <rect x="400" y="400" width="30" height="30" fill="#00e0ff" />
+                    <rect x="80" y="80" width="20" height="20" fill="#ff0055" />
+                </svg>
+                <div class="logo-text">eek<span>EZ</span></div>
+            </a>
+            <div class="nav-links">
+                <a href="index.html" class="nav-link" data-i18n="nav_home">Home</a>
+                <a href="#" class="nav-link active" data-i18n="nav_docs">Docs</a>
+                <a href="index.html#downloads" class="nav-link" data-i18n="nav_download">Download</a>
+                <a href="https://github.com/EchoHS/GeekezBrowser" target="_blank" class="nav-link">GitHub</a>
+                <button class="lang-btn" onclick="toggleLanguage()" id="langBtn">EN/CN</button>
+            </div>
+        </div>
+    </nav>
+
+    <div class="container">
+        <div class="docs-layout">
+            <nav class="docs-sidebar">
+                <a href="#doc-intro" class="docs-nav-item active" data-i18n="doc_menu_intro">Introduction</a>
+                <a href="#doc-features" class="docs-nav-item" data-i18n="doc_menu_features">Features</a>
+                <a href="#doc-network" class="docs-nav-item" data-i18n="doc_menu_network">Network</a>
+                <a href="#doc-install" class="docs-nav-item" data-i18n="doc_menu_install">Installation</a>
+                <a href="#doc-usage" class="docs-nav-item" data-i18n="doc_menu_usage">Usage</a>
+                <a href="#doc-proxy" class="docs-nav-item" data-i18n="doc_menu_proxy">Proxy Formats</a>
+                <a href="#doc-faq" class="docs-nav-item" data-i18n="doc_menu_faq">FAQ</a>
+                <a href="#doc-api" class="docs-nav-item" data-i18n="doc_menu_api">API</a>
+            </nav>
+
+            <div class="docs-main">
+                <div id="doc-intro" class="doc-block">
+                    <h2 data-i18n="doc_intro_title">Introduction</h2>
+                    <p data-i18n="doc_intro_text">GeekEZ Browser is a specialized anti-detect browser built on Electron
+                        and the fingerprint-chromium engine, with sing-box integrated at the core. It is designed to solve multi-account
+                        association problems for cross-border e-commerce (TikTok, Amazon, Facebook, Shopee, etc.) by
+                        implementing deep system-level fingerprint spoofing.</p>
+                </div>
+
+                <div id="doc-features" class="doc-block">
+                    <h2 data-i18n="doc_features_title">Advanced Features</h2>
+                    <h3 data-i18n="doc_features_h3_1">Hardware Randomization</h3>
+                    <ul data-i18n="doc_features_list_1">
+                        <li>Random CPU Cores (4/8/12/16)</li>
+                        <li>Random Memory (4/8/16 GB)</li>
+                        <li>This ensures every profile looks like a unique physical device.</li>
+                    </ul>
+                    <h3 data-i18n="doc_features_h3_2">WebRTC & IP Leak Protection</h3>
+                    <p data-i18n="doc_features_text_2">Forces <code>disable_non_proxied_udp</code> policy to physically
+                        block local IP leaks via WebRTC, ensuring only your proxy IP is visible.</p>
+                </div>
+
+                <div id="doc-network" class="doc-block">
+                    <h2 data-i18n="doc_network_title">sing-box Network Engine</h2>
+                    <p data-i18n="doc_network_text">Fully supports VLESS, VMess, Trojan, Shadowsocks (including
+                        SS-2022). </p>
+                    <h3 data-i18n="doc_network_h3_1">Chain Proxy Architecture</h3>
+                    <p data-i18n="doc_network_text_1"><code>[Local] -> [Pre-Proxy] -> [Profile Proxy] -> [Target]</code>
+                    </p>
+                    <p data-i18n="doc_network_text_2">This architecture hides your real IP from the final proxy
+                        provider, adding an extra layer of anonymity.</p>
+                    <div class="doc-alert">
+                        <div class="doc-alert-title" data-i18n="doc_network_warning_title">Important Warning</div>
+                        <p data-i18n="doc_network_warning_body">If your local machine is already using a TUN proxy, do not enable pre-proxy, or the proxy chain may fail.</p>
+                    </div>
+                </div>
+
+                <div id="doc-install" class="doc-block">
+                    <h2 data-i18n="doc_install_title">Installation</h2>
+                    <p data-i18n="doc_install_text">Please verify your system requirements before installation.</p>
+
+                    <h3 data-i18n="doc_install_mac_title">macOS Notice</h3>
+                    <p data-i18n="doc_install_mac_text">If you see "App is damaged", run this command in Terminal:</p>
+                    <pre>sudo xattr -rd com.apple.quarantine /Applications/GeekEZ\ Browser.app</pre>
+                </div>
+
+                <div id="doc-usage" class="doc-block">
+                    <h2 data-i18n="doc_usage_title">Usage Guide</h2>
+
+                    <h3 data-i18n="doc_usage_quick_title">1) Quick Start</h3>
+                    <ol data-i18n="doc_usage_quick_steps">
+                        <li>Open GeekEZ Browser and click <strong>New Profile</strong>.</li>
+                        <li>Paste a subscription URL or a single proxy link.</li>
+                        <li>Click <strong>Generate & Save</strong> to create the profile.</li>
+                    </ol>
+
+                    <h3 data-i18n="doc_usage_advanced_title">2) Advanced Features</h3>
+                    <ul data-i18n="doc_usage_advanced_list">
+                        <li><strong>Pre-Proxy:</strong> supports proxy nodes or subscription links. If the profile proxy can reach the target site directly, you can leave this disabled. <span class="doc-inline-warning"><strong>Warning:</strong> If your local machine is already using a TUN proxy, do not enable pre-proxy, or the proxy chain may fail.</span></li>
+                        <li><strong>Extensions:</strong> add unpacked extension folders in <strong>Settings → Extension Management</strong>.</li>
+                        <li><strong>Remote Debugging:</strong> opens a debugging port for the profile so Puppeteer or DevTools can connect.</li>
+                        <li><strong>UA & WebGL Modify:</strong> useful for fingerprint testing and compatibility debugging, but not guaranteed to bypass risk-control detection.</li>
+                        <li><strong>Custom Launch Arguments:</strong> append Chrome launch flags to a single profile, such as window, performance, or experimental options.</li>
+                        <li><strong>API Server:</strong> after enabling it in Advanced Settings, you can automate profile management through the local REST API.</li>
+                    </ul>
+                </div>
+
+                <div id="doc-proxy" class="doc-block">
+                    <h2 data-i18n="doc_proxy_title">Proxy Link Formats</h2>
+                    <p data-i18n="doc_proxy_intro_1">All protocols support standard proxy-link formats such as VMess, VLESS, Trojan, and Shadowsocks.</p>
+                    <p data-i18n="doc_proxy_intro_2">Below are common HTTP and SOCKS examples:</p>
+
+                    <h3 data-i18n="doc_proxy_http_title">HTTP / HTTPS Proxies</h3>
+                    <pre data-i18n="doc_proxy_http_examples"># With username and password
+http://user:pass@1.2.3.4:8080
+
+# Without username and password
+http://1.2.3.4:8080
+
+# HTTPS form (handled as an HTTP proxy)
+https://1.2.3.4:8080</pre>
+
+                    <h3 data-i18n="doc_proxy_socks_title">SOCKS Proxies</h3>
+                    <pre data-i18n="doc_proxy_socks_examples"># Standard format (with username and password)
+socks://user:pass@1.2.3.4:1080
+
+# Username only (no password)
+socks5://user@1.2.3.4:1080
+
+# No authentication
+socks5://1.2.3.4:1080
+
+# v2rayN style (base64(user:pass))
+socks://dXNlcjpwYXNz@1.2.3.4:1080#remark
+
+# Plain-text shorthand (treated as SOCKS by GeekEZ Browser)
+1.2.3.4:1080
+1.2.3.4:1080:user:pass</pre>
+
+                    <h3 data-i18n="doc_proxy_direct_title">Direct Mode (No Proxy)</h3>
+                    <pre data-i18n="doc_proxy_direct_value">Direct</pre>
+                    <p data-i18n="doc_proxy_direct_desc">When the proxy link is set to <code>Direct</code>, GeekEZ Browser does not start the sing-box proxy engine for the profile and uses the local network directly.</p>
+                </div>
+
+                <div id="doc-faq" class="doc-block">
+                    <h2 data-i18n="doc_faq_title">FAQ</h2>
+                    <h3 data-i18n="doc_faq_q1">Q: Why is TikTok/Facebook still flagging my account?</h3>
+                    <p data-i18n="doc_faq_a1">A: Fingerprint isolation only protects device identity. You MUST use a
+                        high-quality Clean/Dedicated IP. Shared IPs are easily detected.</p>
+                    <h3 data-i18n="doc_faq_q2">Q: White screen on startup?</h3>
+                    <p data-i18n="doc_faq_a2">A: Try setting Timezone to "Auto" in settings. Some sites (like Oracle)
+                        require precise time synchronization.</p>
+                </div>
+
+                <div id="doc-api" class="doc-block">
+                    <!-- API 文档：静态双语，按 <html lang> 用 CSS 切换（见 .api-doc-zh/.api-doc-en）。
+                         内容对齐 docs/api/API.md v1.7.18；改 API 时两边一起更新。 -->
+                    <div class="api-doc-zh">
+                        <h2>API 文档</h2>
+                        <p>GeekEZ Browser 提供一套本地 HTTP REST API，可通过脚本对指纹环境增删改查、启动、停止、备份。<strong>适用版本 v1.7.19</strong>。</p>
+                        <ul>
+                            <li>默认监听 <code>http://127.0.0.1:12138</code>，端口可在 <strong>设置 → API 服务</strong> 修改（改动后自动重启）。</li>
+                            <li>只监听 <code>127.0.0.1</code>，<strong>无认证</strong>，请勿转发到公网。</li>
+                            <li>请求/响应均为 <code>application/json</code>（<code>/api/open</code> 流式模式除外）。</li>
+                            <li>如需 CDP 接管浏览器，请同时打开 <strong>设置 → 远程调试</strong>，之后创建的 profile 才会分配调试端口。</li>
+                            <li>路径参数 <code>:idOrName</code> 可为 profile 的 UUID 或名称（名称需 URL 编码），ID 优先。</li>
+                        </ul>
+
+                        <h3>接口一览</h3>
+                        <ul>
+                            <li><code>GET /api/status</code> — 查询正在运行的环境列表</li>
+                            <li><code>GET /api/profiles</code> — 查询所有 profile（支持 <code>?tag=</code>）</li>
+                            <li><code>GET /api/profiles/:idOrName</code> — 查询单个 profile 详情</li>
+                            <li><code>GET /api/profiles/:idOrName/runtime</code> — 查询单个 profile 运行状态</li>
+                            <li><code>POST /api/profiles</code> — 创建 profile</li>
+                            <li><code>PUT /api/profiles/:idOrName</code> — 修改 profile</li>
+                            <li><code>POST /api/profiles/:idOrName/duplicate</code> — 复制 profile</li>
+                            <li><code>DELETE /api/profiles/:idOrName</code> — 删除 profile</li>
+                            <li><code>GET /api/open/:idOrName</code> — 启动（支持 <code>?clean=true</code>、<code>?verify=browser</code>）</li>
+                            <li><code>POST /api/profiles/:idOrName/stop</code> — 停止（支持 <code>?keepProxy=true</code>）</li>
+                            <li><code>GET /api/export/all</code> — 导出加密全量备份</li>
+                            <li><code>GET /api/export/fingerprint</code> — 导出 YAML 指纹清单</li>
+                            <li><code>POST /api/import</code> — 导入 YAML 或加密备份</li>
+                            <li><code>GET / PATCH /api/settings</code> — 读取 / 部分更新设置</li>
+                            <li><code>GET /api/kernels</code>、<code>POST/DELETE /api/kernels/:version</code> — 内核管理</li>
+                            <li><code>POST /api/proxy/latency</code> — 测试代理连通性与延迟</li>
+                        </ul>
+
+                        <h3>通用说明</h3>
+                        <ul>
+                            <li><code>:idOrName</code> 均支持环境 ID（UUID）或名称。</li>
+                            <li>列表接口支持按标签精确筛选：<code>GET /api/profiles?tag=标签名</code>。</li>
+                            <li>若开启"远程调试"，创建/更新返回中会包含 <code>remoteDebugPort</code>。</li>
+                            <li><code>POST/PUT</code> 支持 <code>args</code> 字段，写入后永久保存为启动参数；<code>GET /api/open?args=</code> 仅本次生效。</li>
+                            <li><code>notes</code> 为环境备注；列表接口不返回备注，详情/创建/更新返回完整环境对象。</li>
+                            <li>时间戳统一为 UTC 毫秒；<code>"remote port"</code> 字段名<strong>含空格</strong>，JS 读取用 <code>obj['remote port']</code>。</li>
+                        </ul>
+
+                        <h3>创建 / 修改环境字段</h3>
+                        <p><code>POST /api/profiles</code> 与 <code>PUT /api/profiles/:idOrName</code> body 结构一致，字段均可选，未传保留原值（创建时用默认/随机）。必须的只有实际业务需要的 <code>name</code>。</p>
+                        <p><strong>顶层字段：</strong></p>
+                        <ul>
+                            <li><code>name</code> — 环境名，重名自动追加 <code>-02</code>/<code>-03</code>。</li>
+                            <li><code>proxyStr</code> — 代理串，支持 <code>socks5://</code>、<code>http://</code>、<code>vmess://</code>、<code>vless://</code>、<code>trojan://</code>、<code>ss://</code>、<code>ssh://</code>、<code>hy2://</code>、<code>tuic://</code>。留空 = 直连。</li>
+                            <li><code>tags</code> — 标签，数组或逗号分隔字符串。</li>
+                            <li><code>notes</code> — 备注（账号/密码/操作方法等）。</li>
+                            <li><code>preProxyOverride</code> — 前置代理开关：<code>default</code>（跟随全局）/ <code>on</code>（强制启用）/ <code>off</code>（强制禁用，绝对总关，屏蔽 <code>preProxyStr</code>）。</li>
+                            <li><code>preProxyStr</code> — <strong>本 profile 专属前置代理 URL</strong>（如 <code>socks5://127.0.0.1:7890</code>）。填了就在主代理之前先经过它，<strong>覆盖全局前置代理池与 mode</strong>，且无需打开全局开关即生效（非空即隐含 <code>on</code>）；留空跟随全局；<code>preProxyOverride:'off'</code> 时忽略本字段。<strong>v1.7.18 新增</strong>。</li>
+                            <li><code>args</code> / <code>customArgs</code> — 附加 Chromium 命令行参数（多行或空格分隔的 <code>--xxx</code>）。</li>
+                            <li><code>ignoreCertErrors</code> — 忽略证书错误，默认 <code>false</code>。</li>
+                            <li><code>resetOnLaunch</code> — 每次启动重置指纹与 user-data，默认 <code>false</code>。</li>
+                            <li><code>headless</code> — <strong>v1.7.17 新增</strong>。无头模式，追加 <code>--headless=new</code> 并屏蔽 <code>navigator.webdriver</code>；仅适合自动化/服务端，主号勿开。默认 <code>false</code>。</li>
+                            <li><code>debugPort</code> — 固定调试端口，留空按需自动分配（从 24000 顺序填空洞，范围 24000-65000）。需先开启远程调试。</li>
+                            <li><code>kernelVersion</code> — 该 profile 使用的 fingerprint-chromium 版本（如 <code>148.0.7778.215</code>），留空/<code>null</code> 跟随内置 pinned 版本，首次启动如未安装会触发下载。</li>
+                            <li><code>fingerprint</code> — 指纹对象（见下）。</li>
+                        </ul>
+                        <p><strong>fingerprint 字段（均可选）：</strong>v1.7 起指纹由内核从 <code>--fingerprint=&lt;seed&gt;</code> 派生（seed 绑定 profile ID），Canvas/Audio/WebGL/TLS 自动生成，无需在 API 传。真正影响运行时的字段：</p>
+                        <ul>
+                            <li><code>uaMode</code> — <code>spoof</code>（伪装 UA/品牌）/ <code>none</code>（不改 UA 只隔离），默认 <code>none</code>。</li>
+                            <li><code>platform</code> — <code>Win32</code> / <code>MacIntel</code> / <code>Linux x86_64</code>，需显式指定。</li>
+                            <li><code>browserType</code> — <code>chrome</code> / <code>edge</code>，默认 <code>chrome</code>（同时决定 uTLS 指纹）。</li>
+                            <li><code>browserMajorVersion</code> — 主版本，目前只支持 <code>148</code>（其他值会被规范化回 148）。</li>
+                            <li><code>browserFullVersion</code> — 完整 patch 号（如 <code>148.0.7778.167</code>），不传从真实 Chrome 148 stable 池随机抽。</li>
+                            <li><code>userAgent</code> — 覆盖 UA，启动时自动做 Chrome UA-Reduction（<code>Chrome/X.0.0.0</code> + Full-Version-List）。</li>
+                            <li><code>screen</code> — <code>{ "width": 1920, "height": 1080 }</code>，用作启动窗口大小。</li>
+                            <li><code>language</code> — 主语言如 <code>en-US</code>；<code>auto</code> 或不传 = 按出口 IP 匹配。<strong>v1.7.17 修复</strong>：<code>auto</code> 现在真正把派生语言推给 Chrome（此前会泄漏宿主 locale）。依赖旧行为请显式传目标语言。</li>
+                            <li><code>languages</code> — 语言列表如 <code>["en-US","en"]</code>，未传从 <code>language</code> 派生。</li>
+                            <li><code>timezone</code> — IANA 时区如 <code>America/New_York</code>；<code>Auto</code>/不传 = 跟随 IP。</li>
+                            <li><code>hardwareConcurrency</code> — CPU 核数 <code>4/8/12/16</code>。</li>
+                            <li><code>deviceMemory</code> — 内存 GB <code>2/4/8/16</code>。</li>
+                            <li><code>geolocation</code> — <code>{ "latitude":40.7, "longitude":-74.0, "accuracy":100 }</code>，劫持 <code>navigator.geolocation</code>。</li>
+                            <li><code>city</code> — 仅 UI 元数据，实际生效的是 <code>geolocation</code>。</li>
+                            <li><code>disabledSpoofing</code> — 关闭内核对指定维度的伪装，取值 <code>canvas</code>/<code>audio</code>/<code>clientrects</code>/<code>gpu</code> 的子集，默认 <code>[]</code>。需 kernel 144+。</li>
+                        </ul>
+                        <p>已废弃/忽略字段：<code>canvasNoise</code>、<code>audioNoise</code>、<code>noiseSeed</code>、<code>webgl</code>/<code>webglProfile</code>、<code>tlsClientHello</code>、<code>userAgentMetadata</code>（均由内核 seed / browserType 自动派生）。</p>
+
+                        <h3>前置代理三者关系（重要）</h3>
+                        <p>一个环境到底走不走前置、走哪个，由三者按<strong>优先级瀑布</strong>决定 —— 从上往下，命中即停：</p>
+                        <ol>
+                            <li><strong>① <code>preProxyOverride = off</code>？</strong> → 绝对不走前置，忽略其余一切。</li>
+                            <li><strong>② 本环境填了 <code>preProxyStr</code>？</strong> → 走这个<strong>专属前置</strong>，忽略全局池 / mode / 全局总开关（非空即自带"开"）。</li>
+                            <li><strong>③ 用不用全局池？</strong> 由 <code>preProxyOverride</code> 决定：<code>on</code> = 用（即使左上角总开关关着）；<code>default</code> = 跟随全局总开关 <code>settings.enablePreProxy</code>。用池时具体选哪个节点看全局 <code>mode</code>（single / balance / failover）。</li>
+                        </ol>
+                        <p>换句话说：<code>preProxyOverride</code> 管"用不用 / 强制开关"，<code>preProxyStr</code> 管"用我自己的这一个（覆盖全局）"，<code>settings.enablePreProxy</code> 只是全局池的总开关（仅在 <code>default</code> 且没填专属时才起作用）。真值表：</p>
+                        <ul>
+                            <li><code>override=off</code> + 任意 → <strong>不走前置</strong>（绝对关）</li>
+                            <li><code>override=default/on</code> + <code>preProxyStr</code> 有值 → <strong>走专属前置</strong>（忽略池/mode/总开关）</li>
+                            <li><code>override=on</code> + <code>preProxyStr</code> 空 → <strong>走全局池</strong>（按 mode 选节点，无视总开关）</li>
+                            <li><code>override=default</code> + <code>preProxyStr</code> 空 + 总开关=开 → <strong>走全局池</strong></li>
+                            <li><code>override=default</code> + <code>preProxyStr</code> 空 + 总开关=关 → <strong>不走前置</strong></li>
+                        </ul>
+
+                        <h3>接口与示例</h3>
+                        <p><strong>1) 查询运行状态</strong> <code>GET /api/status</code></p>
+                        <pre>curl http://127.0.0.1:12138/api/status</pre>
+                        <p>返回 <code>{ success, running[], count }</code>；<code>?keepProxy=true</code> 停止后保留隧道的 profile 会出现在 <code>detachedTunnels[]</code>。</p>
+
+                        <p><strong>2) 查询环境列表</strong> <code>GET /api/profiles</code>（<code>?tag=</code> 按标签过滤）</p>
+                        <pre>curl "http://127.0.0.1:12138/api/profiles?tag=tiktok"</pre>
+
+                        <p><strong>3) 查询单个环境详情</strong> <code>GET /api/profiles/:idOrName</code></p>
+                        <pre>curl http://127.0.0.1:12138/api/profiles/TikTok-US-01</pre>
+
+                        <p><strong>4) 创建环境</strong> <code>POST /api/profiles</code></p>
+                        <pre>curl -X POST http://127.0.0.1:12138/api/profiles \
+  -H "Content-Type: application/json" \
+  -d '{
+    "name": "TikTok-US-01",
+    "proxyStr": "socks5://user:pass@1.2.3.4:1080",
+    "tags": ["tiktok", "us"],
+    "preProxyStr": "socks5://127.0.0.1:7890",
+    "fingerprint": {
+      "uaMode": "spoof",
+      "platform": "Win32",
+      "browserMajorVersion": 148,
+      "language": "en-US",
+      "timezone": "America/Los_Angeles",
+      "disabledSpoofing": ["canvas", "audio"]
+    }
+  }'</pre>
+                        <p>无头自动化示例（追加 <code>"headless": true</code>）：启动后无窗口，仍可通过 <code>/api/open</code> 返回的 <code>"remote port"</code> 接 Playwright/DevTools。</p>
+
+                        <p><strong>5) 修改环境</strong> <code>PUT /api/profiles/:idOrName</code>（运行中返回 409，需先停止）</p>
+                        <pre>curl -X PUT "http://127.0.0.1:12138/api/profiles/TikTok-US-01" \
+  -H "Content-Type: application/json" \
+  -d '{ "proxyStr": "socks5://new:pass@5.6.7.8:1080", "tags": ["tiktok","us","backup"] }'</pre>
+
+                        <p><strong>6) 复制环境</strong> <code>POST /api/profiles/:idOrName/duplicate</code></p>
+                        <pre>curl -X POST "http://127.0.0.1:12138/api/profiles/TikTok-US-01/duplicate" \
+  -H "Content-Type: application/json" \
+  -d '{ "name": "TikTok-US-01-backup" }'</pre>
+                        <p>fingerprint / customArgs / kernelVersion / preProxyOverride / preProxyStr / resetOnLaunch / headless 都会带过来；新 profile 获得新 UUID（→ 新 seed → 不同 canvas/audio/WebGL 哈希）与新 debugPort。</p>
+
+                        <p><strong>7) 删除环境</strong> <code>DELETE /api/profiles/:idOrName</code>（运行中返回 409）</p>
+                        <pre>curl -X DELETE "http://127.0.0.1:12138/api/profiles/TikTok-US-01"</pre>
+
+                        <p><strong>8) 启动环境</strong> <code>GET /api/open/:idOrName</code></p>
+                        <pre># JSON 模式
+curl "http://127.0.0.1:12138/api/open/TikTok-US-01?stream=false"
+# 干净启动（临时 user-data，不加载扩展/会话；注意会抑制调试端口）
+curl "http://127.0.0.1:12138/api/open/TikTok-US-01?clean=true"
+# 浏览器级验证（起来后 CDP 主动导航探测，通了才算成功；需开远程调试，+2~10s）
+curl "http://127.0.0.1:12138/api/open/TikTok-US-01?verify=browser"
+# 本次临时追加启动参数（可重复传）
+curl "http://127.0.0.1:12138/api/open/TikTok-US-01?args=--disable-gpu&args=--window-size=1280,720"</pre>
+                        <p>响应里的 <code>"remote port"</code>（含空格）是本次<strong>实际绑定</strong>的调试端口，可能因端口冲突被动态降级 —— CDP 一律按此值连，别硬编码 <code>debugPort</code>。</p>
+
+                        <p><strong>8.1) 启动查询参数</strong>：<code>stream</code>（<code>true/false</code>，curl 默认流式）、<code>lang</code>（<code>en/cn</code> 提示语言）、<code>clean</code>、<code>verify=browser</code> + <code>verifyUrl</code> + <code>verifyStrict</code>（默认拒 3xx，防热点门户假阳性）、<code>args</code>。验证失败会自动 stop profile 并返回 500。</p>
+
+                        <p><strong>9) 停止环境</strong> <code>POST /api/profiles/:idOrName/stop</code>（<code>?keepProxy=true</code> 只关浏览器、保留 sing-box 隧道）</p>
+                        <pre>curl -X POST "http://127.0.0.1:12138/api/profiles/TikTok-US-01/stop"</pre>
+
+                        <p><strong>10) 查询单个运行状态</strong> <code>GET /api/profiles/:idOrName/runtime</code></p>
+                        <pre>curl http://127.0.0.1:12138/api/profiles/TikTok-US-01/runtime</pre>
+                        <p>返回 <code>running</code>/<code>launching</code>/<code>"remote port"</code>（本次实际）/<code>persistedDebugPort</code>/<code>kernelVersion</code>。</p>
+
+                        <p><strong>11) 导出加密全量备份</strong> <code>GET /api/export/all?password=你的密码</code>（含指纹+浏览器数据+Cookie+密码）</p>
+                        <pre>curl "http://127.0.0.1:12138/api/export/all?password=my-secret" -o backup.json</pre>
+                        <p>部分 profile 读取失败时响应附带 <code>warnings</code>，<code>success</code> 仍为 <code>true</code>。</p>
+
+                        <p><strong>12) 导出 YAML 指纹清单</strong> <code>GET /api/export/fingerprint</code>（不含浏览器数据/Cookie/密码）</p>
+                        <pre>curl "http://127.0.0.1:12138/api/export/fingerprint"</pre>
+
+                        <p><strong>13) 导入</strong> <code>POST /api/import</code>（YAML 或加密备份 Base64；重名自动追加后缀）</p>
+                        <pre>curl -X POST http://127.0.0.1:12138/api/import \
+  -H "Content-Type: application/json" \
+  -d '{ "content": "YAML 文本或加密备份的 Base64", "password": "加密备份必填，YAML 可不填" }'</pre>
+
+                        <p><strong>14) 应用设置</strong> <code>GET / PATCH /api/settings</code></p>
+                        <pre>curl -X PATCH http://127.0.0.1:12138/api/settings \
+  -H "Content-Type: application/json" \
+  -d '{ "enableRemoteDebugging": true }'</pre>
+                        <p>PATCH 只接受白名单标量字段（<code>enableRemoteDebugging</code>、<code>enablePreProxy</code>、<code>mode</code>、<code>selectedId</code>、<code>apiPort</code>、<code>lang</code>、<code>closeBehavior</code> 等），均有类型/取值校验；数组字段（preProxies/subscriptions/userExtensions）拒绝（400）。改 <code>enableApiServer</code>/<code>apiPort</code> 返回 <code>restartRequired:true</code>。</p>
+
+                        <p><strong>15) 内核管理</strong> <code>/api/kernels</code></p>
+                        <pre># 列出已装（?available=true 同时拉上游，?measureSize=true 计算体积）
+curl "http://127.0.0.1:12138/api/kernels?available=true"
+# 安装（同步阻塞直到下载解压完成）
+curl -X POST http://127.0.0.1:12138/api/kernels/144.0.7559.132
+# 卸载（拒绝卸载 pinned 版本或运行中版本，409）
+curl -X DELETE http://127.0.0.1:12138/api/kernels/144.0.7559.132</pre>
+
+                        <p><strong>16) 代理测试</strong> <code>POST /api/proxy/latency</code></p>
+                        <pre># 直接测 URL（单跳，不套前置）
+curl -X POST http://127.0.0.1:12138/api/proxy/latency \
+  -H "Content-Type: application/json" \
+  -d '{ "proxyStr": "socks5://user:pass@1.2.3.4:1080" }'
+# 按 profile 走完整链路（推荐；有 preProxyStr 优先走专属前置）
+curl -X POST http://127.0.0.1:12138/api/proxy/latency \
+  -H "Content-Type: application/json" \
+  -d '{ "profileId": "TikTok-US-01" }'</pre>
+                        <p>返回 <code>{ success, latency, target, chain }</code>；<code>chain.preProxy</code> 为所用前置（内联前置显示 <code>profile</code>，<code>null</code> 表示单跳）。加 <code>"chain": false</code> 可强制单跳诊断。很多境外代理需走前置才通，建议用 <code>profileId</code> 模式预筛。</p>
+
+                        <h3>错误码</h3>
+                        <ul>
+                            <li><code>200</code> 成功 · <code>400</code> 参数错误 · <code>404</code> 不存在 · <code>409</code> 运行中不允许改/删 · <code>500</code> 内部错误</li>
+                            <li>错误统一返回 <code>{ "success": false, "error": "描述" }</code>。</li>
+                        </ul>
+
+                        <h3>结合 CDP 自动化</h3>
+                        <p>前置条件：① 设置 → 远程调试 已开；② profile 已分配 <code>debugPort</code>；③ 未用 <code>clean=true</code>（该模式剥离调试端口）。启动后 <code>"remote port"</code> 即标准 CDP 端口，可直接对接 Playwright / Puppeteer：</p>
+                        <pre>const res = await fetch('http://127.0.0.1:12138/api/open/TikTok-US-01?stream=false').then(r => r.json());
+const port = res['remote port'];   // 注意字段名带空格
+const browser = await chromium.connectOverCDP('http://127.0.0.1:' + port);</pre>
+                        <p>完整 REST 契约与更多示例见项目内 <code>docs/api/API.md</code>（本页与其保持同步）。</p>
+                    </div>
+                    <div class="api-doc-en">
+                        <h2>API Documentation</h2>
+                        <p>GeekEZ Browser exposes a local HTTP REST API to create, query, launch, stop and back up fingerprint profiles from scripts. <strong>Applies to v1.7.19</strong>.</p>
+                        <ul>
+                            <li>Listens on <code>http://127.0.0.1:12138</code> by default; the port is configurable under <strong>Settings → API Server</strong> (auto-restarts on change).</li>
+                            <li>Binds to <code>127.0.0.1</code> only, <strong>no authentication</strong> — never forward it to the public internet.</li>
+                            <li>Requests/responses are <code>application/json</code> (except the streaming mode of <code>/api/open</code>).</li>
+                            <li>To drive the browser over CDP, also enable <strong>Settings → Remote Debugging</strong>; only profiles created afterwards get a debug port.</li>
+                            <li>The path parameter <code>:idOrName</code> accepts a profile UUID or name (URL-encode names); ID wins.</li>
+                        </ul>
+
+                        <h3>Endpoint overview</h3>
+                        <ul>
+                            <li><code>GET /api/status</code> — list running profiles</li>
+                            <li><code>GET /api/profiles</code> — list all profiles (supports <code>?tag=</code>)</li>
+                            <li><code>GET /api/profiles/:idOrName</code> — profile detail</li>
+                            <li><code>GET /api/profiles/:idOrName/runtime</code> — runtime state of one profile</li>
+                            <li><code>POST /api/profiles</code> — create a profile</li>
+                            <li><code>PUT /api/profiles/:idOrName</code> — update a profile</li>
+                            <li><code>POST /api/profiles/:idOrName/duplicate</code> — clone a profile</li>
+                            <li><code>DELETE /api/profiles/:idOrName</code> — delete a profile</li>
+                            <li><code>GET /api/open/:idOrName</code> — launch (supports <code>?clean=true</code>, <code>?verify=browser</code>)</li>
+                            <li><code>POST /api/profiles/:idOrName/stop</code> — stop (supports <code>?keepProxy=true</code>)</li>
+                            <li><code>GET /api/export/all</code> — encrypted full backup</li>
+                            <li><code>GET /api/export/fingerprint</code> — YAML fingerprint export</li>
+                            <li><code>POST /api/import</code> — import YAML or encrypted backup</li>
+                            <li><code>GET / PATCH /api/settings</code> — read / partially update settings</li>
+                            <li><code>GET /api/kernels</code>, <code>POST/DELETE /api/kernels/:version</code> — kernel management</li>
+                            <li><code>POST /api/proxy/latency</code> — proxy connectivity &amp; latency test</li>
+                        </ul>
+
+                        <h3>General notes</h3>
+                        <ul>
+                            <li><code>:idOrName</code> accepts a profile ID (UUID) or name.</li>
+                            <li>List endpoint filters by tag: <code>GET /api/profiles?tag=name</code>.</li>
+                            <li>When Remote Debugging is on, create/update responses include <code>remoteDebugPort</code>.</li>
+                            <li><code>POST/PUT</code> accept an <code>args</code> field saved as persistent launch args; <code>GET /api/open?args=</code> applies to that launch only.</li>
+                            <li><code>notes</code> holds profile notes; list responses omit notes, detail/create/update return the full object.</li>
+                            <li>Timestamps are UTC ms; the field <code>"remote port"</code> <strong>contains a space</strong> — read it as <code>obj['remote port']</code>.</li>
+                        </ul>
+
+                        <h3>Create / Update fields</h3>
+                        <p><code>POST /api/profiles</code> and <code>PUT /api/profiles/:idOrName</code> share the same body; every field is optional and omitted fields keep their previous value (random/default on create).</p>
+                        <p><strong>Top-level fields:</strong></p>
+                        <ul>
+                            <li><code>name</code> — profile name; duplicates auto-suffix <code>-02</code>/<code>-03</code>.</li>
+                            <li><code>proxyStr</code> — proxy string: <code>socks5://</code>, <code>http://</code>, <code>vmess://</code>, <code>vless://</code>, <code>trojan://</code>, <code>ss://</code>, <code>ssh://</code>, <code>hy2://</code>, <code>tuic://</code>. Empty = direct.</li>
+                            <li><code>tags</code> — array or comma-separated string.</li>
+                            <li><code>notes</code> — free-form notes (account/password/workflow).</li>
+                            <li><code>preProxyOverride</code> — pre-proxy switch: <code>default</code> (follow global) / <code>on</code> (force) / <code>off</code> (hard kill-switch, masks <code>preProxyStr</code>).</li>
+                            <li><code>preProxyStr</code> — <strong>this profile's own pre-proxy URL</strong> (e.g. <code>socks5://127.0.0.1:7890</code>). Chains through it before the main proxy, <strong>overriding the global pre-proxy pool and mode</strong>, and works without the global toggle (non-empty implies <code>on</code>). Empty = follow global; ignored when <code>preProxyOverride:'off'</code>. <strong>Added in v1.7.18</strong>.</li>
+                            <li><code>args</code> / <code>customArgs</code> — extra Chromium flags (newline/space separated <code>--xxx</code>).</li>
+                            <li><code>ignoreCertErrors</code> — ignore cert errors, default <code>false</code>.</li>
+                            <li><code>resetOnLaunch</code> — wipe fingerprint &amp; user-data each launch, default <code>false</code>.</li>
+                            <li><code>headless</code> — <strong>added in v1.7.17</strong>. Headless mode: adds <code>--headless=new</code> and masks <code>navigator.webdriver</code>. For automation/server use only; do not use for primary accounts. Default <code>false</code>.</li>
+                            <li><code>debugPort</code> — fixed debug port; empty = auto-assign (fills gaps from 24000, range 24000-65000). Requires Remote Debugging.</li>
+                            <li><code>kernelVersion</code> — fingerprint-chromium version for this profile (e.g. <code>148.0.7778.215</code>); empty/<code>null</code> follows the built-in pinned version and downloads on first launch if missing.</li>
+                            <li><code>fingerprint</code> — fingerprint object (below).</li>
+                        </ul>
+                        <p><strong>fingerprint fields (all optional):</strong> since v1.7 the fingerprint is derived by the kernel from <code>--fingerprint=&lt;seed&gt;</code> (seed bound to profile ID); Canvas/Audio/WebGL/TLS are generated automatically. Runtime-relevant fields:</p>
+                        <ul>
+                            <li><code>uaMode</code> — <code>spoof</code> / <code>none</code>, default <code>none</code>.</li>
+                            <li><code>platform</code> — <code>Win32</code> / <code>MacIntel</code> / <code>Linux x86_64</code>, must be explicit.</li>
+                            <li><code>browserType</code> — <code>chrome</code> / <code>edge</code>, default <code>chrome</code> (also sets uTLS).</li>
+                            <li><code>browserMajorVersion</code> — currently only <code>148</code> (other values normalize to 148).</li>
+                            <li><code>browserFullVersion</code> — full patch (e.g. <code>148.0.7778.167</code>); random from the real Chrome 148 stable pool if omitted.</li>
+                            <li><code>userAgent</code> — override UA; the app applies Chrome UA-Reduction on launch (<code>Chrome/X.0.0.0</code> + Full-Version-List).</li>
+                            <li><code>screen</code> — <code>{ "width": 1920, "height": 1080 }</code>, used as the launch window size.</li>
+                            <li><code>language</code> — e.g. <code>en-US</code>; <code>auto</code>/omitted matches the exit IP. <strong>Fixed in v1.7.17</strong>: <code>auto</code> now actually pushes the derived language to Chrome (previously leaked the host locale).</li>
+                            <li><code>languages</code> — e.g. <code>["en-US","en"]</code>; derived from <code>language</code> if omitted.</li>
+                            <li><code>timezone</code> — IANA tz e.g. <code>America/New_York</code>; <code>Auto</code>/omitted follows the IP.</li>
+                            <li><code>hardwareConcurrency</code> — CPU cores <code>4/8/12/16</code>.</li>
+                            <li><code>deviceMemory</code> — RAM GB <code>2/4/8/16</code>.</li>
+                            <li><code>geolocation</code> — <code>{ "latitude":40.7, "longitude":-74.0, "accuracy":100 }</code>, hooks <code>navigator.geolocation</code>.</li>
+                            <li><code>city</code> — UI metadata only; <code>geolocation</code> is what takes effect.</li>
+                            <li><code>disabledSpoofing</code> — disable kernel spoofing for given dimensions, subset of <code>canvas</code>/<code>audio</code>/<code>clientrects</code>/<code>gpu</code>, default <code>[]</code>. Requires kernel 144+.</li>
+                        </ul>
+                        <p>Deprecated/ignored fields: <code>canvasNoise</code>, <code>audioNoise</code>, <code>noiseSeed</code>, <code>webgl</code>/<code>webglProfile</code>, <code>tlsClientHello</code>, <code>userAgentMetadata</code> (all derived by the kernel seed / browserType).</p>
+
+                        <h3>How the three pre-proxy settings interact (important)</h3>
+                        <p>Whether a profile uses a pre-proxy — and which one — is decided by a <strong>priority waterfall</strong>. Top to bottom, first match wins:</p>
+                        <ol>
+                            <li><strong>① <code>preProxyOverride = off</code>?</strong> → never use a pre-proxy; everything else is ignored.</li>
+                            <li><strong>② Does the profile set <code>preProxyStr</code>?</strong> → use that <strong>dedicated pre-proxy</strong>, ignoring the global pool / mode / global toggle (non-empty implies "on").</li>
+                            <li><strong>③ Use the global pool?</strong> Decided by <code>preProxyOverride</code>: <code>on</code> = yes (even if the top-left global toggle is off); <code>default</code> = follow the global toggle <code>settings.enablePreProxy</code>. Which pool node is picked follows the global <code>mode</code> (single / balance / failover).</li>
+                        </ol>
+                        <p>In short: <code>preProxyOverride</code> controls "use it / force on-off", <code>preProxyStr</code> means "use this specific one (override the global pool)", and <code>settings.enablePreProxy</code> is just the master switch for the shared pool (relevant only when <code>default</code> and no dedicated URL is set). Truth table:</p>
+                        <ul>
+                            <li><code>override=off</code> + anything → <strong>no pre-proxy</strong> (hard off)</li>
+                            <li><code>override=default/on</code> + <code>preProxyStr</code> set → <strong>use the dedicated pre-proxy</strong> (ignores pool/mode/toggle)</li>
+                            <li><code>override=on</code> + <code>preProxyStr</code> empty → <strong>use the global pool</strong> (per mode, ignores the toggle)</li>
+                            <li><code>override=default</code> + <code>preProxyStr</code> empty + toggle on → <strong>use the global pool</strong></li>
+                            <li><code>override=default</code> + <code>preProxyStr</code> empty + toggle off → <strong>no pre-proxy</strong></li>
+                        </ul>
+
+                        <h3>Endpoints &amp; examples</h3>
+                        <p><strong>1) Status</strong> <code>GET /api/status</code></p>
+                        <pre>curl http://127.0.0.1:12138/api/status</pre>
+                        <p>Returns <code>{ success, running[], count }</code>; profiles stopped with <code>?keepProxy=true</code> appear in <code>detachedTunnels[]</code>.</p>
+
+                        <p><strong>2) List profiles</strong> <code>GET /api/profiles</code> (<code>?tag=</code> to filter)</p>
+                        <pre>curl "http://127.0.0.1:12138/api/profiles?tag=tiktok"</pre>
+
+                        <p><strong>3) Profile detail</strong> <code>GET /api/profiles/:idOrName</code></p>
+                        <pre>curl http://127.0.0.1:12138/api/profiles/TikTok-US-01</pre>
+
+                        <p><strong>4) Create</strong> <code>POST /api/profiles</code></p>
+                        <pre>curl -X POST http://127.0.0.1:12138/api/profiles \
+  -H "Content-Type: application/json" \
+  -d '{
+    "name": "TikTok-US-01",
+    "proxyStr": "socks5://user:pass@1.2.3.4:1080",
+    "tags": ["tiktok", "us"],
+    "preProxyStr": "socks5://127.0.0.1:7890",
+    "fingerprint": {
+      "uaMode": "spoof",
+      "platform": "Win32",
+      "browserMajorVersion": 148,
+      "language": "en-US",
+      "timezone": "America/Los_Angeles",
+      "disabledSpoofing": ["canvas", "audio"]
+    }
+  }'</pre>
+                        <p>For headless automation add <code>"headless": true</code>: launches with no window; connect Playwright/DevTools via the <code>"remote port"</code> from <code>/api/open</code>.</p>
+
+                        <p><strong>5) Update</strong> <code>PUT /api/profiles/:idOrName</code> (409 while running — stop first)</p>
+                        <pre>curl -X PUT "http://127.0.0.1:12138/api/profiles/TikTok-US-01" \
+  -H "Content-Type: application/json" \
+  -d '{ "proxyStr": "socks5://new:pass@5.6.7.8:1080", "tags": ["tiktok","us","backup"] }'</pre>
+
+                        <p><strong>6) Duplicate</strong> <code>POST /api/profiles/:idOrName/duplicate</code></p>
+                        <pre>curl -X POST "http://127.0.0.1:12138/api/profiles/TikTok-US-01/duplicate" \
+  -H "Content-Type: application/json" \
+  -d '{ "name": "TikTok-US-01-backup" }'</pre>
+                        <p>Carries fingerprint / customArgs / kernelVersion / preProxyOverride / preProxyStr / resetOnLaunch / headless; the copy gets a new UUID (→ new seed → different canvas/audio/WebGL hashes) and a fresh debugPort.</p>
+
+                        <p><strong>7) Delete</strong> <code>DELETE /api/profiles/:idOrName</code> (409 while running)</p>
+                        <pre>curl -X DELETE "http://127.0.0.1:12138/api/profiles/TikTok-US-01"</pre>
+
+                        <p><strong>8) Launch</strong> <code>GET /api/open/:idOrName</code></p>
+                        <pre># JSON mode
+curl "http://127.0.0.1:12138/api/open/TikTok-US-01?stream=false"
+# Clean launch (temp user-data, no extensions/session; suppresses the debug port)
+curl "http://127.0.0.1:12138/api/open/TikTok-US-01?clean=true"
+# Browser-level verify (CDP navigation probe after launch; needs Remote Debugging, +2-10s)
+curl "http://127.0.0.1:12138/api/open/TikTok-US-01?verify=browser"
+# One-time extra launch args (repeatable)
+curl "http://127.0.0.1:12138/api/open/TikTok-US-01?args=--disable-gpu&args=--window-size=1280,720"</pre>
+                        <p>The response <code>"remote port"</code> (with a space) is the port actually bound this launch — it may be dynamically downgraded on conflict. Always connect CDP to this value, never hard-code <code>debugPort</code>.</p>
+
+                        <p><strong>8.1) Launch query params:</strong> <code>stream</code> (<code>true/false</code>, curl streams by default), <code>lang</code> (<code>en/cn</code>), <code>clean</code>, <code>verify=browser</code> + <code>verifyUrl</code> + <code>verifyStrict</code> (rejects 3xx by default to avoid captive-portal false positives), <code>args</code>. A failed verify auto-stops the profile and returns 500.</p>
+
+                        <p><strong>9) Stop</strong> <code>POST /api/profiles/:idOrName/stop</code> (<code>?keepProxy=true</code> keeps the sing-box tunnel)</p>
+                        <pre>curl -X POST "http://127.0.0.1:12138/api/profiles/TikTok-US-01/stop"</pre>
+
+                        <p><strong>10) Runtime state</strong> <code>GET /api/profiles/:idOrName/runtime</code></p>
+                        <pre>curl http://127.0.0.1:12138/api/profiles/TikTok-US-01/runtime</pre>
+                        <p>Returns <code>running</code>/<code>launching</code>/<code>"remote port"</code> (this launch)/<code>persistedDebugPort</code>/<code>kernelVersion</code>.</p>
+
+                        <p><strong>11) Encrypted full backup</strong> <code>GET /api/export/all?password=your-pw</code> (fingerprint + browser data + cookies + passwords)</p>
+                        <pre>curl "http://127.0.0.1:12138/api/export/all?password=my-secret" -o backup.json</pre>
+                        <p>If some profiles fail to read, the response adds <code>warnings</code> while <code>success</code> stays <code>true</code>.</p>
+
+                        <p><strong>12) YAML fingerprint export</strong> <code>GET /api/export/fingerprint</code> (no browser data/cookies/passwords)</p>
+                        <pre>curl "http://127.0.0.1:12138/api/export/fingerprint"</pre>
+
+                        <p><strong>13) Import</strong> <code>POST /api/import</code> (YAML or Base64 encrypted backup; duplicates auto-suffix)</p>
+                        <pre>curl -X POST http://127.0.0.1:12138/api/import \
+  -H "Content-Type: application/json" \
+  -d '{ "content": "YAML text or Base64 of an encrypted backup", "password": "required for encrypted, optional for YAML" }'</pre>
+
+                        <p><strong>14) Settings</strong> <code>GET / PATCH /api/settings</code></p>
+                        <pre>curl -X PATCH http://127.0.0.1:12138/api/settings \
+  -H "Content-Type: application/json" \
+  -d '{ "enableRemoteDebugging": true }'</pre>
+                        <p>PATCH accepts only whitelisted scalar fields (<code>enableRemoteDebugging</code>, <code>enablePreProxy</code>, <code>mode</code>, <code>selectedId</code>, <code>apiPort</code>, <code>lang</code>, <code>closeBehavior</code>, ...), all type/range validated; array fields (preProxies/subscriptions/userExtensions) are rejected (400). Changing <code>enableApiServer</code>/<code>apiPort</code> returns <code>restartRequired:true</code>.</p>
+
+                        <p><strong>15) Kernel management</strong> <code>/api/kernels</code></p>
+                        <pre># List installed (?available=true also pulls upstream, ?measureSize=true computes size)
+curl "http://127.0.0.1:12138/api/kernels?available=true"
+# Install (blocks until download+extract finishes)
+curl -X POST http://127.0.0.1:12138/api/kernels/144.0.7559.132
+# Uninstall (refuses the pinned version or one in use, 409)
+curl -X DELETE http://127.0.0.1:12138/api/kernels/144.0.7559.132</pre>
+
+                        <p><strong>16) Proxy test</strong> <code>POST /api/proxy/latency</code></p>
+                        <pre># Test a URL directly (single hop, no pre-proxy)
+curl -X POST http://127.0.0.1:12138/api/proxy/latency \
+  -H "Content-Type: application/json" \
+  -d '{ "proxyStr": "socks5://user:pass@1.2.3.4:1080" }'
+# Test a profile's full chain (recommended; an inline preProxyStr wins)
+curl -X POST http://127.0.0.1:12138/api/proxy/latency \
+  -H "Content-Type: application/json" \
+  -d '{ "profileId": "TikTok-US-01" }'</pre>
+                        <p>Returns <code>{ success, latency, target, chain }</code>; <code>chain.preProxy</code> is the pre-proxy used (an inline one shows <code>profile</code>, <code>null</code> = single hop). Add <code>"chain": false</code> to force a single-hop diagnostic. Many overseas proxies only work through a pre-proxy, so prefer the <code>profileId</code> mode for pre-flight checks.</p>
+
+                        <h3>Error codes</h3>
+                        <ul>
+                            <li><code>200</code> ok · <code>400</code> bad request · <code>404</code> not found · <code>409</code> running (edit/delete refused) · <code>500</code> internal error</li>
+                            <li>Errors return <code>{ "success": false, "error": "message" }</code>.</li>
+                        </ul>
+
+                        <h3>Automating with CDP</h3>
+                        <p>Prerequisites: (1) Remote Debugging enabled; (2) the profile has a <code>debugPort</code>; (3) not launched with <code>clean=true</code> (that mode strips the debug port). After launch, <code>"remote port"</code> is a standard CDP endpoint for Playwright / Puppeteer:</p>
+                        <pre>const res = await fetch('http://127.0.0.1:12138/api/open/TikTok-US-01?stream=false').then(r => r.json());
+const port = res['remote port'];   // note the space in the field name
+const browser = await chromium.connectOverCDP('http://127.0.0.1:' + port);</pre>
+                        <p>The full REST contract and more examples live in <code>docs/api/API.md</code> (this page is kept in sync with it).</p>
+                    </div>
+                </div>
+            </div>
+        </div>
+    </div>
+
+    <script>
+        // --- Matrix Animation ---
+        const canvas = document.getElementById('matrixCanvas');
+        const ctx = canvas.getContext('2d');
+
+        canvas.width = window.innerWidth;
+        canvas.height = window.innerHeight;
+
+        const chars = '01ABCDEFGHIJKLMNOPQRSTUVXYZ';
+        const fontSize = 14;
+        const columns = canvas.width / fontSize;
+        const drops = [];
+
+        for (let x = 0; x < columns; x++) drops[x] = 1;
+
+        function drawMatrix() {
+            ctx.fillStyle = 'rgba(5, 5, 5, 0.05)';
+            ctx.fillRect(0, 0, canvas.width, canvas.height);
+
+            ctx.fillStyle = '#00e0ff';
+            ctx.font = fontSize + 'px monospace';
+
+            for (let i = 0; i < drops.length; i++) {
+                const text = chars.charAt(Math.floor(Math.random() * chars.length));
+                ctx.fillText(text, i * fontSize, drops[i] * fontSize);
+
+                if (drops[i] * fontSize > canvas.height && Math.random() > 0.975)
+                    drops[i] = 0;
+
+                drops[i]++;
+            }
+        }
+
+        // Lower frame rate slightly for docs to not distract reading
+        setInterval(drawMatrix, 50);
+
+        window.addEventListener('resize', () => {
+            canvas.width = window.innerWidth;
+            canvas.height = window.innerHeight;
+        });
+
+        // --- I18N Data ---
+        const i18nData = {
+            en: {
+                nav_home: "Home",
+                nav_docs: "Docs",
+                nav_download: "Download",
+                doc_menu_intro: "Introduction",
+                doc_menu_features: "Features",
+                doc_menu_network: "Network",
+                doc_menu_install: "Installation",
+                doc_menu_usage: "Usage",
+                doc_menu_proxy: "Proxy Formats",
+                doc_menu_faq: "FAQ",
+                doc_intro_title: "Introduction",
+                doc_intro_text: "GeekEZ Browser is a specialized anti-detect browser built on Electron and the fingerprint-chromium engine, with sing-box integrated at the core. It is designed to solve multi-account association problems for cross-border e-commerce (TikTok, Amazon, Facebook, Shopee, etc.) by implementing deep system-level fingerprint spoofing.",
+                doc_features_title: "Advanced Features",
+                doc_features_h3_1: "Hardware Randomization",
+                doc_features_list_1: "<li>Random CPU Cores (4/8/12/16)</li><li>Random Memory (4/8/16 GB)</li><li>This ensures every profile looks like a unique physical device.</li>",
+                doc_features_h3_2: "WebRTC & IP Leak Protection",
+                doc_features_text_2: "Forces <code>disable_non_proxied_udp</code> policy to physically block local IP leaks via WebRTC, ensuring only your proxy IP is visible.",
+                doc_network_title: "sing-box Network Engine",
+                doc_network_text: "Fully supports VLESS, VMess, Trojan, Shadowsocks (including SS-2022).",
+                doc_network_h3_1: "Chain Proxy Architecture",
+                doc_network_text_1: "<code>[Local] -> [Pre-Proxy] -> [Profile Proxy] -> [Target]</code>",
+                doc_network_text_2: "This architecture hides your real IP from the final proxy provider, adding an extra layer of anonymity.",
+                doc_network_warning_title: "Important Warning",
+                doc_network_warning_body: "If your local machine is already using a TUN proxy, do not enable pre-proxy, or the proxy chain may fail.",
+                doc_install_title: "Installation",
+                doc_install_text: "Please verify your system requirements before installation.",
+                doc_install_mac_title: "macOS Notice",
+                doc_install_mac_text: "If you see \"App is damaged\", run this command in Terminal:",
+                doc_usage_title: "Usage Guide",
+                doc_usage_quick_title: "1) Quick Start",
+                doc_usage_quick_steps: "<li>Open GeekEZ Browser and click <strong>New Profile</strong>.</li><li>Paste a subscription URL or a single proxy link.</li><li>Click <strong>Generate & Save</strong> to create the profile.</li>",
+                doc_usage_advanced_title: "2) Advanced Features",
+                doc_usage_advanced_list: "<li><strong>Pre-Proxy:</strong> supports proxy nodes or subscription links. If the profile proxy can reach the target site directly, you can leave this disabled. <span class=\"doc-inline-warning\"><strong>Warning:</strong> If your local machine is already using a TUN proxy, do not enable pre-proxy, or the proxy chain may fail.</span></li><li><strong>Extensions:</strong> add unpacked extension folders in <strong>Settings → Extension Management</strong>.</li><li><strong>Remote Debugging:</strong> opens a debugging port for the profile so Puppeteer or DevTools can connect.</li><li><strong>UA & WebGL Modify:</strong> useful for fingerprint testing and compatibility debugging, but not guaranteed to bypass risk-control detection.</li><li><strong>Custom Launch Arguments:</strong> append Chrome launch flags to a single profile, such as window, performance, or experimental options.</li><li><strong>API Server:</strong> after enabling it in Advanced Settings, you can automate profile management through the local REST API.</li>",
+                doc_proxy_title: "Proxy Link Formats",
+                doc_proxy_intro_1: "All protocols support standard proxy-link formats such as VMess, VLESS, Trojan, and Shadowsocks.",
+                doc_proxy_intro_2: "Below are common HTTP and SOCKS examples:",
+                doc_proxy_http_title: "HTTP / HTTPS Proxies",
+                doc_proxy_http_examples: `# With username and password
+http://user:pass@1.2.3.4:8080
+
+# Without username and password
+http://1.2.3.4:8080
+
+# HTTPS form (handled as an HTTP proxy)
+https://1.2.3.4:8080`,
+                doc_proxy_socks_title: "SOCKS Proxies",
+                doc_proxy_socks_examples: `# Standard format (with username and password)
+socks://user:pass@1.2.3.4:1080
+
+# Username only (no password)
+socks5://user@1.2.3.4:1080
+
+# No authentication
+socks5://1.2.3.4:1080
+
+# v2rayN style (base64(user:pass))
+socks://dXNlcjpwYXNz@1.2.3.4:1080#remark
+
+# Plain-text shorthand (treated as SOCKS by GeekEZ Browser)
+1.2.3.4:1080
+1.2.3.4:1080:user:pass`,
+                doc_proxy_direct_title: "Direct Mode (No Proxy)",
+                doc_proxy_direct_value: "Direct",
+                doc_proxy_direct_desc: "When the proxy link is set to <code>Direct</code>, GeekEZ Browser does not start the sing-box proxy engine for the profile and uses the local network directly.",
+                doc_faq_title: "FAQ",
+                doc_faq_q1: "Q: Why is TikTok/Facebook still flagging my account?",
+                doc_faq_a1: "A: Fingerprint isolation only protects device identity. You MUST use a high-quality Clean/Dedicated IP. Shared IPs are easily detected.",
+                doc_faq_q2: "Q: White screen on startup?",
+                doc_faq_a2: "A: Try setting Timezone to \"Auto\" in settings. Some sites (like Oracle) require precise time synchronization.",
+                doc_faq_q3: "Q: What formats are supported for proxy links?",
+                doc_faq_a3: "A: All protocols support standard proxy-link format. HTTP and SOCKS proxies can be entered directly as <code>ip:port</code> without protocol headers. SOCKS additionally supports the <code>user:password:ip:port</code> format used by many providers. For a direct connection, enter <code>127.0.0.1</code>.",
+                doc_menu_api: "API",
+            },
+            zh: {
+                nav_home: "首页",
+                nav_docs: "文档", // Fixed title
+                nav_download: "下载",
+                doc_menu_intro: "简介",
+                doc_menu_features: "核心特性",
+                doc_menu_network: "网络架构",
+                doc_menu_install: "安装指南",
+                doc_menu_usage: "使用说明",
+                doc_menu_proxy: "代理链接写法",
+                doc_menu_faq: "常见问题",
+                doc_intro_title: "简介",
+                doc_intro_text: "GeekEZ Browser 是一款基于 Electron 构建、采用 fingerprint-chromium 内核的专业指纹浏览器，底层深度集成 sing-box 网络引擎。致力于解决跨境电商（TikTok, Amazon, Facebook, Shopee 等）的多账号防关联问题。",
+                doc_features_title: "核心特性",
+                doc_features_h3_1: "硬件指纹随机化",
+                doc_features_list_1: "<li>随机生成 CPU 核心数 (4/8/12/16)</li><li>随机设备内存 (4/8/16 GB)</li><li>确保每个环境都像是一台全新的物理设备。</li>",
+                doc_features_h3_2: "WebRTC 物理阻断",
+                doc_features_text_2: "强制策略 <code>disable_non_proxied_udp</code>，从物理层切断本地 IP 通过 WebRTC 泄露的路径，只有代理 IP 可见。",
+                doc_network_title: "sing-box 网络引擎",
+                doc_network_text: "完美支持 VMess, VLESS, Trojan, Shadowsocks (含 SS-2022)。",
+                doc_network_h3_1: "链式代理架构",
+                doc_network_text_1: "<code>[本机] -> [前置代理] -> [环境代理] -> [目标网站]</code>",
+                doc_network_text_2: "这种架构有效隐藏了您的真实 IP，即使是向下的环境代理提供商也无法获知您的真实地址。",
+                doc_network_warning_title: "重要警告",
+                doc_network_warning_body: "若本机已在使用 TUN 代理，请勿开启前置代理，否则可能导致代理链失败。",
+                doc_install_title: "安装指南",
+                doc_install_text: "安装前请确认系统版本。",
+                doc_install_mac_title: "macOS 注意事项",
+                doc_install_mac_text: "由于未签名，打开时如提示“应用已损坏”，请复制以下命令在终端运行：",
+                doc_usage_title: "使用说明",
+                doc_usage_quick_title: "1) 快速开始",
+                doc_usage_quick_steps: "<li>打开软件，点击 <strong>新建环境</strong> 按钮。</li><li>填入订阅链接（或单条代理链接）。</li><li>点击 <strong>生成并保存</strong>，即可创建环境。</li>",
+                doc_usage_advanced_title: "2) 高级功能说明",
+                doc_usage_advanced_list: "<li><strong>前置代理：</strong>可使用代理节点或订阅链接。若环境代理可直连目标网站，可不启用该功能。<span class=\"doc-inline-warning\"><strong>警告：</strong>若本机已在使用 TUN 代理，请勿开启前置代理，否则可能导致代理链失败。</span></li><li><strong>扩展插件：</strong>在 <strong>设置 → 扩展管理</strong> 中添加“已解压”的插件文件夹。</li><li><strong>远程调试：</strong>用于对环境开放调试端口，便于 Puppeteer / DevTools 连接。</li><li><strong>UA 及 WebGL 修改：</strong>用于定制指纹参数做测试或兼容性调试，不保证绕过风控检测。</li><li><strong>自定义启动参数：</strong>为单个环境附加 Chrome 启动参数（如窗口、性能、实验特性等）。</li><li><strong>API 服务：</strong>在高级设置中启用后，可通过本地 REST API 自动化管理环境。</li>",
+                doc_proxy_title: "代理链接写法",
+                doc_proxy_intro_1: "所有协议均支持标准代理链接格式（VMess / VLESS / Trojan / Shadowsocks 等）。",
+                doc_proxy_intro_2: "以下是 HTTP 与 SOCKS 的常用写法示例：",
+                doc_proxy_http_title: "HTTP / HTTPS 代理",
+                doc_proxy_http_examples: `# 带账号密码
+http://user:pass@1.2.3.4:8080
+
+# 无账号密码
+http://1.2.3.4:8080
+
+# HTTPS 形式（按 HTTP 代理处理）
+https://1.2.3.4:8080`,
+                doc_proxy_socks_title: "SOCKS 代理",
+                doc_proxy_socks_examples: `# 标准写法（带账号密码）
+socks://user:pass@1.2.3.4:1080
+
+# 无密码（仅用户名）
+socks5://user@1.2.3.4:1080
+
+# 无认证
+socks5://1.2.3.4:1080
+
+# v2rayN 风格（base64(user:pass)）
+socks://dXNlcjpwYXNz@1.2.3.4:1080#remark
+
+# 纯文本简写（系统按 SOCKS 处理）
+1.2.3.4:1080
+1.2.3.4:1080:user:pass`,
+                doc_proxy_direct_title: "直连模式（不走代理）",
+                doc_proxy_direct_value: "Direct",
+                doc_proxy_direct_desc: "当代理链接填入 <code>Direct</code> 时，环境启动不会拉起 sing-box 代理内核，将直接使用本地网络连接。",
+                doc_faq_title: "常见问题 (FAQ)",
+                doc_faq_q1: "Q: 为什么 TikTok/Facebook 还是被风控？",
+                doc_faq_a1: "A: 指纹隔离只能保证设备环境不关联。核心在于 **IP 质量**。请务必使用干净的独享 IP，共享 IP 极易被关联。",
+                doc_faq_q2: "Q: 启动后白屏？",
+                doc_faq_a2: "A: 尝试在设置中将时区设为 \"Auto\"。某些网站（如 Oracle）对时间同步要求极高，本地时间偏差会导致白屏。",
+                doc_faq_q3: "Q: 代理链接支持哪些格式和写法？",
+                doc_faq_a3: "A: 所有协议均支持标准代理链接格式。HTTP及SOCKS代理可省略协议头，直接使用 <code>ip:port</code>；SOCKS还额外支持代理商常用的 <code>user:passwd:ip:port</code> 格式。若需直连，直接填入 <code>127.0.0.1</code> 即可。",
+                doc_menu_api: "API 接口",
+            }
+        };
+
+        // --- I18N Logic ---
+        let currentLang = 'en';
+
+        function initLanguage() {
+            const sysLang = navigator.language || navigator.userLanguage;
+            // Default to EN unless pure ZH
+            currentLang = sysLang.toLowerCase().includes('zh') ? 'zh' : 'en';
+            renderLanguage();
+        }
+
+        function toggleLanguage() {
+            currentLang = currentLang === 'en' ? 'zh' : 'en';
+            renderLanguage();
+        }
+
+        function renderLanguage() {
+            const data = i18nData[currentLang];
+            document.documentElement.lang = currentLang === 'zh' ? 'zh-CN' : 'en';
+
+            document.querySelectorAll('[data-i18n]').forEach(el => {
+                const key = el.getAttribute('data-i18n');
+                if (data[key]) {
+                    el.innerHTML = data[key];
+                }
+            });
+            document.getElementById('langBtn').innerText = currentLang === 'zh' ? 'EN' : '中';
+        }
+
+        // --- Scroll Spy ---
+        const sections = document.querySelectorAll('.doc-block');
+        const navItems = document.querySelectorAll('.docs-nav-item');
+
+        window.addEventListener('scroll', () => {
+            let current = '';
+            sections.forEach(section => {
+                const sectionTop = section.offsetTop;
+                if (scrollY >= sectionTop - 150) {
+                    current = section.getAttribute('id');
+                }
+            });
+
+            navItems.forEach(item => {
+                item.classList.remove('active');
+                if (item.getAttribute('href').includes(current) && current !== '') {
+                    item.classList.add('active');
+                }
+            });
+        });
+
+        initLanguage();
+    </script>
+</body>
+
+</html>

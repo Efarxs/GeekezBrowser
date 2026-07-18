@@ -2,7 +2,7 @@
 
 > 这份文件是给未来 Claude session 用的快速上手 + 避坑清单。
 > 项目背景、用户画像已经在 memory 里（[[project-purpose]]、[[fingerprint-chromium-flags]]），不重复。
-> 当前版本：**1.7.18** · 主分支：`main` · 开发分支：`dev`（PR 汇合点）· feat 分支从 dev 拉
+> 当前版本：**1.7.19** · 主分支：`main` · 开发分支：`dev`（PR 汇合点）· feat 分支从 dev 拉
 
 ---
 
@@ -196,8 +196,9 @@ Duplicate flow 走 `...source` 自动带过来。DB schema 三套（sqlite/pg/my
 - 接口一览表（第二章）
 - 详细章节 + `curl` 示例
 - 版本号在 `package.json` 也要 bump
+- **应用内文档 `resources/doc/doc.html` 的 `#doc-api` 段**（v1.7.19 起）—— 它是 API.md 的**双语应用内镜像**（离线、CSS 按 `<html lang>` 切换），改 API 必须**同步这第 3 处**。`scripts/doc-version-sync.test.mjs`（`npm test`）会校验 doc.html 与 API.md 版本头一致 + 覆盖同一批 endpoint/字段，漂了就红。设置里"查看文档"和帮助页走 `open-doc` IPC（`shell.openExternal(file://…#anchor)`，本地缺失回退线上）；`doc.html` 经 `package.json` 的 `extraResources`（`resources/doc → doc`）打包。
 
-**已有先例**：v1.7.12 加 `disabledSpoofing` / `kernelVersion` 字段、v1.7.13 加 duplicate/runtime/kernels/settings 等 7 个新 endpoint、v1.7.14 加 `?verify=browser` + chain-aware latency、v1.7.15-16 是 audit 后连续两轮加固（race / leak 修复，无字段变化）、v1.7.17 加 `headless` 字段 + 修 language-Auto 泄漏宿主 locale 的 bug、v1.7.18 加 `preProxyStr`（per-profile 内联前置代理，覆盖全局池）。每次都跟随 semver patch bump + 完整 doc 更新。
+**已有先例**：v1.7.12 加 `disabledSpoofing` / `kernelVersion` 字段、v1.7.13 加 duplicate/runtime/kernels/settings 等 7 个新 endpoint、v1.7.14 加 `?verify=browser` + chain-aware latency、v1.7.15-16 是 audit 后连续两轮加固（race / leak 修复，无字段变化）、v1.7.17 加 `headless` 字段 + 修 language-Auto 泄漏宿主 locale 的 bug、v1.7.18 加 `preProxyStr`（per-profile 内联前置代理，覆盖全局池）、v1.7.19 把文档本地化（bundled doc.html 双语镜像 + 漂移护栏，API 契约不变）。每次都跟随 semver patch bump + 完整 doc 更新。
 
 **破坏性变更**：**避免**。用可选参数 + 默认关（如 `?verify=browser` / `?clean=true` / `?keepProxy=true`）扩展。
 

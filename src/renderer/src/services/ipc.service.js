@@ -78,6 +78,14 @@ export const ipcService = {
     },
 
     /**
+     * 打开本地文档（resources/doc/doc.html），可跳转到锚点（如 'doc-api'）。
+     * 本地文件缺失时主进程会回退到线上文档。
+     */
+    openDoc(anchor) {
+        return this.invoke('open-doc', anchor);
+    },
+
+    /**
      * 获取 App 元数据 (版本、名称等)
      */
     async getAppInfo() {
