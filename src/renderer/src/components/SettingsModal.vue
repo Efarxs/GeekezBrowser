@@ -47,6 +47,20 @@
                         </div>
                     </div>
 
+                    <div v-if="downloadFailedItem && !installingExtension"
+                        style="margin-bottom:14px; border:1px solid var(--danger, #e5534b); border-radius:8px; padding:10px; background:rgba(229,83,75,0.08);">
+                        <div style="font-size:12px; margin-bottom:8px;">
+                            「{{ downloadFailedItem.name }}」下载失败。若本机已开代理（如 Clash），填入代理地址后重试：
+                        </div>
+                        <div class="ext-search-row">
+                            <input v-model="retryProxy" type="text" placeholder="socks5://127.0.0.1:7890" style="margin:0;">
+                            <button class="primary ext-search-btn" @click="handleRetryWithProxy" :disabled="installingExtension">通过代理重试</button>
+                        </div>
+                        <div style="font-size:11px; opacity:0.6; margin-top:6px;">
+                            仅支持 socks5://（Clash 混合端口 7890 即可）；只填 IP:端口时默认按 socks5 处理。
+                        </div>
+                    </div>
+
                     <div v-if="showStoreSearch" style="margin-bottom:14px; border:1px solid var(--border); border-radius:8px; padding:10px;">
                         <div class="ext-search-row">
                             <input v-model="storeSearchQuery" type="text" placeholder="输入扩展名、商店ID或完整商店链接" style="margin:0;">
@@ -435,6 +449,9 @@ const installingStoreId = ref('');
 const installProgressPercent = ref(0);
 const installProgressMessage = ref('');
 const scopeGroupState = ref({});
+// Store-download failure → proxy retry prompt state.
+const downloadFailedItem = ref(null);
+const retryProxy = ref('');
 
 onMounted(async () => {
     settingService.onExtensionInstallProgress((payload) => {
@@ -450,6 +467,11 @@ onMounted(async () => {
     await settingsStore.loadSettings();
     await loadProfileOptions();
     await handleSearchStore();
+    // Pre-fill the retry proxy with the last one that worked.
+    try {
+        const s = await ipcService.getSettings();
+        retryProxy.value = s?.extensionDownloadProxy || '';
+    } catch (_) { /* best-effort pre-fill */ }
 });
 
 watch(() => settingsStore.apiPort, (newVal) => {
@@ -506,20 +528,34 @@ const handleSearchStore = async () => {
     }
 };
 
-const handleInstallStore = async (item) => {
+const handleInstallStore = async (item, proxy = '') => {
     try {
         installingExtension.value = true;
         installingStoreId.value = item?.id || '';
         installProgressPercent.value = 0;
-        installProgressMessage.value = '准备从商店安装...';
-        await settingsStore.addStoreExtension(item);
+        installProgressMessage.value = proxy ? '正在通过代理安装...' : '准备从商店安装...';
+        await settingsStore.addStoreExtension(item, proxy);
         uiStore.showAlert(`已安装: ${item.name}`);
+        downloadFailedItem.value = null;   // clear retry prompt on success
     } catch (e) {
+        // Surface a proxy input so the user can retry through their local proxy.
+        downloadFailedItem.value = item;
         uiStore.showAlert(`安装失败: ${e.message}`);
     } finally {
         installingStoreId.value = '';
         installingExtension.value = false;
     }
+};
+
+const handleRetryWithProxy = async () => {
+    const item = downloadFailedItem.value;
+    if (!item) return;
+    const proxy = String(retryProxy.value || '').trim();
+    if (!proxy) {
+        uiStore.showAlert('请先填写代理地址，例如 socks5://127.0.0.1:7890');
+        return;
+    }
+    await handleInstallStore(item, proxy);
 };
 
 const handleExtensionScopeChange = async (ext, mode) => {

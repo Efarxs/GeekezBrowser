@@ -188,12 +188,13 @@ export const useSettingsStore = defineStore('settings', {
             await this.loadExtensions();
         },
 
-        async addStoreExtension(item) {
+        async addStoreExtension(item, proxy = '') {
             const payload = {
                 type: 'store',
                 storeId: item?.id || item?.storeId || '',
                 name: item?.name || '',
-                homepage: item?.homepage || ''
+                homepage: item?.homepage || '',
+                proxy: String(proxy || '').trim()
             };
             await settingService.addUserExtension(payload);
             await this.loadExtensions();

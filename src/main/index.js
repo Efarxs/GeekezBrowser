@@ -1418,6 +1418,11 @@ function normalizeSettingsSnapshot(settings) {
     // Per-launch instance frame color (default ON when unset).
     nextSettings.enableInstanceColor = nextSettings.enableInstanceColor !== false;
     nextSettings.userExtensions = normalizeUserExtensions(nextSettings.userExtensions || []);
+    // Last proxy used to successfully download a store extension (pre-fills
+    // the retry prompt). Stored as-is; scheme normalization happens at use.
+    nextSettings.extensionDownloadProxy = typeof nextSettings.extensionDownloadProxy === 'string'
+        ? nextSettings.extensionDownloadProxy.trim()
+        : '';
     nextSettings.closeBehavior = normalizeCloseBehavior(nextSettings.closeBehavior);
     // 数据库配置：默认 sqlite，支持 postgres / mysql
     if (!nextSettings.database || typeof nextSettings.database !== 'object') {
@@ -4777,13 +4782,21 @@ ipcMain.handle('add-user-extension', async (e, payload) => {
 
             const outputDir = path.join(USER_EXTENSIONS_DIR, `store_${storeId}`);
             const crxPath = path.join(app.getPath('temp'), `geekez-store-${storeId}-${Date.now()}.crx`);
+            // Optional download proxy. First attempt is usually direct; on
+            // failure the UI re-invokes with a user-supplied proxy (see the
+            // retry prompt in SettingsModal). Falls back to the last proxy the
+            // user successfully downloaded through.
+            const downloadProxy = String(input.proxy || settings.extensionDownloadProxy || '').trim();
             try {
-                sendProgress(15, '正在从商店下载扩展...');
+                sendProgress(15, downloadProxy ? '正在通过代理下载扩展...' : '正在从商店下载扩展...');
                 await downloadFile(buildChromeStoreCrxUrl(storeId), crxPath, (ratio) => {
                     const pct = 15 + Math.floor(Math.max(0, Math.min(1, ratio || 0)) * 50);
                     sendProgress(pct, '正在下载扩展...');
-                });
+                }, downloadProxy);
                 sendProgress(70, '下载完成，正在解压...');
+                // Remember a working proxy so the next store download pre-fills
+                // it instead of failing direct again.
+                if (downloadProxy) settings.extensionDownloadProxy = downloadProxy;
                 const extracted = await extractCrxToDirectory(crxPath, outputDir);
                 sendProgress(80, '正在优化扩展安装行为...');
                 await patchExtensionInstallBehavior(outputDir).catch(() => { });
@@ -6949,15 +6962,63 @@ app.on('window-all-closed', () => {
 function fetchJson(url) { return new Promise((resolve, reject) => { const req = https.get(url, { headers: { 'User-Agent': 'GeekEZ-Browser' } }, (res) => { let data = ''; res.on('data', c => data += c); res.on('end', () => { try { resolve(JSON.parse(data)); } catch (e) { reject(e); } }); }); req.on('error', reject); }); }
 function getLocalSingBoxVersion() { return new Promise((resolve) => { if (!fs.existsSync(BIN_PATH)) return resolve('v0.0.0'); try { const proc = spawn(BIN_PATH, ['version']); let output = ''; proc.stdout.on('data', d => output += d.toString()); proc.on('close', () => { const match = output.match(/sing-box\s+version\s+(\d+\.\d+\.\d+)/i); resolve(match ? 'v' + match[1] : 'v0.0.0'); }); proc.on('error', () => resolve('v0.0.0')); } catch (e) { resolve('v0.0.0'); } }); }
 function compareVersions(v1, v2) { const p1 = v1.split('.').map(Number); const p2 = v2.split('.').map(Number); for (let i = 0; i < 3; i++) { if ((p1[i] || 0) > (p2[i] || 0)) return 1; if ((p1[i] || 0) < (p2[i] || 0)) return -1; } return 0; }
-function downloadFile(url, dest, onProgress) {
+// Normalize a user-entered proxy into a full URL. A bare `host:port`
+// (what most people paste when told "fill in your proxy") is assumed to be
+// socks5 — Clash's default mixed port (7890) speaks socks5 there.
+function normalizeDownloadProxyUrl(raw) {
+    const s = String(raw || '').trim();
+    if (!s) return '';
+    if (!/^[a-z][a-z0-9+.-]*:\/\//i.test(s)) return `socks5://${s}`;
+    return s;
+}
+
+// Build an https.get agent for the given proxy. Only socks* is supported
+// (socks-proxy-agent is the sole proxy-agent dep; Clash's mixed port covers
+// this). http(s) proxies get a clear, actionable error instead of a silent
+// direct download.
+function createDownloadProxyAgent(rawProxy) {
+    const url = normalizeDownloadProxyUrl(rawProxy);
+    if (!url) return null;
+    const scheme = url.slice(0, url.indexOf('://')).toLowerCase();
+    if (scheme.startsWith('socks')) {
+        const { SocksProxyAgent } = require('socks-proxy-agent');
+        return new SocksProxyAgent(url);
+    }
+    throw new Error(`暂不支持 ${scheme}:// 代理，请填 socks5:// 形式（例如 socks5://127.0.0.1:7890）`);
+}
+
+function downloadFile(url, dest, onProgress, proxy) {
     return new Promise((resolve, reject) => {
-        const file = fs.createWriteStream(dest);
-        https.get(url, (response) => {
+        let agent = null;
+        try {
+            agent = createDownloadProxyAgent(proxy);
+        } catch (err) {
+            reject(err);
+            return;
+        }
+        const options = agent ? { agent } : {};
+        https.get(url, options, (response) => {
             if (response.statusCode >= 300 && response.statusCode < 400 && response.headers.location) {
-                downloadFile(response.headers.location, dest, onProgress).then(resolve).catch(reject);
+                // Re-thread the proxy through the redirect: clients2.google.com
+                // 302s to a googleusercontent host, both blocked in CN — the
+                // hop must go through the same proxy or it defeats the point.
+                response.resume();
+                downloadFile(response.headers.location, dest, onProgress, proxy).then(resolve).catch(reject);
                 return;
             }
 
+            // Reject non-2xx up front. Historically the body (a login/404/error
+            // page) was piped into the .crx and only blew up later as a bogus
+            // "解压失败", hiding the real cause.
+            if (response.statusCode !== 200) {
+                response.resume();
+                reject(new Error(`下载失败：服务器返回 HTTP ${response.statusCode}`));
+                return;
+            }
+
+            // Create the file only once we know we have a real 200 — avoids
+            // leaving an empty/garbage file behind on redirect or error.
+            const file = fs.createWriteStream(dest);
             const total = Number(response.headers['content-length'] || 0);
             let downloaded = 0;
             if (typeof onProgress === 'function' && total > 0) {
@@ -6974,6 +7035,10 @@ function downloadFile(url, dest, onProgress) {
             response.pipe(file);
             file.on('finish', () => {
                 try { file.close(resolve); } catch (e) { resolve(); }
+            });
+            file.on('error', (err) => {
+                fs.unlink(dest, () => { });
+                reject(err);
             });
         }).on('error', (err) => {
             fs.unlink(dest, () => { });
