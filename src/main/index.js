@@ -6698,6 +6698,29 @@ const launchProfileHandler = async (event, profileId, preferredLang, launchOptio
 };
 ipcMain.handle('launch-profile', launchProfileHandler);
 
+// Stop a running profile from the UI (Launch button flips to Stop). Mirrors
+// the HTTP POST /api/profiles/:id/stop default path: close the browser + kill
+// the sing-box tunnel. Marks user-initiated so the exit handler doesn't raise
+// a crash toast. The 'profile-status':stopped broadcast updates the renderer's
+// running list (App.vue), flipping the button back to Launch.
+ipcMain.handle('stop-profile', async (e, profileId) => {
+    if (!profileId || !activeProcesses[profileId]) {
+        return { success: false, error: 'Profile not running' };
+    }
+    userStopRequested.add(profileId);
+    try {
+        const stopped = await cleanupProfileRuntime(profileId, {
+            closeBrowser: true,
+            killProxy: true,
+            refreshMenu: true,
+            broadcast: true
+        });
+        return { success: !!stopped };
+    } catch (err) {
+        return { success: false, error: err?.message || String(err) };
+    }
+});
+
 // Cookie import/export — single-profile, three formats (Netscape / Playwright
 // JSON / EditThisCookie). Requires the profile to be stopped so the sqlite
 // cookie db isn't locked. Uses the same headless-CDP path as full backup.

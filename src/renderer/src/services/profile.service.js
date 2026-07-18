@@ -45,6 +45,18 @@ export const profileService = {
     },
 
     /**
+     * 停止正在运行的环境（关闭浏览器 + 结束代理隧道）
+     */
+    async stop(id) {
+        try {
+            const res = await ipcService.invoke('stop-profile', id);
+            return res || { success: false };
+        } catch (error) {
+            return { success: false, error: error.message || 'Stop failed' };
+        }
+    },
+
+    /**
      * 批量启动环境（顺序启动，降低资源峰值）
      */
     async launchBatch(ids = []) {

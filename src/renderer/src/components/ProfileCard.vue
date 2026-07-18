@@ -25,7 +25,7 @@
                 <span class="tag">{{ displayProto }}</span>
                 <span class="tag">{{ displayScreen }}</span>
                 <span class="tag" style="border:1px solid var(--accent);">
-                    <select class="quick-switch-select no-drag" :value="profile.preProxyOverride || 'default'" @change="quickUpdatePreProxy($event.target.value)">
+                    <select class="quick-switch-select no-drag" :value="profile.preProxyOverride || 'default'" @change="quickUpdatePreProxy($event.target.value, $event)">
                         <option value="default">{{ t('qsDefault') }}</option>
                         <option value="on">{{ t('qsOn') }}</option>
                         <option value="off">{{ t('qsOff') }}</option>
@@ -63,7 +63,8 @@
         </div>
         <div class="actions">
             <div class="launch-group no-drag">
-                <button class="no-drag" @click="launch" :disabled="isLaunching">{{ isLaunching ? t('launchingStatus') : t('launch') }}</button>
+                <button v-if="isRunning" class="no-drag stop-btn" @click="stop" :disabled="stopping">{{ stopping ? t('stoppingStatus') : t('stop') }}</button>
+                <button v-else class="no-drag" @click="launch" :disabled="isLaunching">{{ isLaunching ? t('launchingStatus') : t('launch') }}</button>
                 <button
                     ref="launchMoreBtn"
                     class="no-drag launch-more"
@@ -205,8 +206,13 @@ const copyDebugUrl = async () => {
     setTimeout(() => { debugCopiedFlash.value = false; }, 1200);
 };
 
-const quickUpdatePreProxy = async (val) => {
+const quickUpdatePreProxy = async (val, event) => {
     if (props.isRunning || props.isLaunching) {
+        // The native <select> already shows the user's pick, but it's bound
+        // one-way via :value. Since we bail here without touching the model,
+        // Vue won't re-render it back — reset the DOM value explicitly so the
+        // UI doesn't falsely show a change that never persisted.
+        if (event && event.target) event.target.value = props.profile.preProxyOverride || 'default';
         uiStore.showAlert(t('mustStopFirst'));
         return;
     }
@@ -297,6 +303,23 @@ const launch = async () => {
             message: res.message,
             kind: 'launch-failed'
         });
+    }
+};
+
+const stopping = ref(false);
+const stop = async () => {
+    if (stopping.value) return;
+    stopping.value = true;
+    try {
+        const res = await profileService.stop(props.profile.id);
+        // On success the main process broadcasts 'profile-status':stopped,
+        // which App.vue uses to drop the id from runningIds — the button then
+        // flips back to Launch on its own. Surface only real failures.
+        if (res && res.success === false && res.error && res.error !== 'Profile not running') {
+            uiStore.showAlert((t('stopFailed') || 'Stop failed') + ': ' + res.error);
+        }
+    } finally {
+        stopping.value = false;
     }
 };
 
@@ -541,6 +564,14 @@ const remove = () => {
 .launch-group > button:first-child {
     border-top-right-radius: 0;
     border-bottom-right-radius: 0;
+}
+.launch-group > button.stop-btn {
+    background: var(--danger, #ff3b30);
+    border-color: var(--danger, #ff3b30);
+    color: #fff;
+}
+.launch-group > button.stop-btn:hover:not(:disabled) {
+    filter: brightness(1.08);
 }
 .launch-more {
     padding: 0 8px;
