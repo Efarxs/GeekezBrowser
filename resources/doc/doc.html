@@ -569,7 +569,7 @@ socks://dXNlcjpwYXNz@1.2.3.4:1080#remark
                             <li><code>languages</code> — 语言列表如 <code>["en-US","en"]</code>，未传从 <code>language</code> 派生。</li>
                             <li><code>timezone</code> — IANA 时区如 <code>America/New_York</code>；<code>Auto</code>/不传 = 跟随 IP。</li>
                             <li><code>hardwareConcurrency</code> — CPU 核数 <code>4/8/12/16</code>。</li>
-                            <li><code>deviceMemory</code> — 内存 GB <code>2/4/8/16</code>。</li>
+                            <li><code>deviceMemory</code> — 内存 GB <code>8/16/32</code>（现代 Chrome 报告真实物理内存，非旧规范上限 8）。</li>
                             <li><code>geolocation</code> — <code>{ "latitude":40.7, "longitude":-74.0, "accuracy":100 }</code>，劫持 <code>navigator.geolocation</code>。</li>
                             <li><code>city</code> — 仅 UI 元数据，实际生效的是 <code>geolocation</code>。</li>
                             <li><code>disabledSpoofing</code> — 关闭内核对指定维度的伪装，取值 <code>canvas</code>/<code>audio</code>/<code>clientrects</code>/<code>gpu</code> 的子集，默认 <code>[]</code>。需 kernel 144+。</li>
@@ -778,7 +778,7 @@ const browser = await chromium.connectOverCDP('http://127.0.0.1:' + port);</pre>
                             <li><code>languages</code> — e.g. <code>["en-US","en"]</code>; derived from <code>language</code> if omitted.</li>
                             <li><code>timezone</code> — IANA tz e.g. <code>America/New_York</code>; <code>Auto</code>/omitted follows the IP.</li>
                             <li><code>hardwareConcurrency</code> — CPU cores <code>4/8/12/16</code>.</li>
-                            <li><code>deviceMemory</code> — RAM GB <code>2/4/8/16</code>.</li>
+                            <li><code>deviceMemory</code> — RAM GB <code>8/16/32</code> (modern Chrome reports real physical RAM, not the old spec cap of 8).</li>
                             <li><code>geolocation</code> — <code>{ "latitude":40.7, "longitude":-74.0, "accuracy":100 }</code>, hooks <code>navigator.geolocation</code>.</li>
                             <li><code>city</code> — UI metadata only; <code>geolocation</code> is what takes effect.</li>
                             <li><code>disabledSpoofing</code> — disable kernel spoofing for given dimensions, subset of <code>canvas</code>/<code>audio</code>/<code>clientrects</code>/<code>gpu</code>, default <code>[]</code>. Requires kernel 144+.</li>

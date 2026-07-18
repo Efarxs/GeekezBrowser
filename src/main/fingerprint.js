@@ -583,12 +583,18 @@ function buildUserAgent(browserType, fullVersion, uaPlatformToken) {
 
 function normalizeLanguages(language, languages) {
     if (Array.isArray(languages) && languages.length > 0) {
-        return languages.filter(Boolean).map(v => String(v));
+        // Dedupe + drop falsy so an explicit ['en-US','en-US'] can't leak.
+        return languages.filter(Boolean).map(v => String(v)).filter((v, i, a) => a.indexOf(v) === i);
     }
 
     if (typeof language === 'string' && language && language !== 'auto') {
+        // Real Chrome derives navigator.languages as [full-locale, base-lang]
+        // for ANY region locale — en-US→[en-US,en], fr-FR→[fr-FR,fr],
+        // zh-CN→[zh-CN,zh], pt-BR→[pt-BR,pt], etc. A bare base (e.g. 'en')
+        // stays single. Dedupe guards against 'en'→['en','en'].
         const shortLang = language.split('-')[0];
-        return shortLang && shortLang !== language ? [language, shortLang] : [language];
+        const list = shortLang && shortLang !== language ? [language, shortLang] : [language];
+        return list.filter((v, i, a) => a.indexOf(v) === i);
     }
 
     return ['en-US', 'en'];
@@ -712,7 +718,11 @@ function generateFingerprint(options = {}) {
         language,
         languages,
         hardwareConcurrency: asNumber(options.hardwareConcurrency) || getRandom([4, 8, 12, 16]),
-        deviceMemory: asNumber(options.deviceMemory) || getRandom([2, 4, 8, 16]),
+        // Modern Chrome reports the machine's real RAM (verified: Chrome 150
+        // on a 32GB host reports navigator.deviceMemory === 32 — it is NOT
+        // clamped to 8; that was old-spec behavior). Use a realistic modern
+        // desktop pool so profiles blend in with real machines.
+        deviceMemory: asNumber(options.deviceMemory) || getRandom([8, 16, 32]),
         canvasNoise: options.canvasNoise || {
             r: randInt(-10, 10),
             g: randInt(-10, 10),

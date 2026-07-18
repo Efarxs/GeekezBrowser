@@ -254,7 +254,7 @@ curl "http://127.0.0.1:12138/api/profiles/a1b2c3d4-e5f6-7890-abcd-ef1234567890"
 | `languages` | string[] | 语言列表，如 `["en-US","en"]`。未传会从 `language` 派生 |
 | `timezone` | string | IANA 时区，如 `America/New_York`；传 `Auto` / `auto` / 不传 = 跟随 IP |
 | `hardwareConcurrency` | number | CPU 核数，取值 `4` / `8` / `12` / `16`。默认随机 |
-| `deviceMemory` | number | 内存 GB，取值 `2` / `4` / `8` / `16`。默认随机 |
+| `deviceMemory` | number | 内存 GB，取值 `8` / `16` / `32`（现代 Chrome 报告真实物理内存，非旧规范的上限 8——实测 Chrome 150 在 32G 机器报告 32）。默认随机 |
 | `geolocation` | object \| null | 地理定位。格式 `{ "latitude": 40.7, "longitude": -74.0, "accuracy": 100 }`。通过内置扩展劫持 `navigator.geolocation` |
 | `city` | object \| null | **仅元数据**，用于 UI 展示（如 `{ "name": "New York", "lat": 40.7, "lng": -74.0 }`）。实际生效的是 `geolocation` |
 | `disabledSpoofing` | string[] | 关闭 fingerprint-chromium 对指定维度的内置伪装（转为 `--disable-spoofing=<csv>` flag），取值 `canvas` / `audio` / `clientrects` / `gpu` 的任意子集。默认 `[]`（全部保留伪装）。**需要 kernel 144+**；数组元素会自动去重、非法值过滤。`font` 由跨平台状态自动管理，不接受手动传入 |

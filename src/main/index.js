@@ -6215,10 +6215,18 @@ const launchProfileHandler = async (event, profileId, preferredLang, launchOptio
         const finalLang = profile.fingerprint?.language;
         if (finalLang && finalLang !== 'auto') {
             if (!Array.isArray(profile.fingerprint.languages) || profile.fingerprint.languages.length === 0) {
-                profile.fingerprint.languages = [finalLang, finalLang.split('-')[0]];
+                // Derive [full-locale, base-lang] for any region locale
+                // (en-US→[en-US,en], fr-FR→[fr-FR,fr], zh-CN→[zh-CN,zh]); a
+                // bare base stays single. Dedupe guards 'en'→['en','en'].
+                const base = finalLang.split('-')[0];
+                profile.fingerprint.languages = [finalLang, base].filter((v, i, a) => v && a.indexOf(v) === i);
             }
+            // navigator.languages is driven by --accept-lang: emit the FULL
+            // list (e.g. en-US,en), not just the locale — a single-element
+            // navigator.languages (["en-US"]) is an unnatural, flaggable value.
+            const acceptLang = profile.fingerprint.languages.join(',');
             launchArgs.push(`--lang=${finalLang}`);
-            launchArgs.push(`--accept-lang=${finalLang}`);
+            launchArgs.push(`--accept-lang=${acceptLang}`);
         }
 
         // fingerprint-chromium 引擎级指纹伪装
