@@ -57,18 +57,18 @@
             </div>
 
             <div class="field field-full">
-              <label class="label-tiny">{{ $t('preProxyStrLabel') }}</label>
-              <input v-model="form.preProxyStr" :disabled="viewOnly" placeholder="socks5://127.0.0.1:7890" class="mono-text" spellcheck="false" autocomplete="off">
-              <div class="hint-text">{{ $t('preProxyStrHint') }}</div>
-            </div>
-
-            <div class="field">
               <label class="label-tiny">{{ $t('preProxySetting') }}</label>
-              <select v-model="form.preProxyOverride">
-                <option value="default">{{ $t('optDefault') }}</option>
-                <option value="on">{{ $t('optOn') }}</option>
-                <option value="off">{{ $t('optOff') }}</option>
+              <select v-model="preProxyMode">
+                <option value="global">{{ $t('preProxyModeGlobal') }}</option>
+                <option value="pool">{{ $t('preProxyModePool') }}</option>
+                <option value="dedicated">{{ $t('preProxyModeDedicated') }}</option>
+                <option value="off">{{ $t('preProxyModeOff') }}</option>
               </select>
+              <div v-if="preProxyMode === 'dedicated'" class="dedicated-preproxy">
+                <input v-model="form.preProxyStr" :disabled="viewOnly" placeholder="socks5://127.0.0.1:7890" class="mono-text" spellcheck="false" autocomplete="off">
+                <div class="hint-text">{{ $t('preProxyStrHint') }}</div>
+                <div v-if="!(form.proxyStr || '').trim()" class="warning-text">{{ $t('preProxyNoMainHint') }}</div>
+              </div>
             </div>
             <div class="field">
               <label class="label-tiny">{{ $t('screenRes') }}</label>
@@ -246,6 +246,17 @@ const viewOnly = computed(() => {
     if (!id) return false;
     return profileStore.isRunning(id) || profileStore.isLaunching(id);
 });
+
+// Single-select pre-proxy mode, derived from (preProxyOverride, preProxyStr).
+// Kept as its own ref so the dropdown stays put even if the dedicated URL is
+// briefly empty; override/preProxyStr are recomputed from it at save time.
+const preProxyMode = ref('global');
+function derivePreProxyMode(override, preProxyStr) {
+    if ((override || 'default') === 'off') return 'off';
+    if ((preProxyStr || '').trim()) return 'dedicated';
+    if (override === 'on') return 'pool';
+    return 'global';
+}
 const form = reactive({
   name: '',
   tags: '',
@@ -373,6 +384,7 @@ watch(() => uiStore.editModalVisible, async (visible) => {
     form.notes = p.notes || p.note || p.profileNotes || '';
     form.preProxyOverride = p.preProxyOverride || 'default';
     form.preProxyStr = p.preProxyStr || '';
+    preProxyMode.value = derivePreProxyMode(form.preProxyOverride, form.preProxyStr);
     form.resW = fp.screen?.width || 1920;
     form.resH = fp.screen?.height || 1080;
     form.debugPort = p.debugPort || null;
@@ -482,6 +494,15 @@ async function handleSave() {
     const trimmedUa = (form.customUserAgent || '').trim();
     const uaMode = trimmedUa ? 'spoof' : browserPreset.uaMode;
 
+    // Map the single-select pre-proxy mode back to (override, preProxyStr).
+    const dedicatedUrl = (form.preProxyStr || '').trim();
+    let preProxyOverride = 'default';
+    let preProxyStr = '';
+    if (preProxyMode.value === 'off') { preProxyOverride = 'off'; preProxyStr = dedicatedUrl; }
+    else if (preProxyMode.value === 'pool') { preProxyOverride = 'on'; preProxyStr = ''; }
+    else if (preProxyMode.value === 'dedicated') { preProxyOverride = 'default'; preProxyStr = dedicatedUrl; }
+    else { preProxyOverride = 'default'; preProxyStr = ''; }
+
     const tagsRaw = (form.tags || '').toString();
     const updated = {
       ...p,
@@ -489,8 +510,8 @@ async function handleSave() {
       proxyStr: form.proxyStr,
       tags: tagsRaw.split(/[,，]/).map(s => s.trim()).filter(s => s),
       notes: form.notes,
-      preProxyOverride: form.preProxyOverride,
-      preProxyStr: (form.preProxyStr || '').trim(),
+      preProxyOverride: preProxyOverride,
+      preProxyStr: preProxyStr,
       uaMode,
       browserType: browserPreset.browserType,
       browserMajorVersion: browserPreset.browserMajorVersion,
@@ -604,6 +625,10 @@ async function handleSave() {
   color: #f39c12;
   margin-top: 6px;
   line-height: 1.5;
+}
+
+.dedicated-preproxy {
+  margin-top: 8px;
 }
 
 .flex-row { display: flex; gap: 10px; }

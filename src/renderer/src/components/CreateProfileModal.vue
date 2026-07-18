@@ -49,18 +49,18 @@
           </div>
 
           <div class="field field-full">
-            <label class="label-tiny">{{ $t('preProxyStrLabel') }}</label>
-            <input v-model="form.preProxyStr" placeholder="socks5://127.0.0.1:7890" class="mono-text" spellcheck="false" autocomplete="off">
-            <div class="hint-text">{{ $t('preProxyStrHint') }}</div>
-          </div>
-
-          <div class="field">
             <label class="label-tiny">{{ $t('preProxySetting') }}</label>
-            <select v-model="form.preProxyOverride">
-              <option value="default">{{ $t('optDefault') }}</option>
-              <option value="on">{{ $t('optOn') }}</option>
-              <option value="off">{{ $t('optOff') }}</option>
+            <select v-model="preProxyMode">
+              <option value="global">{{ $t('preProxyModeGlobal') }}</option>
+              <option value="pool">{{ $t('preProxyModePool') }}</option>
+              <option value="dedicated">{{ $t('preProxyModeDedicated') }}</option>
+              <option value="off">{{ $t('preProxyModeOff') }}</option>
             </select>
+            <div v-if="preProxyMode === 'dedicated'" class="dedicated-preproxy">
+              <input v-model="form.preProxyStr" placeholder="socks5://127.0.0.1:7890" class="mono-text" spellcheck="false" autocomplete="off">
+              <div class="hint-text">{{ $t('preProxyStrHint') }}</div>
+              <div v-if="!(form.proxyStr || '').trim()" class="warning-text">{{ $t('preProxyNoMainHint') }}</div>
+            </div>
           </div>
           <div class="field">
             <label class="label-tiny">{{ $t('screenRes') }}</label>
@@ -229,6 +229,9 @@ const isSaving = ref(false);
 const settings = ref({});
 const showUaModify = ref(false);
 
+// Single-select pre-proxy mode; maps to (preProxyOverride, preProxyStr) on save.
+const preProxyMode = ref('global');
+
 const form = reactive({
   name: '',
   tags: '',
@@ -387,6 +390,7 @@ watch(() => uiStore.addModalVisible, async (newVal) => {
       disabledSpoofing: [],
       headless: false
     });
+    preProxyMode.value = 'global';
     timezoneSearch.value = AUTO_TIMEZONE_LABEL;
     citySearch.value = 'Auto (IP Based)';
     languageSearch.value = 'Auto (System Default)';
@@ -440,6 +444,14 @@ async function handleSave() {
       const browserPreset = parseBrowserVersionPreset(form.browserVersionPreset);
       const trimmedUa = (form.customUserAgent || '').trim();
 
+      // Map single-select pre-proxy mode → (override, preProxyStr).
+      const dedicatedUrl = (form.preProxyStr || '').trim();
+      let preProxyOverride = 'default';
+      let preProxyStr = '';
+      if (preProxyMode.value === 'off') { preProxyOverride = 'off'; preProxyStr = dedicatedUrl; }
+      else if (preProxyMode.value === 'pool') { preProxyOverride = 'on'; preProxyStr = ''; }
+      else if (preProxyMode.value === 'dedicated') { preProxyOverride = 'default'; preProxyStr = dedicatedUrl; }
+
       const payload = {
         name,
         proxyStr,
@@ -451,8 +463,8 @@ async function handleSave() {
         language: form.language,
         screen,
         uaMode: trimmedUa ? 'spoof' : browserPreset.uaMode,
-        preProxyOverride: form.preProxyOverride,
-        preProxyStr: (form.preProxyStr || '').trim(),
+        preProxyOverride: preProxyOverride,
+        preProxyStr: preProxyStr,
         customArgs: form.customArgs,
         browserType: browserPreset.browserType,
         browserMajorVersion: browserPreset.browserMajorVersion,
@@ -487,6 +499,17 @@ async function handleSave() {
 <style scoped>
 .modal-content {
   width: min(720px, 92vw);
+}
+
+.dedicated-preproxy {
+  margin-top: 8px;
+}
+
+.warning-text {
+  font-size: 12px;
+  color: #f39c12;
+  margin-top: 6px;
+  line-height: 1.5;
 }
 
 /* See EditProfileModal for the same block — kept in sync intentionally
