@@ -176,6 +176,14 @@ Create/Edit modal 里前置代理是**一个 4 选一下拉**（不是 override 
 
 **停止的假崩溃提示坑**：`cleanupProfileRuntime` 的完整拆除分支会 `delete activeProcesses[id]`，但**必须在"即将 forceKill 活着的 browserPid"时保留 `userStopRequested` 标记**——浏览器 `exit` 事件是异步的、在此函数之后才触发，它靠这个标记判定 `wasUserInitiated` 来抑制"浏览器异常退出"toast，并自己消费/删除标记。只有"浏览器已经死了、没有 pid 可杀"时才在这里删标记（避免残留误伤下次真崩溃）。这个坑同时影响 HTTP `/stop` 和卡片 Stop 按钮。
 
+### 16. 托盘图标"运行久了会丢" —— Windows 通知区重建，必须主动重建 Tray（v1.7.19）
+
+`createTray()` 只在启动调一次（`index.js` `whenReady`）。Windows 会在 **explorer 重启 / Windows Update / DPI·显示器变化 / 睡眠唤醒 / 锁屏解锁**时**整个重建通知区**，要求程序重新登记图标；不重加图标就消失、直到重启 App。**致命陷阱：这种情况下 `appTray.isDestroyed()` 仍返回 `false`**（Electron 还持有对象，只是 OS 那侧图标没了），所以任何"检查 isDestroyed 再补"的健康检查都查不出来——**只能主动重建**。
+
+修法：`registerTrayResilience()` 在相关事件上 `destroy()` 旧 tray + `createTray()` 重建（800ms 防抖）：`powerMonitor` 的 `resume`/`unlock-screen`（长会话最常见诱因）+ `screen` 的 `display-metrics-changed`/`display-added`/`display-removed`。未覆盖"explorer 崩溃且不伴随上述事件"——如仍偶发，加一条主窗口 `focus` 防抖重建兜底。
+
+**打包版还要补图标**：`build.files` 只含 `out/**`，`extraResources` 原来只拷 `bin`+`doc`，所以 `resources/logo.ico`/`icon.ico` 在打包后**不存在**，`resolveTrayIconImage` 只能退回 `app.getFileIcon(execPath)`/SVG 方块。已加 `extraResources` 把 `logo.ico/icon.ico/logo.svg` 拷到 `resourcesPath`（该函数已探测这些路径）。另注：**Windows 上 `nativeImage.createFromPath('*.svg')` 不栅格化 SVG**（返回空被跳过），所以真正生效的是 `.ico`；SVG 只在 dataURL 兜底那处用。
+
 ---
 
 ## 一眼速查表
