@@ -299,6 +299,27 @@
                                 </select>
                             </div>
 
+                            <!-- Instance Frame Color Toggle -->
+                            <label class="dev-toggle-item" style="display:flex; align-items:center; gap:14px; padding:14px 16px; cursor:pointer; border-radius:8px; transition:all 0.2s;">
+                                <div class="toggle-switch" style="position:relative; width:44px; height:24px; flex-shrink:0;">
+                                    <input type="checkbox" :checked="settingsStore.enableInstanceColor"
+                                        style="opacity:0; width:0; height:0; position:absolute;"
+                                        @change="e => settingsStore.toggleInstanceColor(e.target.checked)">
+                                    <div class="toggle-track" :style="{ background: settingsStore.enableInstanceColor ? 'var(--accent)' : 'var(--border)' }"
+                                        style="position:absolute; inset:0; border-radius:12px; transition:0.3s;">
+                                    </div>
+                                    <div class="toggle-knob" :style="{ left: settingsStore.enableInstanceColor ? '22px' : '2px' }"
+                                        style="position:absolute; top:2px; width:20px; height:20px; background:#fff; border-radius:50%; transition:0.3s; box-shadow:0 2px 4px rgba(0,0,0,0.2);">
+                                    </div>
+                                </div>
+                                <div style="flex:1;">
+                                    <div style="font-size:13px; font-weight:500; color:var(--text-primary);"
+                                        data-i18n="instanceColorToggle">{{ $t('instanceColorToggle') }}</div>
+                                    <div style="font-size:11px; color:var(--text-secondary); opacity:0.8;"
+                                        data-i18n="instanceColorToggleHint">{{ $t('instanceColorToggleHint') }}</div>
+                                </div>
+                            </label>
+
                             <div style="height:1px; background:var(--border); margin:0 16px;"></div>
 
                             <!-- Window Close Behavior -->

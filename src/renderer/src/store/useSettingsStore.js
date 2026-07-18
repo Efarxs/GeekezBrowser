@@ -9,6 +9,7 @@ export const useSettingsStore = defineStore('settings', {
         enableUaModify: false,
         enableWatermark: true,
         watermarkStyle: 'enhanced',
+        enableInstanceColor: true,
         enableApiServer: false,
         closeBehavior: 'tray',
         ipInfoProvider: 'ipinfo',
@@ -34,6 +35,7 @@ export const useSettingsStore = defineStore('settings', {
                 this.enableUaModify = (settings.enableUaModify ?? settings.enableUaWebglModify) || false;
                 this.enableWatermark = settings.enableWatermark !== false;
                 this.watermarkStyle = settings.watermarkStyle || 'enhanced';
+                this.enableInstanceColor = settings.enableInstanceColor !== false;
                 this.enableApiServer = settings.enableApiServer || false;
                 this.closeBehavior = settings.closeBehavior === 'quit' ? 'quit' : 'tray';
                 this.ipInfoProvider = ['ipinfo', 'ipwho', 'ipapi'].includes(settings.ipInfoProvider)
@@ -96,6 +98,13 @@ export const useSettingsStore = defineStore('settings', {
             this.enableWatermark = enabled;
             const settings = await ipcService.getSettings();
             settings.enableWatermark = enabled;
+            await ipcService.saveSettings(settings);
+        },
+
+        async toggleInstanceColor(enabled) {
+            this.enableInstanceColor = enabled;
+            const settings = await ipcService.getSettings();
+            settings.enableInstanceColor = enabled;
             await ipcService.saveSettings(settings);
         },
 

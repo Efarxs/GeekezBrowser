@@ -276,6 +276,8 @@ window.zhCN = {
     launchingStepLabel: "启动进度",
     watermarkToggle: "🏷️ 环境水印",
     watermarkToggleHint: "在浏览器窗口中显示当前环境名称的浮动标识",
+    instanceColorToggle: "🎨 实例边框色",
+    instanceColorToggleHint: "每次启动给窗口分配随机边框色（卡片边框同色），便于区分多个实例。关闭则用默认主题色。仅浏览器外壳级，页面读不到。",
     watermarkStyleEnhanced: "🎯 右下角徽章",
     watermarkStyleBanner: "🔹 顶部横幅",
     // 内核下载弹窗

@@ -273,6 +273,8 @@ const enTranslations = {
     launchingStepLabel: "Progress",
     watermarkToggle: "🏷️ Profile Watermark",
     watermarkToggleHint: "Show a floating badge with the profile name in each browser window",
+    instanceColorToggle: "🎨 Instance Frame Color",
+    instanceColorToggleHint: "Give each launched window a random frame color (and matching card border) to tell instances apart. Off = default theme. Browser-chrome only — not visible to pages.",
     watermarkStyleEnhanced: "🎯 Bottom-right badge",
     watermarkStyleBanner: "🔹 Top banner",
     // Kernel download modal
