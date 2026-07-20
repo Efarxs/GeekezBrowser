@@ -3675,9 +3675,15 @@ async function resolveTrayIconImage() {
         path.join(app.getAppPath(), 'resources', 'icon.ico'),
         path.join(app.getAppPath(), 'resources', 'logo.svg'),
         path.join(app.getAppPath(), 'src', 'renderer', 'icon.png'),
-        path.join(process.resourcesPath, 'logo.svg'),
-        path.join(process.resourcesPath, 'icon.ico'),
+        // Packaged build: resources/*.ico live under process.resourcesPath (via
+        // extraResources; app.asar only has out/**). logo.ico FIRST so the tray
+        // uses the same white-bg icon as dev — icon.ico is a transparent-bg
+        // variant and logo.svg loads empty on Windows (nativeImage doesn't
+        // rasterize SVG), so without this order packaged fell through to the
+        // transparent icon.ico. Keep logo.ico ahead of both here.
         path.join(process.resourcesPath, 'logo.ico'),
+        path.join(process.resourcesPath, 'icon.ico'),
+        path.join(process.resourcesPath, 'logo.svg'),
         path.join(process.resourcesPath, 'icon.png'),
         path.join(__dirname, '..', 'renderer', 'icon.png')
     ];

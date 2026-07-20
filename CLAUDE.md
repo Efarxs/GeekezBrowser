@@ -184,6 +184,8 @@ Create/Edit modal 里前置代理是**一个 4 选一下拉**（不是 override 
 
 **打包版还要补图标**：`build.files` 只含 `out/**`，`extraResources` 原来只拷 `bin`+`doc`，所以 `resources/logo.ico`/`icon.ico` 在打包后**不存在**，`resolveTrayIconImage` 只能退回 `app.getFileIcon(execPath)`/SVG 方块。已加 `extraResources` 把 `logo.ico/icon.ico/logo.svg` 拷到 `resourcesPath`（该函数已探测这些路径）。另注：**Windows 上 `nativeImage.createFromPath('*.svg')` 不栅格化 SVG**（返回空被跳过），所以真正生效的是 `.ico`；SVG 只在 dataURL 兜底那处用。
 
+**dev 与打包版托盘图标要一致，靠候选顺序**（v1.7.20）：dev 下 `app.getAppPath()`=项目根，命中 `resources/logo.ico`（256×256、白底青图、**不透明**）。打包版 asar 里没有 `resources/*.ico`，会落到 `process.resourcesPath` 段——原顺序是 `logo.svg`(Win 加载为空跳过) → `icon.ico`(32×32、**透明底**，先命中) → `logo.ico`，结果打包版托盘变成透明的 `icon.ico`，与 dev 的白底不一致。修法：把 `resolveTrayIconImage` 里 `process.resourcesPath` 段的 `logo.ico` **排到 `icon.ico`/`logo.svg` 之前**，两边统一用白底 `logo.ico`。注意 `icon.ico` 与 `logo.ico` 是两张不同美术源（前者透明、后者白底），透明与否是**源文件属性**，代码只决定选哪张。窗口/exe 图标（`resolveWindowIconPath` + `build.win.icon`）本来就用 `logo.ico`，不受影响。
+
 ### 17. `resetOnLaunch` 的 `carryOver` 白名单会静默丢掉任何没列进去的 fingerprint 字段（v1.7.20 修复的坑）
 
 历史 bug：`resetOnLaunch=true` 的 profile 每次启动会 `profile.fingerprint = generateFingerprint(carryOver)` **整体重建**指纹对象。`carryOver`（`index.js:5619` 附近）是一份**显式白名单**——只列了要跨重掷保留的用户字段（timezone / city / geolocation / language / platform / screen / hardwareConcurrency / deviceMemory / userAgent…）。**任何没写进白名单的字段，重掷后一律丢失**；而且 `generateFingerprint`（`fingerprint.js:670`）返回的对象是**硬编码字段集**，不会透传 `options` 里的额外字段。
