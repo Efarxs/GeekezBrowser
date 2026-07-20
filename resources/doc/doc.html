@@ -499,7 +499,7 @@ socks://dXNlcjpwYXNz@1.2.3.4:1080#remark
                          内容对齐 docs/api/API.md v1.7.18；改 API 时两边一起更新。 -->
                     <div class="api-doc-zh">
                         <h2>API 文档</h2>
-                        <p>GeekEZ Browser 提供一套本地 HTTP REST API，可通过脚本对指纹环境增删改查、启动、停止、备份。<strong>适用版本 v1.7.19</strong>。</p>
+                        <p>GeekEZ Browser 提供一套本地 HTTP REST API，可通过脚本对指纹环境增删改查、启动、停止、备份。<strong>适用版本 v1.7.20</strong>。</p>
                         <ul>
                             <li>默认监听 <code>http://127.0.0.1:12138</code>，端口可在 <strong>设置 → API 服务</strong> 修改（改动后自动重启）。</li>
                             <li>只监听 <code>127.0.0.1</code>，<strong>无认证</strong>，请勿转发到公网。</li>
@@ -572,7 +572,7 @@ socks://dXNlcjpwYXNz@1.2.3.4:1080#remark
                             <li><code>deviceMemory</code> — 内存 GB <code>8/16/32</code>（现代 Chrome 报告真实物理内存，非旧规范上限 8）。</li>
                             <li><code>geolocation</code> — <code>{ "latitude":40.7, "longitude":-74.0, "accuracy":100 }</code>，劫持 <code>navigator.geolocation</code>。</li>
                             <li><code>city</code> — 仅 UI 元数据，实际生效的是 <code>geolocation</code>。</li>
-                            <li><code>disabledSpoofing</code> — 关闭内核对指定维度的伪装，取值 <code>canvas</code>/<code>audio</code>/<code>clientrects</code>/<code>gpu</code> 的子集，默认 <code>[]</code>。需 kernel 144+。</li>
+                            <li><code>disabledSpoofing</code> — 关闭内核对指定维度的伪装，取值 <code>canvas</code>/<code>audio</code>/<code>clientrects</code>/<code>gpu</code> 的子集，默认 <code>[]</code>。需 kernel 144+。<strong>v1.7.20 修复</strong>：<code>resetOnLaunch=true</code> 时此字段此前会被指纹重掷丢弃，现已保留。</li>
                         </ul>
                         <p>已废弃/忽略字段：<code>canvasNoise</code>、<code>audioNoise</code>、<code>noiseSeed</code>、<code>webgl</code>/<code>webglProfile</code>、<code>tlsClientHello</code>、<code>userAgentMetadata</code>（均由内核 seed / browserType 自动派生）。</p>
 
@@ -708,7 +708,7 @@ const browser = await chromium.connectOverCDP('http://127.0.0.1:' + port);</pre>
                     </div>
                     <div class="api-doc-en">
                         <h2>API Documentation</h2>
-                        <p>GeekEZ Browser exposes a local HTTP REST API to create, query, launch, stop and back up fingerprint profiles from scripts. <strong>Applies to v1.7.19</strong>.</p>
+                        <p>GeekEZ Browser exposes a local HTTP REST API to create, query, launch, stop and back up fingerprint profiles from scripts. <strong>Applies to v1.7.20</strong>.</p>
                         <ul>
                             <li>Listens on <code>http://127.0.0.1:12138</code> by default; the port is configurable under <strong>Settings → API Server</strong> (auto-restarts on change).</li>
                             <li>Binds to <code>127.0.0.1</code> only, <strong>no authentication</strong> — never forward it to the public internet.</li>
@@ -781,7 +781,7 @@ const browser = await chromium.connectOverCDP('http://127.0.0.1:' + port);</pre>
                             <li><code>deviceMemory</code> — RAM GB <code>8/16/32</code> (modern Chrome reports real physical RAM, not the old spec cap of 8).</li>
                             <li><code>geolocation</code> — <code>{ "latitude":40.7, "longitude":-74.0, "accuracy":100 }</code>, hooks <code>navigator.geolocation</code>.</li>
                             <li><code>city</code> — UI metadata only; <code>geolocation</code> is what takes effect.</li>
-                            <li><code>disabledSpoofing</code> — disable kernel spoofing for given dimensions, subset of <code>canvas</code>/<code>audio</code>/<code>clientrects</code>/<code>gpu</code>, default <code>[]</code>. Requires kernel 144+.</li>
+                            <li><code>disabledSpoofing</code> — disable kernel spoofing for given dimensions, subset of <code>canvas</code>/<code>audio</code>/<code>clientrects</code>/<code>gpu</code>, default <code>[]</code>. Requires kernel 144+. <strong>Fixed in v1.7.20</strong>: previously dropped by the per-launch fingerprint reroll when <code>resetOnLaunch=true</code>; now preserved.</li>
                         </ul>
                         <p>Deprecated/ignored fields: <code>canvasNoise</code>, <code>audioNoise</code>, <code>noiseSeed</code>, <code>webgl</code>/<code>webglProfile</code>, <code>tlsClientHello</code>, <code>userAgentMetadata</code> (all derived by the kernel seed / browserType).</p>
 

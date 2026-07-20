@@ -1,9 +1,9 @@
 # GeekEZ Browser · REST API 参考
 
-> 适用版本：**v1.7.19**
-> 更新日期：2026-07-18
+> 适用版本：**v1.7.20**
+> 更新日期：2026-07-20
 >
-> 应用内「设置 → API 服务 → 查看文档」及帮助页打开的是本仓 `resources/doc/doc.html`（离线双语），其 API 章节与本文件保持同步。改 API 时请**同时**更新本文件与 `doc.html`（`npm test` 里的 `doc-version-sync` 会校验两者版本头一致）。v1.7.19 仅为文档本地化交付，API 契约与 v1.7.18 一致。
+> 应用内「设置 → API 服务 → 查看文档」及帮助页打开的是本仓 `resources/doc/doc.html`（离线双语），其 API 章节与本文件保持同步。改 API 时请**同时**更新本文件与 `doc.html`（`npm test` 里的 `doc-version-sync` 会校验两者版本头一致）。v1.7.20 修复了 `resetOnLaunch=true` 时 `disabledSpoofing` 被指纹重掷丢弃的问题（详见该字段说明），并把 UI 新建环境的 UA 默认从「不修改」改为 Chrome 148（纯 UI 默认，不影响 API 端 `uaMode` 默认值 `none`）。字段与端点契约与 v1.7.18 一致。
 
 GeekEZ Browser 提供一套本地 HTTP REST API，可通过脚本对指纹环境进行增删改查、启动、停止、备份等操作。
 
@@ -257,7 +257,7 @@ curl "http://127.0.0.1:12138/api/profiles/a1b2c3d4-e5f6-7890-abcd-ef1234567890"
 | `deviceMemory` | number | 内存 GB，取值 `8` / `16` / `32`（现代 Chrome 报告真实物理内存，非旧规范的上限 8——实测 Chrome 150 在 32G 机器报告 32）。默认随机 |
 | `geolocation` | object \| null | 地理定位。格式 `{ "latitude": 40.7, "longitude": -74.0, "accuracy": 100 }`。通过内置扩展劫持 `navigator.geolocation` |
 | `city` | object \| null | **仅元数据**，用于 UI 展示（如 `{ "name": "New York", "lat": 40.7, "lng": -74.0 }`）。实际生效的是 `geolocation` |
-| `disabledSpoofing` | string[] | 关闭 fingerprint-chromium 对指定维度的内置伪装（转为 `--disable-spoofing=<csv>` flag），取值 `canvas` / `audio` / `clientrects` / `gpu` 的任意子集。默认 `[]`（全部保留伪装）。**需要 kernel 144+**；数组元素会自动去重、非法值过滤。`font` 由跨平台状态自动管理，不接受手动传入 |
+| `disabledSpoofing` | string[] | 关闭 fingerprint-chromium 对指定维度的内置伪装（转为 `--disable-spoofing=<csv>` flag），取值 `canvas` / `audio` / `clientrects` / `gpu` 的任意子集。默认 `[]`（全部保留伪装）。**需要 kernel 144+**；数组元素会自动去重、非法值过滤。`font` 由跨平台状态自动管理，不接受手动传入。**v1.7.20 修复**：`resetOnLaunch=true` 时此字段此前会被每次启动的指纹重掷丢弃（导致设了却不生效），现已随重掷保留 |
 
 **已废弃/不再生效的字段**（旧文档 & 旧客户端可能还在传，但当前版本会忽略）：
 

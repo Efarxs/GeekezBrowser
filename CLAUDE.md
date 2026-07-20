@@ -2,7 +2,7 @@
 
 > 这份文件是给未来 Claude session 用的快速上手 + 避坑清单。
 > 项目背景、用户画像已经在 memory 里（[[project-purpose]]、[[fingerprint-chromium-flags]]），不重复。
-> 当前版本：**1.7.19** · 主分支：`main` · 开发分支：`dev`（PR 汇合点）· feat 分支从 dev 拉
+> 当前版本：**1.7.20** · 主分支：`main` · 开发分支：`dev`（PR 汇合点）· feat 分支从 dev 拉
 
 ---
 
@@ -184,9 +184,15 @@ Create/Edit modal 里前置代理是**一个 4 选一下拉**（不是 override 
 
 **打包版还要补图标**：`build.files` 只含 `out/**`，`extraResources` 原来只拷 `bin`+`doc`，所以 `resources/logo.ico`/`icon.ico` 在打包后**不存在**，`resolveTrayIconImage` 只能退回 `app.getFileIcon(execPath)`/SVG 方块。已加 `extraResources` 把 `logo.ico/icon.ico/logo.svg` 拷到 `resourcesPath`（该函数已探测这些路径）。另注：**Windows 上 `nativeImage.createFromPath('*.svg')` 不栅格化 SVG**（返回空被跳过），所以真正生效的是 `.ico`；SVG 只在 dataURL 兜底那处用。
 
----
+### 17. `resetOnLaunch` 的 `carryOver` 白名单会静默丢掉任何没列进去的 fingerprint 字段（v1.7.20 修复的坑）
 
-## 一眼速查表
+历史 bug：`resetOnLaunch=true` 的 profile 每次启动会 `profile.fingerprint = generateFingerprint(carryOver)` **整体重建**指纹对象。`carryOver`（`index.js:5619` 附近）是一份**显式白名单**——只列了要跨重掷保留的用户字段（timezone / city / geolocation / language / platform / screen / hardwareConcurrency / deviceMemory / userAgent…）。**任何没写进白名单的字段，重掷后一律丢失**；而且 `generateFingerprint`（`fingerprint.js:670`）返回的对象是**硬编码字段集**，不会透传 `options` 里的额外字段。
+
+踩过的雷：`disabledSpoofing`（用户在 UI 勾的"关闭 GPU/canvas/... 伪装"）没进白名单 → 存进 DB 的 `["gpu"]` 在启动瞬间被丢 → launch flow（`index.js:6413`）读到空 → `--disable-spoofing=gpu` **根本没推**。表象极具迷惑性：**UI 勾选无效，但把等价的 `--disable-spoofing=gpu` 手写进自定义参数却生效**——因为 customArgs 走的是 `profile.customArgs` 路径（`index.js:6529`），重掷根本不碰它。
+
+**规则**：任何新增的、代表**用户意图**（而非可重掷噪声种子）的 fingerprint 字段，必须**同时**：(1) 加进 `carryOver` 白名单；(2) 在 `generateFingerprint` 的返回对象里透传出来（`disabledSpoofing` 现在是 `if (Array.isArray(options.disabledSpoofing)) fingerprint.disabledSpoofing = [...]`）。噪声类字段（canvasNoise / audioNoise / noiseSeed）则**故意**不保留、每次重掷。回归验证：勾"关闭 GPU 伪装" + 开 `resetOnLaunch`，启动看控制台是否打印 `🎭 --disable-spoofing=gpu`。
+
+> 相关背景：`disabledSpoofing` 只影响**元数据级**伪装。GPU 维度尤其要注意——它伪造的是 WebGL vendor/renderer 字符串 + GL 能力参数 + WebGPU adapter 这一整套**上报值**，但改不了宿主真实 GPU 的**实际渲染像素**。browserscan 之类只查元数据自洽，全绿；Cloudflare Turnstile 会真渲染再比对"声称硬件 vs 实际行为"，声称非宿主 GPU 必穿帮。所以 Turnstile 场景关掉 GPU 伪装（如实上报真实 GPU）反而能过。
 
 | 我想找... | 去这里 |
 |---|---|
@@ -227,7 +233,7 @@ Create/Edit modal 里前置代理是**一个 4 选一下拉**（不是 override 
 - 版本号在 `package.json` 也要 bump
 - **应用内文档 `resources/doc/doc.html` 的 `#doc-api` 段**（v1.7.19 起）—— 它是 API.md 的**双语应用内镜像**（离线、CSS 按 `<html lang>` 切换），改 API 必须**同步这第 3 处**。`scripts/doc-version-sync.test.mjs`（`npm test`）会校验 doc.html 与 API.md 版本头一致 + 覆盖同一批 endpoint/字段，漂了就红。设置里"查看文档"和帮助页走 `open-doc` IPC（`shell.openExternal(file://…#anchor)`，本地缺失回退线上）；`doc.html` 经 `package.json` 的 `extraResources`（`resources/doc → doc`）打包。
 
-**已有先例**：v1.7.12 加 `disabledSpoofing` / `kernelVersion` 字段、v1.7.13 加 duplicate/runtime/kernels/settings 等 7 个新 endpoint、v1.7.14 加 `?verify=browser` + chain-aware latency、v1.7.15-16 是 audit 后连续两轮加固（race / leak 修复，无字段变化）、v1.7.17 加 `headless` 字段 + 修 language-Auto 泄漏宿主 locale 的 bug、v1.7.18 加 `preProxyStr`（per-profile 内联前置代理，覆盖全局池）、v1.7.19 把文档本地化（bundled doc.html 双语镜像 + 漂移护栏，API 契约不变）+ 一批运行态 UI（Stop 按钮、关水印时每次启动随机边框色、前置代理单选式编辑 + 卡片只读 tag、无代理显示 DIRECT）。每次都跟随 semver patch bump + 完整 doc 更新。
+**已有先例**：v1.7.12 加 `disabledSpoofing` / `kernelVersion` 字段、v1.7.13 加 duplicate/runtime/kernels/settings 等 7 个新 endpoint、v1.7.14 加 `?verify=browser` + chain-aware latency、v1.7.15-16 是 audit 后连续两轮加固（race / leak 修复，无字段变化）、v1.7.17 加 `headless` 字段 + 修 language-Auto 泄漏宿主 locale 的 bug、v1.7.18 加 `preProxyStr`（per-profile 内联前置代理，覆盖全局池）、v1.7.19 把文档本地化（bundled doc.html 双语镜像 + 漂移护栏，API 契约不变）+ 一批运行态 UI（Stop 按钮、关水印时每次启动随机边框色、前置代理单选式编辑 + 卡片只读 tag、无代理显示 DIRECT）、v1.7.20 修 `resetOnLaunch` 重掷丢弃 `disabledSpoofing` 的 bug（见坑 #17，字段契约不变）+ UI 新建环境 UA 默认从"不修改"改为 Chrome 148（纯 UI 默认，API 端 `uaMode` 默认仍 `none`）。每次都跟随 semver patch bump + 完整 doc 更新。
 
 **破坏性变更**：**避免**。用可选参数 + 默认关（如 `?verify=browser` / `?clean=true` / `?keepProxy=true`）扩展。
 
