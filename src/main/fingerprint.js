@@ -745,6 +745,13 @@ function generateFingerprint(options = {}) {
         webglProfile: webgl?.profileId || 'none'
     };
 
+    // Carry through user-chosen anti-detect opt-outs when provided. This is a
+    // user intent, not a generated noise value; normalizeFingerprintOptions
+    // validates the category whitelist, so we only pass an array through here.
+    if (Array.isArray(options.disabledSpoofing)) {
+        fingerprint.disabledSpoofing = [...options.disabledSpoofing];
+    }
+
     return fingerprint;
 }
 

@@ -5634,7 +5634,16 @@ const launchProfileHandler = async (event, profileId, preferredLang, launchOptio
             screen: prevFp.screen,
             window: prevFp.window,
             hardwareConcurrency: prevFp.hardwareConcurrency,
-            deviceMemory: prevFp.deviceMemory
+            deviceMemory: prevFp.deviceMemory,
+            // disabledSpoofing is a user intent (which anti-detect categories to
+            // turn OFF), NOT a rerollable noise seed. generateFingerprint() does
+            // not emit this field, so if we don't carry it over the reroll drops
+            // it — and the launch-time --disable-spoofing gate (index.js ~6413)
+            // reads profile.fingerprint.disabledSpoofing, so the flag silently
+            // never gets pushed. Bug symptom: "unchecking GPU spoof via the UI
+            // checkbox does nothing, but the equivalent custom-arg works" (custom
+            // args live on profile.customArgs, which reroll never touches).
+            disabledSpoofing: prevFp.disabledSpoofing
         };
         profile.fingerprint = generateFingerprint(carryOver);
     }
