@@ -2,7 +2,7 @@
 
 > 这份文件是给未来 Claude session 用的快速上手 + 避坑清单。
 > 项目背景、用户画像已经在 memory 里（[[project-purpose]]、[[fingerprint-chromium-flags]]），不重复。
-> 当前版本：**1.7.20** · 主分支：`main` · 开发分支：`dev`（PR 汇合点）· feat 分支从 dev 拉
+> 当前版本：**1.7.21** · 主分支：`main` · 开发分支：`dev`（PR 汇合点）· feat 分支从 dev 拉
 
 ---
 
@@ -10,7 +10,7 @@
 
 Electron 应用，标准三层：
 
-- **主进程** `src/main/index.js`（**6500+ 行**，是本仓的中心）——45 个 `ipcMain.handle` + 一个内嵌 HTTP API server（默认 `127.0.0.1:12138`）
+- **主进程** `src/main/index.js`（**6600+ 行**，是本仓的中心）——46 个 `ipcMain.handle` + 一个内嵌 HTTP API server（默认 `127.0.0.1:12138`）
 - **预加载** `src/preload/index.js` —— `contextBridge` 暴露 `window.electronAPI`
 - **渲染进程** `src/renderer/`（Vue 3 + Pinia，22 个组件，pageSize 分页）
 
@@ -196,6 +196,20 @@ Create/Edit modal 里前置代理是**一个 4 选一下拉**（不是 override 
 
 > 相关背景：`disabledSpoofing` 只影响**元数据级**伪装。GPU 维度尤其要注意——它伪造的是 WebGL vendor/renderer 字符串 + GL 能力参数 + WebGPU adapter 这一整套**上报值**，但改不了宿主真实 GPU 的**实际渲染像素**。browserscan 之类只查元数据自洽，全绿；Cloudflare Turnstile 会真渲染再比对"声称硬件 vs 实际行为"，声称非宿主 GPU 必穿帮。所以 Turnstile 场景关掉 GPU 伪装（如实上报真实 GPU）反而能过。
 
+### 18. 复制环境"含登录态 + 忠实克隆"（v1.7.21）+ 两个复用性极高的 UI 坑
+
+`POST /api/profiles/:id/duplicate` 现有两个可选开关（query 或 body，默认全关）+ 卡片 ▾ 菜单"复制环境"弹窗（`DuplicateProfileModal.vue`）。HTTP 与 IPC 共用 `duplicateProfileCore`（`index.js`），别再各写一份。
+
+- **`withData=true`**：整目录 `fs.copy` 源的 `browser_data`（cookies/localStorage/IndexedDB → 登录态）。过滤集 `cloneCopyExcludeDirs`/`cloneCopyExcludeFiles` **只排 cache 族 + Chrome singleton 锁文件**，比全量备份的 `backupExcludeDirs` **更窄**（KEEP Local Storage/IndexedDB/Service Worker，否则半登录）。
+- **`keepFingerprint=true`**：忠实克隆。把源的 `generateFingerprintSeed(source.id)` 冻结进 **`fingerprint.fingerprintSeed`**（存 blob，**避开三套 DB schema 迁移**）；launch flow 读 `fp.fingerprintSeed || 派生自 UUID`。**两个必踩点**：(1) `fingerprintSeed` 跟 `disabledSpoofing` 一样，必须在 `normalizeFingerprintOptions` **显式透传**，否则 `mergedFingerprintSource` 扁平化时被静默丢弃（同坑 #17）；(2) UA 身份字段（`browserFullVersion`/`userAgent`/`secChUa`）要**提到 payload 顶层**，因为 `buildProfileFromInput` 对每个新 profile 必触发 UA 重生成块（`uaModeChanged` 恒真），只有 `hasOwn(data, X)` 顶层字段才不被删——否则副本补丁号会被重掷，UA 不一致。
+- **`resetOnLaunch` 源自动降级**为纯配置复制（指纹每次重掷，冻结/登录态都无意义），响应带 `degraded:true`。
+
+**关键认知（实测得来）**：要求"源必须停止"不只是解文件锁——**更是保证 cookie 落盘**。Chrome 的 cookie 存在内存/`Cookies-wal`，只有关闭时才 checkpoint 进主 `Cookies` 库（运行不足 ~30s 提交定时器时磁盘上是空的）。所以停止是双重必要。回归：`scripts/test-duplicate-login.mjs`（12/12，真机 CDP，导航 bing 写真实 cookie → 复制 → 副本读回逐条值一致）。
+
+**UI 坑 A（全局 `input` 样式炸弹）**：`src/renderer/index.html` 有全局 `input,textarea,select { width:100%; padding:8px; margin-bottom:10px }`。**任何新 modal 里的 `radio`/`checkbox` 不显式覆盖尺寸，就会被撑成满宽巨块**，把底部按钮顶出视口 → 表象是"弹窗无法关闭"。修法：`input[type=radio/checkbox]` 显式 `width/height:16px; padding:0; margin:2px 0 0`（`EditProfileModal` 的 `.reset-toggle input[type=checkbox]` 是先例）。新 modal 一律再配 `max-height:88vh; overflow-y:auto` + `@click.self` 背景关闭兜底。
+
+**UI 坑 B（`position:fixed` teleport 菜单越界）**：`ProfileCard.vue` 的 ▾ launch-more 菜单 Teleport 到 `<body>` 且 `position:fixed`——**不会被 overflow 裁剪，但会跑出视口**（页面底部的卡片 → 菜单掉到窗口下方，右缘卡片 → cookie 导出 flyout 溢出右边）。纯 CSS 定位不够，必须 **`nextTick` 渲染后测量 `offsetHeight` 再重定位**：空间不足则翻转到按钮**上方**、否则钳进视口 + `max-height` 内滚；flyout 靠右时加 `.sub-left` 类改 `right:100%` 左展开。`positionLaunchMenu` 已这么写，新增菜单项/新建这类浮层照抄。
+
 | 我想找... | 去这里 |
 |---|---|
 | 某个 IPC handler | `grep "ipcMain.handle('<name>'" src/main/index.js` |
@@ -208,6 +222,7 @@ Create/Edit modal 里前置代理是**一个 4 选一下拉**（不是 override 
 | 内核安装/卸载 | `src/main/kernel/manager.js`（纯逻辑）+ `src/main/kernel/ipc-bridge.js`（IPC 层） |
 | 启动错误 UI | `src/renderer/src/components/LaunchErrorModal.vue` + `useUIStore` 的 `showLaunchError` |
 | profile 编辑表单 | `src/renderer/src/components/EditProfileModal.vue`（3 tabs：基础/指纹/高级） |
+| 复制环境（含登录态/忠实克隆） | `src/main/index.js:duplicateProfileCore`（+ `copyBrowserDataDir`）· HTTP `/duplicate` + `duplicate-profile` IPC · `DuplicateProfileModal.vue` · 卡片 ▾ 菜单 `duplicateProfile()` |
 | 启动/停止/边框色的运行态 | `stop-profile` IPC + `randomFrameColor`（index.js）· `App.vue` 的 `profile-status` 监听 · `useProfileStore.frameColors` · `ProfileCard.vue`（Stop 按钮 / `displayProto` / `preProxyTag` / 边框色）|
 | 应用内文档 | `resources/doc/doc.html`（`open-doc` IPC 打开，`#doc-api` 段与 `docs/api/API.md` 同步，`doc-version-sync.test.mjs` 兜底）|
 
@@ -216,10 +231,11 @@ Create/Edit modal 里前置代理是**一个 4 选一下拉**（不是 override 
 ## 测试策略
 
 - **单测**（`node --test`）：只在**纯 CJS + 无 Electron 依赖**的模块加。目前只有 `kernel-versions.test.mjs`（15 assertions：pool 完整性、`pickFullVersionForMajor` 各种输入、`buildBrowserBrands` 品牌/顺序不变量）。想加新单测 → 先把目标函数抽到 CJS 模块
-- **API 黑盒**：`scripts/api-smoke.mjs`（23）+ `api-smoke-v2.mjs`（33，v1.7.17 涨到 +4 headless / +2 language-Auto CDP）——**需要 dev 跑着**。改 API 契约必须两边都过。写新 endpoint 时同步补 test case
+- **API 黑盒**：`scripts/api-smoke.mjs`（23）+ `api-smoke-v2.mjs`（39，v1.7.17 +4 headless / +2 language-Auto CDP，v1.7.21 +2 duplicate keepFingerprint/withData）——**需要 dev 跑着**。改 API 契约必须两边都过。写新 endpoint 时同步补 test case
 - **E2E CDP eval**（v1.7.17 起）：`api-smoke-v2.mjs` 里有一个 `cdpEval(port, expr)` helper（~40 行，用 `ws` 依赖），能对真实浏览器跑 `Runtime.evaluate`。目前只有 language-Auto 用它验证 `navigator.language` —— 要检查其他能只在真实浏览器里观察的东西（例如 `navigator.webdriver`、`navigator.languages`、`navigator.hardwareConcurrency`）都可以复用。**注意**：CDP 需要 profile 有 `--remote-debugging-port`，而 `?clean=true` 会**抑制**这个 flag（`src/main/index.js:6302` 的 `!useCleanProfile` gate），所以 CDP 断言不能跟 `clean=true` 组合
 - **E2E 手动**：没有 Playwright 自动化。UI 改动要**真起 dev 用一下**（tabs 里的 tap，检查 CDP port chip 等）
 - **网络能力**：真机测试代理相关变更用 `scripts/test-1024proxy-chain.mjs`（需要用户 Settings 里配置好的 preProxies）
+- **复制登录态 E2E**：`scripts/test-duplicate-login.mjs`（真机 CDP，12 断言）——启动源 → 导航 bing 写真实持久 cookie → 停止（等 >30s 让 cookie 落盘）→ `/duplicate?withData=true&keepFingerprint=true` → 断言 Cookies DB 字节一致 + 启动副本 CDP 读回逐条值一致 + seed 冻结 + UA 一致。`DATA_PATH` 默认硬编码本机 `D:\Users\...`（`GEEKEZ_DATA` 可覆盖）。
 
 **测试代理**：`socks5://127.0.0.1:7890`（用户机器上跑的 Clash）—— smoke 脚本硬编码了这个
 
@@ -235,7 +251,7 @@ Create/Edit modal 里前置代理是**一个 4 选一下拉**（不是 override 
 - 版本号在 `package.json` 也要 bump
 - **应用内文档 `resources/doc/doc.html` 的 `#doc-api` 段**（v1.7.19 起）—— 它是 API.md 的**双语应用内镜像**（离线、CSS 按 `<html lang>` 切换），改 API 必须**同步这第 3 处**。`scripts/doc-version-sync.test.mjs`（`npm test`）会校验 doc.html 与 API.md 版本头一致 + 覆盖同一批 endpoint/字段，漂了就红。设置里"查看文档"和帮助页走 `open-doc` IPC（`shell.openExternal(file://…#anchor)`，本地缺失回退线上）；`doc.html` 经 `package.json` 的 `extraResources`（`resources/doc → doc`）打包。
 
-**已有先例**：v1.7.12 加 `disabledSpoofing` / `kernelVersion` 字段、v1.7.13 加 duplicate/runtime/kernels/settings 等 7 个新 endpoint、v1.7.14 加 `?verify=browser` + chain-aware latency、v1.7.15-16 是 audit 后连续两轮加固（race / leak 修复，无字段变化）、v1.7.17 加 `headless` 字段 + 修 language-Auto 泄漏宿主 locale 的 bug、v1.7.18 加 `preProxyStr`（per-profile 内联前置代理，覆盖全局池）、v1.7.19 把文档本地化（bundled doc.html 双语镜像 + 漂移护栏，API 契约不变）+ 一批运行态 UI（Stop 按钮、关水印时每次启动随机边框色、前置代理单选式编辑 + 卡片只读 tag、无代理显示 DIRECT）、v1.7.20 修 `resetOnLaunch` 重掷丢弃 `disabledSpoofing` 的 bug（见坑 #17，字段契约不变）+ UI 新建环境 UA 默认从"不修改"改为 Chrome 148（纯 UI 默认，API 端 `uaMode` 默认仍 `none`）。每次都跟随 semver patch bump + 完整 doc 更新。
+**已有先例**：v1.7.12 加 `disabledSpoofing` / `kernelVersion` 字段、v1.7.13 加 duplicate/runtime/kernels/settings 等 7 个新 endpoint、v1.7.14 加 `?verify=browser` + chain-aware latency、v1.7.15-16 是 audit 后连续两轮加固（race / leak 修复，无字段变化）、v1.7.17 加 `headless` 字段 + 修 language-Auto 泄漏宿主 locale 的 bug、v1.7.18 加 `preProxyStr`（per-profile 内联前置代理，覆盖全局池）、v1.7.19 把文档本地化（bundled doc.html 双语镜像 + 漂移护栏，API 契约不变）+ 一批运行态 UI（Stop 按钮、关水印时每次启动随机边框色、前置代理单选式编辑 + 卡片只读 tag、无代理显示 DIRECT）、v1.7.20 修 `resetOnLaunch` 重掷丢弃 `disabledSpoofing` 的 bug（见坑 #17，字段契约不变）+ UI 新建环境 UA 默认从"不修改"改为 Chrome 148（纯 UI 默认，API 端 `uaMode` 默认仍 `none`）、v1.7.21 给 `/duplicate` 加 `?withData`（复制登录态，要求源停止）+ `?keepFingerprint`（忠实克隆，冻结 seed + UA）两个可选参数 + 卡片 ▾ 菜单复制入口（见坑 #18，向后兼容扩展）。每次都跟随 semver patch bump + 完整 doc 更新。
 
 **破坏性变更**：**避免**。用可选参数 + 默认关（如 `?verify=browser` / `?clean=true` / `?keepProxy=true`）扩展。
 
