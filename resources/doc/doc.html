@@ -499,7 +499,7 @@ socks://dXNlcjpwYXNz@1.2.3.4:1080#remark
                          内容对齐 docs/api/API.md v1.7.18；改 API 时两边一起更新。 -->
                     <div class="api-doc-zh">
                         <h2>API 文档</h2>
-                        <p>GeekEZ Browser 提供一套本地 HTTP REST API，可通过脚本对指纹环境增删改查、启动、停止、备份。<strong>适用版本 v1.7.20</strong>。</p>
+                        <p>GeekEZ Browser 提供一套本地 HTTP REST API，可通过脚本对指纹环境增删改查、启动、停止、备份。<strong>适用版本 v1.7.21</strong>。</p>
                         <ul>
                             <li>默认监听 <code>http://127.0.0.1:12138</code>，端口可在 <strong>设置 → API 服务</strong> 修改（改动后自动重启）。</li>
                             <li>只监听 <code>127.0.0.1</code>，<strong>无认证</strong>，请勿转发到公网。</li>
@@ -628,10 +628,11 @@ socks://dXNlcjpwYXNz@1.2.3.4:1080#remark
   -d '{ "proxyStr": "socks5://new:pass@5.6.7.8:1080", "tags": ["tiktok","us","backup"] }'</pre>
 
                         <p><strong>6) 复制环境</strong> <code>POST /api/profiles/:idOrName/duplicate</code></p>
-                        <pre>curl -X POST "http://127.0.0.1:12138/api/profiles/TikTok-US-01/duplicate" \
+                        <pre># 忠实克隆 + 复制登录态（源须先停止）
+curl -X POST "http://127.0.0.1:12138/api/profiles/TikTok-US-01/duplicate?withData=true&keepFingerprint=true" \
   -H "Content-Type: application/json" \
   -d '{ "name": "TikTok-US-01-backup" }'</pre>
-                        <p>fingerprint / customArgs / kernelVersion / preProxyOverride / preProxyStr / resetOnLaunch / headless 都会带过来；新 profile 获得新 UUID（→ 新 seed → 不同 canvas/audio/WebGL 哈希）与新 debugPort。</p>
+                        <p>fingerprint / customArgs / kernelVersion / preProxyOverride / preProxyStr / resetOnLaunch / headless 都会带过来；默认新 profile 获得新 UUID（→ 新 seed → 不同 canvas/audio/WebGL 哈希）与新 debugPort。可选开关（默认全关）：<code>keepFingerprint=true</code> 冻结源 seed + 保留 UA，副本指纹与源<strong>完全一致</strong>；<code>withData=true</code> 同时复制 browser_data（cookies/localStorage → <strong>登录态</strong>），<strong>要求源已停止</strong>（运行中返回 409 <code>SOURCE_RUNNING</code>）。源开启 resetOnLaunch 时两开关自动降级为纯配置复制（响应带 <code>degraded:true</code>）。</p>
 
                         <p><strong>7) 删除环境</strong> <code>DELETE /api/profiles/:idOrName</code>（运行中返回 409）</p>
                         <pre>curl -X DELETE "http://127.0.0.1:12138/api/profiles/TikTok-US-01"</pre>
@@ -708,7 +709,7 @@ const browser = await chromium.connectOverCDP('http://127.0.0.1:' + port);</pre>
                     </div>
                     <div class="api-doc-en">
                         <h2>API Documentation</h2>
-                        <p>GeekEZ Browser exposes a local HTTP REST API to create, query, launch, stop and back up fingerprint profiles from scripts. <strong>Applies to v1.7.20</strong>.</p>
+                        <p>GeekEZ Browser exposes a local HTTP REST API to create, query, launch, stop and back up fingerprint profiles from scripts. <strong>Applies to v1.7.21</strong>.</p>
                         <ul>
                             <li>Listens on <code>http://127.0.0.1:12138</code> by default; the port is configurable under <strong>Settings → API Server</strong> (auto-restarts on change).</li>
                             <li>Binds to <code>127.0.0.1</code> only, <strong>no authentication</strong> — never forward it to the public internet.</li>
@@ -837,10 +838,11 @@ const browser = await chromium.connectOverCDP('http://127.0.0.1:' + port);</pre>
   -d '{ "proxyStr": "socks5://new:pass@5.6.7.8:1080", "tags": ["tiktok","us","backup"] }'</pre>
 
                         <p><strong>6) Duplicate</strong> <code>POST /api/profiles/:idOrName/duplicate</code></p>
-                        <pre>curl -X POST "http://127.0.0.1:12138/api/profiles/TikTok-US-01/duplicate" \
+                        <pre># Faithful clone + copy login state (source must be stopped)
+curl -X POST "http://127.0.0.1:12138/api/profiles/TikTok-US-01/duplicate?withData=true&keepFingerprint=true" \
   -H "Content-Type: application/json" \
   -d '{ "name": "TikTok-US-01-backup" }'</pre>
-                        <p>Carries fingerprint / customArgs / kernelVersion / preProxyOverride / preProxyStr / resetOnLaunch / headless; the copy gets a new UUID (→ new seed → different canvas/audio/WebGL hashes) and a fresh debugPort.</p>
+                        <p>Carries fingerprint / customArgs / kernelVersion / preProxyOverride / preProxyStr / resetOnLaunch / headless; by default the copy gets a new UUID (→ new seed → different canvas/audio/WebGL hashes) and a fresh debugPort. Optional flags (off by default): <code>keepFingerprint=true</code> freezes the source seed + keeps the UA so the copy's fingerprint is <strong>identical</strong>; <code>withData=true</code> also copies browser_data (cookies/localStorage → <strong>login state</strong>) and <strong>requires the source stopped</strong> (409 <code>SOURCE_RUNNING</code> otherwise). If the source has resetOnLaunch on, both flags degrade to a plain config copy (response has <code>degraded:true</code>).</p>
 
                         <p><strong>7) Delete</strong> <code>DELETE /api/profiles/:idOrName</code> (409 while running)</p>
                         <pre>curl -X DELETE "http://127.0.0.1:12138/api/profiles/TikTok-US-01"</pre>

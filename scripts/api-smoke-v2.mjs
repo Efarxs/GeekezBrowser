@@ -78,7 +78,7 @@ async function main() {
     console.log(`Target: ${API}\n`);
 
     // Housekeep: clean prior scratch
-    for (const n of ['smk2-src', 'smk2-src-copy', 'smk2-src-copy-02']) {
+    for (const n of ['smk2-src', 'smk2-src-copy', 'smk2-src-copy-02', 'smk2-src-with-newname', 'smk2-src-faithful', 'smk2-src-withdata']) {
         await api('DELETE', `/api/profiles/${encodeURIComponent(n)}`).catch(() => { });
     }
 
@@ -198,9 +198,32 @@ async function main() {
         } else {
             bad('duplicate name override', dup2.body);
         }
+
+        // keepFingerprint=true → faithful clone: seed frozen + UA identical.
+        const dupFp = await api('POST', `/api/profiles/smk2-src/duplicate?keepFingerprint=true`, { name: 'smk2-src-faithful' });
+        const fpCopy = dupFp.body?.profile?.fingerprint || {};
+        if (dupFp.status === 200 && dupFp.body?.keepFingerprint === true
+            && typeof fpCopy.fingerprintSeed === 'number' && fpCopy.fingerprintSeed > 0
+            && fpCopy.userAgent === srcProfile.fingerprint?.userAgent) {
+            ok('duplicate?keepFingerprint=true → frozen seed + identical UA');
+        } else {
+            bad('keepFingerprint faithful clone', { keepFingerprint: dupFp.body?.keepFingerprint, seed: fpCopy.fingerprintSeed, uaMatch: fpCopy.userAgent === srcProfile.fingerprint?.userAgent });
+        }
+
+        // withData=true on a never-launched source → no browser_data → dataCopied:false (not an error).
+        const dupData = await api('POST', `/api/profiles/smk2-src/duplicate?withData=true`, { name: 'smk2-src-withdata' });
+        if (dupData.status === 200 && dupData.body?.withData === true
+            && dupData.body?.dataCopied === false && dupData.body?.degraded === false) {
+            ok('duplicate?withData=true (never-launched src) → dataCopied:false, no error');
+        } else {
+            bad('withData structural', dupData.body);
+        }
+
         // Cleanup dup profiles
         await api('DELETE', '/api/profiles/smk2-src-copy');
         await api('DELETE', '/api/profiles/smk2-src-with-newname');
+        await api('DELETE', '/api/profiles/smk2-src-faithful');
+        await api('DELETE', '/api/profiles/smk2-src-withdata');
     }
 
     // ── /api/profiles/:id/runtime — not running

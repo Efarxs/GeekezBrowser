@@ -1,6 +1,6 @@
 # GeekEZ Browser · REST API 参考
 
-> 适用版本：**v1.7.20**
+> 适用版本：**v1.7.21**
 > 更新日期：2026-07-20
 >
 > 应用内「设置 → API 服务 → 查看文档」及帮助页打开的是本仓 `resources/doc/doc.html`（离线双语），其 API 章节与本文件保持同步。改 API 时请**同时**更新本文件与 `doc.html`（`npm test` 里的 `doc-version-sync` 会校验两者版本头一致）。v1.7.20 修复了 `resetOnLaunch=true` 时 `disabledSpoofing` 被指纹重掷丢弃的问题（详见该字段说明），并把 UI 新建环境的 UA 默认从「不修改」改为 Chrome 148（纯 UI 默认，不影响 API 端 `uaMode` 默认值 `none`）。字段与端点契约与 v1.7.18 一致。
@@ -35,7 +35,7 @@ GeekEZ Browser 提供一套本地 HTTP REST API，可通过脚本对指纹环境
 | 查询 | GET  | `/api/profiles/:idOrName/runtime` | 查询单个 profile 的运行状态 |
 | 创建 | POST | `/api/profiles` | 创建一个 profile |
 | 修改 | PUT  | `/api/profiles/:idOrName` | 修改 profile |
-| 复制 | POST | `/api/profiles/:idOrName/duplicate` | 克隆一个 profile |
+| 复制 | POST | `/api/profiles/:idOrName/duplicate` | 克隆一个 profile（可选 `?withData`=复制登录态、`?keepFingerprint`=忠实克隆） |
 | 删除 | DELETE | `/api/profiles/:idOrName` | 删除 profile |
 | 启动 | GET  | `/api/open/:idOrName` | 启动 profile（支持 `?clean=true` 干净启动、`?verify=browser` 浏览器级验证） |
 | 停止 | POST | `/api/profiles/:idOrName/stop` | 停止（支持 `?keepProxy=true`） |
@@ -808,7 +808,15 @@ async function api(method, path, body) {
 
 ### 12) 复制 profile · `POST /api/profiles/:idOrName/duplicate`
 
-克隆一个 profile。原 profile 的 fingerprint / customArgs / kernelVersion / preProxyOverride / preProxyStr / resetOnLaunch / headless 都会带过来；新 profile 拿到新的 UUID（→ 新的 fingerprint-chromium seed → canvas/audio/WebGL 哈希跟原 profile 天然不同），以及自动分配的新 `debugPort`。
+克隆一个 profile。原 profile 的 fingerprint / customArgs / kernelVersion / preProxyOverride / preProxyStr / resetOnLaunch / headless 都会带过来；默认新 profile 拿到新的 UUID（→ 新的 fingerprint-chromium seed → canvas/audio/WebGL 哈希跟原 profile 天然不同），以及自动分配的新 `debugPort`。
+
+**可选开关**（query 或 body，默认全关）：
+| 参数 | 默认 | 说明 |
+|---|---|---|
+| `keepFingerprint` | `false` | `true` = **忠实克隆**：冻结原 profile 的 seed + 保留 UA/secChUa，副本的 canvas/audio/WebGL/GPU 哈希与 UA 与原 profile **完全一致**（同账号"同一台设备"）。默认换新 seed。|
+| `withData` | `false` | `true` = 同时复制 `browser_data`（cookies / localStorage / IndexedDB → **登录态**）。**要求源已停止**（否则 409），因为 Chrome 运行时锁着 cookie 库，且只有停止时才会把 cookie 落盘。|
+
+> **resetOnLaunch 例外**：若源开启了"每次启动重掷指纹"，`withData`/`keepFingerprint` 都失去意义（指纹每次都变、登录态无法与固定指纹绑定），副本**自动降级为纯配置复制**，响应带 `"degraded": true`。
 
 **Body 参数**（全部可选，用于覆盖复制默认值）：
 | 字段 | 类型 | 说明 |
@@ -821,9 +829,10 @@ async function api(method, path, body) {
 
 **请求示例**：
 ```bash
-curl -X POST "http://127.0.0.1:12138/api/profiles/TikTok-US-01/duplicate" \
+# 忠实克隆 + 复制登录态（源须先停止）
+curl -X POST "http://127.0.0.1:12138/api/profiles/TikTok-US-01/duplicate?withData=true&keepFingerprint=true" \
   -H "Content-Type: application/json" \
-  -d '{ "name": "TikTok-US-01-backup", "tags": ["tiktok", "us", "backup"] }'
+  -d '{ "name": "TikTok-US-01-backup" }'
 ```
 
 **响应**：
@@ -832,9 +841,18 @@ curl -X POST "http://127.0.0.1:12138/api/profiles/TikTok-US-01/duplicate" \
     "success": true,
     "source": { "id": "...", "name": "TikTok-US-01" },
     "profile": { "id": "<new UUID>", "name": "TikTok-US-01-backup", ... },
+    "withData": true,
+    "keepFingerprint": true,
+    "dataCopied": true,
+    "dataError": null,
+    "degraded": false,
     "remoteDebugPort": 24012
 }
 ```
+
+- `withData` / `keepFingerprint`：本次**实际生效**的值（源 resetOnLaunch 时会被降级为 `false`）。
+- `dataCopied`：`browser_data` 是否真的拷贝了（源从未启动过 → `false`，非报错）。
+- 源正在运行且请求 `withData=true` → HTTP **409** `{ "code": "SOURCE_RUNNING" }`。
 
 ---
 

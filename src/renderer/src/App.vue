@@ -32,6 +32,7 @@
     <InputModal :class="{ active: uiStore.inputModalVisible }" />
     <ProgressModal :class="{ active: uiStore.progressModalVisible }" />
     <KernelDownloadModal />
+    <DuplicateProfileModal />
 
 
 
@@ -57,6 +58,7 @@ import HelpModal from './components/HelpModal.vue';
 import InputModal from './components/InputModal.vue';
 import ProgressModal from './components/ProgressModal.vue';
 import KernelDownloadModal from './components/KernelDownloadModal.vue';
+import DuplicateProfileModal from './components/DuplicateProfileModal.vue';
 import { profileService } from './services/profile.service';
 import { useUIStore } from './store/useUIStore';
 import { useProxyStore } from './store/useProxyStore';

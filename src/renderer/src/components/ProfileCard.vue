@@ -78,10 +78,13 @@
             <div
                 ref="launchMenuEl"
                 class="launch-menu launch-menu-floating no-drag"
+                :class="{ 'sub-left': submenuFlipLeft }"
                 :style="launchMenuStyle"
             >
                 <div class="launch-menu-item" @click="launchClean">{{ t('launchClean') }}</div>
                 <div class="launch-menu-item" @click="runFingerprintCheck">{{ t('fingerprintCheck') }}</div>
+                <div class="launch-menu-divider"></div>
+                <div class="launch-menu-item" @click="duplicateProfile">{{ t('duplicateProfile') }}</div>
                 <div class="launch-menu-divider"></div>
                 <div class="launch-menu-item" @click="importCookiesFromFile">{{ t('cookieImport') }}</div>
                 <div class="launch-menu-item launch-menu-item-has-sub">
@@ -98,7 +101,7 @@
 </template>
 
 <script setup>
-import { computed, onBeforeUnmount, ref } from 'vue';
+import { computed, onBeforeUnmount, ref, nextTick } from 'vue';
 import { useUIStore } from '../store/useUIStore';
 import { useProfileStore } from '../store/useProfileStore';
 import { useSettingsStore } from '../store/useSettingsStore';
@@ -235,18 +238,42 @@ const showLaunchMenu = ref(false);
 const launchMoreBtn = ref(null);
 const launchMenuEl = ref(null);
 const launchMenuStyle = ref({});
+const submenuFlipLeft = ref(false);
 
 const positionLaunchMenu = () => {
     const el = launchMoreBtn.value;
     if (!el) return;
     const rect = el.getBoundingClientRect();
     const menuWidth = 200;
-    const left = Math.max(8, Math.min(window.innerWidth - menuWidth - 8, rect.right - menuWidth));
+    const margin = 8;
+    const left = Math.max(margin, Math.min(window.innerWidth - menuWidth - margin, rect.right - menuWidth));
+
+    // The menu is position:fixed teleported to <body>, so it isn't clipped by
+    // overflow — but it CAN run off the bottom of the window (cards near the
+    // page bottom) and become unreachable. Measure the rendered menu and flip
+    // it above the button when there isn't room below; clamp to the viewport
+    // as a last resort (its own max-height lets it scroll internally).
+    const menuEl = launchMenuEl.value;
+    const menuHeight = menuEl ? menuEl.offsetHeight : 0;
+    const spaceBelow = window.innerHeight - rect.bottom - margin;
+    const spaceAbove = rect.top - margin;
+    let top;
+    if (menuHeight && menuHeight > spaceBelow && spaceAbove > spaceBelow) {
+        // Not enough room below and more room above → anchor above the button.
+        top = Math.max(margin, rect.top - menuHeight - 4);
+    } else {
+        top = rect.bottom + 4;
+        if (menuHeight) top = Math.min(top, Math.max(margin, window.innerHeight - menuHeight - margin));
+    }
     launchMenuStyle.value = {
-        top: `${rect.bottom + 4}px`,
+        top: `${top}px`,
         left: `${left}px`,
         minWidth: `${menuWidth}px`
     };
+    // The cookie-export flyout opens at left:100% (+~180px). If that would run
+    // off the right edge, flip it to open leftward instead.
+    const subWidth = 180;
+    submenuFlipLeft.value = left + menuWidth + subWidth > window.innerWidth - margin;
 };
 
 const onScrollOrResize = () => {
@@ -283,9 +310,12 @@ const toggleLaunchMenu = () => {
         closeLaunchMenu();
         return;
     }
+    // Pre-position with a rough estimate, render, then reposition once we can
+    // measure the real menu height (needed for the flip-above logic).
     positionLaunchMenu();
     showLaunchMenu.value = true;
     attachGlobalListeners();
+    nextTick(() => positionLaunchMenu());
 };
 
 onBeforeUnmount(detachGlobalListeners);
@@ -395,6 +425,14 @@ const runFingerprintCheck = async () => {
 const edit = () => {
     // Running/launching profiles open in view-only mode (handled inside the modal).
     uiStore.openEditModal(props.profile.id);
+};
+
+// Duplicate this profile. Login-state copy (in the modal) requires the source
+// to be stopped, so the entry lives in the launch-more menu (hidden while
+// running). The modal handles the fingerprint-identical vs fresh-seed choice.
+const duplicateProfile = () => {
+    closeLaunchMenu();
+    uiStore.openDuplicateModal(props.profile);
 };
 
 const remove = () => {
@@ -606,6 +644,8 @@ const remove = () => {
     padding: 4px 0;
     color: var(--text-primary, #e0e0e0);
     -webkit-app-region: no-drag;
+    max-height: calc(100vh - 16px);
+    overflow-y: auto;
 }
 .launch-menu-floating .launch-menu-item {
     padding: 8px 14px;
@@ -640,5 +680,10 @@ const remove = () => {
 }
 .launch-menu-floating .launch-menu-item-has-sub:hover .launch-menu-sub {
     display: block;
+}
+/* When the menu sits near the right edge, open the flyout leftward instead. */
+.launch-menu-floating.sub-left .launch-menu-item-has-sub .launch-menu-sub {
+    left: auto;
+    right: 100%;
 }
 </style>

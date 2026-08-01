@@ -14,6 +14,7 @@ contextBridge.exposeInMainWorld('electronAPI', {
     saveSettings: (data) => ipcRenderer.invoke('save-settings', data),
     exportProfile: (id) => ipcRenderer.invoke('export-profile', id),
     importProfile: () => ipcRenderer.invoke('import-profile'),
+    duplicateProfile: (payload) => ipcRenderer.invoke('duplicate-profile', payload),
     // 通用 invoke，支持多参数传递
     invoke: (channel, ...args) => ipcRenderer.invoke(channel, ...args),
     getRunningIds: () => ipcRenderer.invoke('get-running-ids'),

@@ -19,6 +19,12 @@ export const useUIStore = defineStore('ui', () => {
     const batchAddProxyModalVisible = ref(false);
     const exportSelectModalVisible = ref(false);
     const exportType = ref('all');
+
+    // Duplicate-profile modal (name + fingerprint-clone choice + login-state copy)
+    const duplicateModalVisible = ref(false);
+    const duplicateSourceId = ref(null);
+    const duplicateSourceName = ref('');
+    const duplicateSourceRerolls = ref(false);
     
     // UI Theme & Lang
     const theme = ref(localStorage.getItem('geekez_theme') || 'geek');
@@ -103,6 +109,20 @@ export const useUIStore = defineStore('ui', () => {
 
     const openExportModal = () => { exportModalVisible.value = true; };
     const closeExportModal = () => { exportModalVisible.value = false; };
+
+    // source: the full profile object being copied
+    const openDuplicateModal = (source) => {
+        duplicateSourceId.value = source?.id || null;
+        duplicateSourceName.value = source?.name || '';
+        duplicateSourceRerolls.value = !!source?.resetOnLaunch;
+        duplicateModalVisible.value = true;
+    };
+    const closeDuplicateModal = () => {
+        duplicateModalVisible.value = false;
+        duplicateSourceId.value = null;
+        duplicateSourceName.value = '';
+        duplicateSourceRerolls.value = false;
+    };
     
     const openExportSelectModal = (type) => {
         exportType.value = type;
@@ -239,6 +259,12 @@ export const useUIStore = defineStore('ui', () => {
         batchAddProxyModalVisible,
         exportSelectModalVisible,
         exportType,
+        duplicateModalVisible,
+        duplicateSourceId,
+        duplicateSourceName,
+        duplicateSourceRerolls,
+        openDuplicateModal,
+        closeDuplicateModal,
         theme,
         lang,
         alertMsg,

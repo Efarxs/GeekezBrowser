@@ -763,6 +763,122 @@ async function collectDirRecursive(dirPath, basePath) {
     return files;
 }
 
+// --- Profile duplication (config, optionally + login state) ---
+// Dirs skipped when cloning browser_data for a "copy with login state".
+// Deliberately NARROWER than backupExcludeDirs: caches/GPU shader caches
+// are pure noise, but we KEEP Local Storage / IndexedDB / Session Storage /
+// Service Worker because many sites stash auth/session tokens there — drop
+// them and the clone lands half-logged-in.
+const cloneCopyExcludeDirs = new Set([
+    'Cache', 'Code Cache', 'GPUCache', 'DawnWebGPUCache', 'DawnGraphiteCache',
+    'ShaderCache', 'GrShaderCache', 'GraphiteDawnCache',
+    'component_crx_cache', 'extensions_crx_cache'
+]);
+// Chrome singleton lock artifacts — copying them into the new dir would make
+// the fresh profile think another instance owns it.
+const cloneCopyExcludeFiles = new Set([
+    'lockfile', 'SingletonLock', 'SingletonCookie', 'SingletonSocket'
+]);
+
+// Cold-copy the source profile's browser_data into the target's dir. Caller
+// MUST have already verified the source is stopped (see duplicateProfileCore's
+// SOURCE_RUNNING guard) — cold copy of a live SQLite dir yields torn pages.
+async function copyBrowserDataDir(sourceId, targetId) {
+    const srcDir = path.join(DATA_PATH, sourceId, 'browser_data');
+    const dstDir = path.join(DATA_PATH, targetId, 'browser_data');
+    if (!fs.existsSync(srcDir)) return false; // never launched → nothing to carry
+    await fs.copy(srcDir, dstDir, {
+        overwrite: true,
+        errorOnExist: false,
+        filter: (src) => {
+            const base = path.basename(src);
+            if (cloneCopyExcludeDirs.has(base)) return false;
+            if (cloneCopyExcludeFiles.has(base)) return false;
+            return true;
+        }
+    });
+    return true;
+}
+
+// Shared core for HTTP POST /duplicate + the 'duplicate-profile' IPC. Keeping
+// one implementation prevents the two entry points from drifting.
+//   source          — the full source profile (already fetched)
+//   overrides        — user field overrides (name/tags/proxyStr/notes/...);
+//                      must NOT contain withData/keepFingerprint (strip first)
+//   withData         — also copy browser_data (login state)
+//   keepFingerprint  — faithful clone: freeze the source's seed + keep UA meta
+//   settings         — caller-read settings (for buildProfileFromInput)
+// Throws Error{code:'SOURCE_RUNNING'} if withData is requested while the
+// source is still running (its SQLite files would be locked/torn).
+// resetOnLaunch fallback: a source that rerolls its fingerprint every launch
+// makes both "freeze seed" and "copy login" meaningless — degrade silently to
+// a plain config clone (identical to the classic duplicate) and report it.
+async function duplicateProfileCore(source, overrides, { withData, keepFingerprint }, settings) {
+    const rerolls = !!source.resetOnLaunch;
+    const degraded = rerolls && (withData || keepFingerprint);
+    const effKeepFp = keepFingerprint && !rerolls;
+    const effWithData = withData && !rerolls;
+
+    if (effWithData && activeProcesses[source.id]) {
+        const err = new Error('Source profile is running — stop it before copying login state');
+        err.code = 'SOURCE_RUNNING';
+        throw err;
+    }
+
+    const sourceFp = source.fingerprint || {};
+    const clonedFp = { ...sourceFp };
+    if (effKeepFp) {
+        // Freeze the source's UUID-derived seed so canvas/audio/WebGL/GPU
+        // hashes match, and keep the cached UA metadata / secChUa verbatim.
+        clonedFp.fingerprintSeed = generateFingerprintSeed(source.id);
+    } else {
+        // Classic duplicate: fresh visible identity. New UUID → new derived
+        // seed; strip cached UA metadata so it regenerates from browser type.
+        delete clonedFp.fingerprintSeed;
+        delete clonedFp.userAgentMetadata;
+        delete clonedFp.secChUa;
+    }
+
+    const payload = {
+        ...source,
+        ...overrides,
+        name: overrides.name || `${source.name}-copy`,
+        debugPort: null,
+        fingerprint: { ...clonedFp, ...(overrides.fingerprint || {}) }
+    };
+    delete payload.id;
+    delete payload.createdAt;
+
+    if (effKeepFp) {
+        // buildProfileFromInput regenerates the UA identity for EVERY new
+        // profile (uaModeChanged is always true vs an empty existing profile),
+        // dropping browserFullVersion/userAgent/secChUa unless they're present
+        // at the TOP LEVEL of the payload (hasOwn(data, ...) guard). Nested
+        // fingerprint.* isn't enough. Lift them up so a faithful clone keeps the
+        // source's exact UA string + patch version, not just the seed.
+        const fp = source.fingerprint || {};
+        for (const k of ['uaMode', 'browserType', 'browserMajorVersion', 'browserFullVersion', 'userAgent', 'userAgentMetadata', 'secChUa', 'tlsClientHello']) {
+            if (fp[k] !== undefined && fp[k] !== null) payload[k] = fp[k];
+        }
+    }
+
+    const newProfile = await buildProfileFromInput(payload, settings);
+    await persistProfileWithPortRollback(newProfile, () => profileDB.insert(newProfile));
+
+    let dataCopied = false;
+    let dataError = null;
+    if (effWithData) {
+        try {
+            dataCopied = await copyBrowserDataDir(source.id, newProfile.id);
+        } catch (e) {
+            dataError = e.message;
+            console.warn(`[duplicate] browser_data copy failed ${String(source.id).slice(0, 8)} → ${String(newProfile.id).slice(0, 8)}: ${e.message}`);
+        }
+    }
+
+    return { newProfile, effKeepFp, effWithData, dataCopied, dataError, degraded };
+}
+
 function firstDefined(...values) {
     for (const value of values) {
         if (value !== undefined) return value;
@@ -1939,6 +2055,17 @@ function normalizeFingerprintOptions(data = {}) {
             if (!Array.isArray(raw)) return undefined;
             const allowed = new Set(['canvas', 'audio', 'clientrects', 'gpu']);
             return [...new Set(raw.filter(c => allowed.has(c)))];
+        })(),
+        // Frozen fingerprint-chromium seed. Normally the canvas/audio/WebGL/GPU
+        // seed is derived from the profile UUID at launch; a non-empty value
+        // here pins it instead — set by "faithful clone" duplication so a copy
+        // (new UUID) reproduces the source's hashes. Must be explicitly carried
+        // because mergedFingerprintSource is flat (inputFp is empty), so an
+        // unlisted field would be silently dropped here (see disabledSpoofing).
+        fingerprintSeed: (() => {
+            const raw = firstDefined(data.fingerprintSeed, inputFp.fingerprintSeed);
+            const n = Number(raw);
+            return Number.isInteger(n) && n > 0 ? n : undefined;
         })()
     };
 
@@ -2565,55 +2692,56 @@ async function handleApiRequest(method, pathname, body, params, context = {}) {
     // POST /api/profiles/:idOrName/duplicate - Clone a profile
     // Body (all optional):
     //   { "name": "new-name", "tags": [...], "proxyStr": "...", "notes": "..." }
+    // Optional flags (query string or body):
+    //   ?withData=true         — also cold-copy browser_data (cookies /
+    //                            localStorage / IndexedDB → login state). REQUIRES
+    //                            the source to be stopped (409 otherwise).
+    //   ?keepFingerprint=true  — faithful clone: freeze the source's seed +
+    //                            keep UA metadata so canvas/audio/WebGL/GPU
+    //                            hashes match the source. Default: fresh seed.
     // What's carried over from the source: fingerprint (platform, timezone,
     //   language, browser identity, screen, hardware, disabledSpoofing),
     //   customArgs, kernelVersion, preProxyOverride, preProxyStr,
     //   resetOnLaunch, headless.
-    // What's fresh in the copy:
-    //   · new UUID → new fingerprint-chromium seed → different canvas/audio/
-    //     WebGL hashes on the wire (visible-identity distinction between
-    //     the two profiles at the kernel level).
-    //   · fresh debugPort (sequentially allocated, no reuse of the source's).
-    //   · unique name — default is "<source>-copy", auto-suffixed to
-    //     "<source>-copy-02" etc. if that name is taken.
+    // Always fresh in the copy: new UUID, fresh debugPort (sequentially
+    //   allocated), unique name ("<source>-copy", auto-suffixed to
+    //   "<source>-copy-02" if taken).
+    // resetOnLaunch caveat: a source that rerolls its fingerprint each launch
+    //   makes withData/keepFingerprint meaningless — the copy silently degrades
+    //   to a plain config clone (response carries "degraded": true).
     const dupMatch = pathname.match(/^\/api\/profiles\/([^\/]+)\/duplicate$/);
     if (method === 'POST' && dupMatch) {
         const source = await findProfile(decodeURIComponent(dupMatch[1]));
         if (!source) return { status: 404, data: { success: false, error: 'Profile not found' } };
-        const overrides = parseApiBody(body) || {};
+        const truthy = (v) => ['true', '1', 'yes', 'on'].includes(String(v ?? '').toLowerCase());
+        // Pull flags out of the body BEFORE spreading overrides into the
+        // profile payload, so they don't leak in as bogus profile fields.
+        const { withData: bWithData, keepFingerprint: bKeepFp, ...overrides } = parseApiBody(body) || {};
+        const withData = truthy(params.get('withData')) || bWithData === true || truthy(bWithData);
+        const keepFingerprint = truthy(params.get('keepFingerprint')) || bKeepFp === true || truthy(bKeepFp);
 
-        // Build a fresh payload: source's config + user overrides. Strip
-        // id/createdAt/debugPort so buildProfileFromInput assigns fresh
-        // ones. Rip the source fingerprint's identity-shifting fields out
-        // (userAgentMetadata / secChUa are auto-regenerated from
-        // browserType+browserMajorVersion).
-        const sourceFp = source.fingerprint || {};
-        const clonedFp = { ...sourceFp };
-        delete clonedFp.userAgentMetadata;
-        delete clonedFp.secChUa;
-
-        const payload = {
-            ...source,
-            ...overrides,
-            name: overrides.name || `${source.name}-copy`,
-            debugPort: null,
-            fingerprint: {
-                ...clonedFp,
-                ...(overrides.fingerprint || {})
+        try {
+            const result = await duplicateProfileCore(
+                source, overrides, { withData, keepFingerprint }, settings
+            );
+            notifyUIRefresh();
+            return {
+                success: true,
+                source: { id: source.id, name: source.name },
+                profile: result.newProfile,
+                withData: result.effWithData,
+                keepFingerprint: result.effKeepFp,
+                dataCopied: result.dataCopied,
+                dataError: result.dataError,
+                degraded: result.degraded,
+                remoteDebugPort: settings.enableRemoteDebugging ? result.newProfile.debugPort : null
+            };
+        } catch (e) {
+            if (e.code === 'SOURCE_RUNNING') {
+                return { status: 409, data: { success: false, error: e.message, code: 'SOURCE_RUNNING' } };
             }
-        };
-        delete payload.id;
-        delete payload.createdAt;
-
-        const newProfile = await buildProfileFromInput(payload, settings);
-        await persistProfileWithPortRollback(newProfile, () => profileDB.insert(newProfile));
-        notifyUIRefresh();
-        return {
-            success: true,
-            source: { id: source.id, name: source.name },
-            profile: newProfile,
-            remoteDebugPort: settings.enableRemoteDebugging ? newProfile.debugPort : null
-        };
+            return { status: 500, data: { success: false, error: e.message } };
+        }
     }
 
     // GET /api/profiles/:idOrName/runtime - Live runtime state
@@ -4609,6 +4737,34 @@ ipcMain.handle('save-profile', async (event, data) => {
     notifyUIRefresh();
     return newProfile;
 });
+// Duplicate an existing profile (config, optionally + login state). Mirrors
+// the HTTP POST /duplicate endpoint via the same duplicateProfileCore helper.
+// payload: { sourceId, name?, withData?, keepFingerprint? }
+ipcMain.handle('duplicate-profile', async (event, payload) => {
+    const { sourceId, name, withData, keepFingerprint } = payload || {};
+    const source = await profileDB.getById(sourceId);
+    if (!source) return { success: false, error: 'Profile not found' };
+    const settings = fs.existsSync(SETTINGS_FILE) ? await fs.readJson(SETTINGS_FILE) : {};
+    const overrides = {};
+    if (name && String(name).trim()) overrides.name = String(name).trim();
+    try {
+        const result = await duplicateProfileCore(
+            source, overrides, { withData: !!withData, keepFingerprint: !!keepFingerprint }, settings
+        );
+        notifyUIRefresh();
+        return {
+            success: true,
+            profile: result.newProfile,
+            withData: result.effWithData,
+            keepFingerprint: result.effKeepFp,
+            dataCopied: result.dataCopied,
+            dataError: result.dataError,
+            degraded: result.degraded
+        };
+    } catch (e) {
+        return { success: false, error: e.message, code: e.code || null };
+    }
+});
 ipcMain.handle('delete-profile', async (event, id) => {
     if (activeProcesses[id] || launchingProfiles.has(id)) {
         throw new Error('Cannot delete a running or launching profile. Please stop the browser first.');
@@ -6272,9 +6428,17 @@ const launchProfileHandler = async (event, profileId, preferredLang, launchOptio
         // the population site for why it's ONE flag not many.
         const disableSpoofingSet = new Set();
         {
+            // An explicit fingerprint.fingerprintSeed pins the canvas/audio/
+            // WebGL/GPU seed to a specific value — set by "faithful clone"
+            // duplication so the copy's hashes match the source even though it
+            // has a new UUID (the seed is otherwise UUID-derived). resetOnLaunch
+            // still wins: rerolling means a fresh random seed every launch.
+            const explicitSeed = Number(profile.fingerprint?.fingerprintSeed);
             const fpSeed = resetOnLaunch
                 ? crypto.randomInt(1, 2147483647)
-                : generateFingerprintSeed(profileId);
+                : (Number.isInteger(explicitSeed) && explicitSeed > 0
+                    ? explicitSeed
+                    : generateFingerprintSeed(profileId));
             launchArgs.push(`--fingerprint=${fpSeed}`);
             launchArgs.push('--disable-non-proxied-udp');
 
