@@ -78,7 +78,6 @@
             <div
                 ref="launchMenuEl"
                 class="launch-menu launch-menu-floating no-drag"
-                :class="{ 'sub-left': submenuFlipLeft }"
                 :style="launchMenuStyle"
             >
                 <div class="launch-menu-item" @click="launchClean">{{ t('launchClean') }}</div>
@@ -87,9 +86,10 @@
                 <div class="launch-menu-item" @click="duplicateProfile">{{ t('duplicateProfile') }}</div>
                 <div class="launch-menu-divider"></div>
                 <div class="launch-menu-item" @click="importCookiesFromFile">{{ t('cookieImport') }}</div>
-                <div class="launch-menu-item launch-menu-item-has-sub">
-                    {{ t('cookieExport') }} ▸
-                    <div class="launch-menu-sub">
+                <div class="launch-menu-item launch-menu-item-has-sub" @click.stop="toggleExportSub">
+                    <span>{{ t('cookieExport') }}</span>
+                    <span class="launch-menu-caret">{{ showExportSub ? '▾' : '▸' }}</span>
+                    <div v-show="showExportSub" class="launch-menu-sub" @click.stop>
                         <div class="launch-menu-item" @click="exportCookiesAs('netscape')">Netscape (.txt)</div>
                         <div class="launch-menu-item" @click="exportCookiesAs('json')">Playwright JSON</div>
                         <div class="launch-menu-item" @click="exportCookiesAs('editthiscookie')">EditThisCookie</div>
@@ -238,7 +238,16 @@ const showLaunchMenu = ref(false);
 const launchMoreBtn = ref(null);
 const launchMenuEl = ref(null);
 const launchMenuStyle = ref({});
-const submenuFlipLeft = ref(false);
+// Cookie-export used to be a sideways flyout (left:100%), which overflowed the
+// window in list view (full-width cards → menu at right edge → nowhere to fly).
+// Now it's an inline accordion that expands downward — no horizontal space
+// needed, works identically in grid and list views.
+const showExportSub = ref(false);
+const toggleExportSub = () => {
+    showExportSub.value = !showExportSub.value;
+    // Expanding grows the menu taller — reposition so it doesn't run off-screen.
+    nextTick(() => positionLaunchMenu());
+};
 
 const positionLaunchMenu = () => {
     const el = launchMoreBtn.value;
@@ -270,10 +279,6 @@ const positionLaunchMenu = () => {
         left: `${left}px`,
         minWidth: `${menuWidth}px`
     };
-    // The cookie-export flyout opens at left:100% (+~180px). If that would run
-    // off the right edge, flip it to open leftward instead.
-    const subWidth = 180;
-    submenuFlipLeft.value = left + menuWidth + subWidth > window.innerWidth - margin;
 };
 
 const onScrollOrResize = () => {
@@ -301,6 +306,7 @@ const detachGlobalListeners = () => {
 function closeLaunchMenu() {
     if (!showLaunchMenu.value) return;
     showLaunchMenu.value = false;
+    showExportSub.value = false;
     detachGlobalListeners();
 }
 
@@ -644,6 +650,8 @@ const remove = () => {
     padding: 4px 0;
     color: var(--text-primary, #e0e0e0);
     -webkit-app-region: no-drag;
+    /* Safe to scroll now that the cookie-export submenu is an inline accordion
+       (no sideways left:100% child that overflow-x:clip would cut off). */
     max-height: calc(100vh - 16px);
     overflow-y: auto;
 }
@@ -662,28 +670,27 @@ const remove = () => {
     background: var(--border, rgba(255,255,255,0.08));
     margin: 4px 0;
 }
+/* Cookie-export is an inline downward accordion (not a sideways flyout), so it
+   needs no horizontal room and behaves identically in grid + list views. */
 .launch-menu-floating .launch-menu-item-has-sub {
-    position: relative;
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    gap: 8px;
 }
-.launch-menu-floating .launch-menu-item-has-sub .launch-menu-sub {
-    display: none;
-    position: absolute;
-    left: 100%;
-    top: 0;
-    background: var(--card-bg, #22222c);
-    border: 1px solid var(--border, #444);
-    border-radius: 6px;
-    box-shadow: 0 6px 20px rgba(0, 0, 0, 0.45);
+.launch-menu-floating .launch-menu-caret {
+    opacity: 0.6;
+    font-size: 11px;
+}
+.launch-menu-floating .launch-menu-sub {
+    /* Full-width child; break out of the parent's flex row and stack below. */
+    flex-basis: 100%;
+    margin: 4px -14px -4px;
     padding: 4px 0;
-    min-width: 180px;
-    z-index: 10001;
+    border-top: 1px solid var(--border, rgba(255,255,255,0.08));
+    background: rgba(0, 0, 0, 0.18);
 }
-.launch-menu-floating .launch-menu-item-has-sub:hover .launch-menu-sub {
-    display: block;
-}
-/* When the menu sits near the right edge, open the flyout leftward instead. */
-.launch-menu-floating.sub-left .launch-menu-item-has-sub .launch-menu-sub {
-    left: auto;
-    right: 100%;
+.launch-menu-floating .launch-menu-sub .launch-menu-item {
+    padding-left: 28px;
 }
 </style>

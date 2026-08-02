@@ -208,7 +208,7 @@ Create/Edit modal 里前置代理是**一个 4 选一下拉**（不是 override 
 
 **UI 坑 A（全局 `input` 样式炸弹）**：`src/renderer/index.html` 有全局 `input,textarea,select { width:100%; padding:8px; margin-bottom:10px }`。**任何新 modal 里的 `radio`/`checkbox` 不显式覆盖尺寸，就会被撑成满宽巨块**，把底部按钮顶出视口 → 表象是"弹窗无法关闭"。修法：`input[type=radio/checkbox]` 显式 `width/height:16px; padding:0; margin:2px 0 0`（`EditProfileModal` 的 `.reset-toggle input[type=checkbox]` 是先例）。新 modal 一律再配 `max-height:88vh; overflow-y:auto` + `@click.self` 背景关闭兜底。
 
-**UI 坑 B（`position:fixed` teleport 菜单越界）**：`ProfileCard.vue` 的 ▾ launch-more 菜单 Teleport 到 `<body>` 且 `position:fixed`——**不会被 overflow 裁剪，但会跑出视口**（页面底部的卡片 → 菜单掉到窗口下方，右缘卡片 → cookie 导出 flyout 溢出右边）。纯 CSS 定位不够，必须 **`nextTick` 渲染后测量 `offsetHeight` 再重定位**：空间不足则翻转到按钮**上方**、否则钳进视口 + `max-height` 内滚；flyout 靠右时加 `.sub-left` 类改 `right:100%` 左展开。`positionLaunchMenu` 已这么写，新增菜单项/新建这类浮层照抄。
+**UI 坑 B（`position:fixed` teleport 菜单越界）**：`ProfileCard.vue` 的 ▾ launch-more 菜单 Teleport 到 `<body>` 且 `position:fixed`——**不会被 overflow 裁剪，但会跑出视口**（页面底部的卡片 → 菜单掉到窗口下方）。**纵向**用 **`nextTick` 渲染后测量 `offsetHeight` 再重定位**解决：空间不足则翻转到按钮**上方**、否则钳进视口 + `max-height` 内滚（`positionLaunchMenu` 已这么写，新增菜单项照抄）。**横向子菜单（cookie 导出）不要用侧向 flyout**：曾用 `left:100%` 侧飞 + 靠右翻 `right:100%`，但**列表视图满宽卡片下 ▾ 永远贴右缘，两侧都放不下——侧向 flyout 在满宽布局下无解**。最终改成**点击向下内联折叠（accordion）**：`showExportSub` toggle + `v-show` 下方缩进展开，零横向空间需求，grid/list 视图行为一致。教训：teleport 浮层的二级菜单一律**向下堆叠**，别向侧边飞。（附带：父级 `overflow-y:auto` 会隐含 `overflow-x:clip`，侧向 flyout 时代它会裁掉子菜单——改折叠后才敢开滚动。）
 
 | 我想找... | 去这里 |
 |---|---|
